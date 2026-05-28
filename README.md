@@ -58,6 +58,35 @@ Mode B is the "a background poller says *you've got mail* and wakes the sleeping
 agent" model — a truly paused agent can't poll itself, so the postmaster is its
 alarm clock. v1 (A) is untouched; pick per situation, same DB underneath.
 
+## Agent lifecycle — ephemeral vs persistent
+
+A second axis, independent of transport mode: **what an agent remembers**.
+
+| Lifecycle | Memory | Cost when idle | Use for |
+|---|---|---|---|
+| **`ephemeral`** | none — gets only the task brief, runs once, vanishes | $0 (gone) | throwaway, token-saving subtasks |
+| **`persistent`** | full thread **rehydrated from the mailroom** on each wake | $0 when reaped; warm during its idle window | orchestrators, standing "power-partner" specialists |
+
+The key idea: **nothing stays warm forever, and nothing loses context that shouldn't.**
+A persistent partner is *also* killed when idle — its context lives in the DB, so
+it re-ups with full memory next time (context survives the kill, not the process).
+To avoid cold-start churn during active work, persistent agents get a **warm
+window** (`--idle-timeout`, e.g. 5–10 min): they stay up while work is flowing,
+then sleep. The postmaster keeps a bounded **warm pool** (`--max-warm`, default 5)
+and evicts the least-recently-used partner when full (it rehydrates later).
+
+```bash
+# architect = persistent power-partner (Claude), reviewer = ephemeral (Codex)
+python3 postmaster.py --nodes architect=claude,reviewer=codex \
+  --persistent architect --max-warm 5 --idle-timeout 600
+```
+
+> **Latency note:** keeping the *node* warm avoids respawn/poll teardown, but the
+> big cost we measured (`claude -p` cold start ~2–3 min) is only removed by also
+> resuming the *LLM* session (`claude -p --resume`, `codex exec resume`). Warm
+> window + session-resume together is the real latency fix — resume is the
+> next step (the warm window is wired; resume is not yet).
+
 ## Run the demos (zero API spend)
 
 ```bash

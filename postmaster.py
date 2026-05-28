@@ -38,23 +38,35 @@ def has_mail(conn, node):
     return row["c"] > 0
 
 
-def wake(node, engine):
-    proc = subprocess.Popen(
-        [sys.executable, NODE_RUNNER, "--node-id", node,
-         "--engine", engine, "--once", "--managed"]
-    )
-    log(f"mail for '{node}' -> woke a one-shot turn (pid {proc.pid})")
+def wake(node, engine, lifecycle, idle_timeout):
+    cmd = [sys.executable, NODE_RUNNER, "--node-id", node, "--engine", engine, "--managed"]
+    if lifecycle == "persistent":
+        # warm window: self-polls and self-reaps after idle_timeout; rehydrates from DB.
+        cmd += ["--lifecycle", "persistent", "--idle-timeout", str(idle_timeout)]
+    else:
+        cmd += ["--once"]   # ephemeral: one turn then gone, no memory
+    proc = subprocess.Popen(cmd)
+    tag = (f"WARM persistent (window {idle_timeout:g}s)"
+           if lifecycle == "persistent" else "one-shot ephemeral")
+    log(f"mail for '{node}' -> woke a {tag} turn (pid {proc.pid})")
     return proc
 
 
-def run(nodes, engine, poll):
+def run(node_engine, persistent_set, max_warm, idle_timeout, poll):
     conn = R.connect()
-    log(f"online. managing {nodes}. agents stay asleep until mail arrives.")
+    nodes = list(node_engine)
+
+    def lifecycle(n):
+        return "persistent" if n in persistent_set else "ephemeral"
+
+    log(f"online. managing {node_engine}. persistent={sorted(persistent_set)} "
+        f"(max_warm={max_warm}, warm window={idle_timeout:g}s). agents sleep until mail.")
     running = {}        # node_id -> Popen (at most one live turn per node)
+    woke_at = {}        # node_id -> last wake time (for warm-pool LRU eviction)
     granted_seen = set()
     try:
         while True:
-            # 1. reap finished one-shot turns
+            # 1. reap finished turns (ephemeral one-shots, or persistent warm windows that timed out)
             for n, p in list(running.items()):
                 if p.poll() is not None:
                     del running[n]
@@ -74,27 +86,57 @@ def run(nodes, engine, poll):
 
             # 3. wake any managed node that has mail and isn't already running
             for n in nodes:
-                if n not in running and has_mail(conn, n):
-                    running[n] = wake(n, engine)
+                if n in running or not has_mail(conn, n):
+                    continue
+                if lifecycle(n) == "persistent":
+                    warm = [x for x in running if lifecycle(x) == "persistent"]
+                    if len(warm) >= max_warm:
+                        # warm pool full -> evict the least-recently-woken partner.
+                        # Its context is safe in the DB; it rehydrates when next needed.
+                        victim = min(warm, key=lambda x: woke_at.get(x, 0))
+                        log(f"warm pool full ({len(warm)}/{max_warm}) -> evicting '{victim}' (rehydrates later)")
+                        running[victim].terminate()
+                        continue   # free the slot this tick; wake n next tick
+                running[n] = wake(n, node_engine[n], lifecycle(n), idle_timeout)
+                woke_at[n] = time.time()
 
             time.sleep(poll)
     except KeyboardInterrupt:
         pass
     finally:
         for p in running.values():
-            p.wait()
+            p.terminate()
         log("offline")
 
 
 def main():
     ap = argparse.ArgumentParser(description="Run the Rookery central postmaster.")
     ap.add_argument("--nodes", required=True,
-                    help="comma-separated roster to manage, e.g. architect,triage")
-    ap.add_argument("--engine", choices=["mock", "claude"], default="mock")
+                    help="roster, comma-separated. Per-node engine with "
+                         "name=engine, e.g. architect=claude,reviewer=codex")
+    ap.add_argument("--engine", choices=["mock", "claude", "codex"], default="mock",
+                    help="default engine for roster entries with no =engine")
+    ap.add_argument("--persistent", default="",
+                    help="comma list of nodes that are persistent power-partners "
+                         "(rehydrate from DB + join the warm pool); others are ephemeral")
+    ap.add_argument("--max-warm", type=int, default=5,
+                    help="max concurrently-warm persistent agents (the warm pool cap)")
+    ap.add_argument("--idle-timeout", type=float, default=600.0,
+                    help="persistent warm window in seconds before a partner sleeps ($0)")
     ap.add_argument("--poll", type=float, default=0.5)
     a = ap.parse_args()
-    roster = [x.strip() for x in a.nodes.split(",") if x.strip()]
-    run(roster, a.engine, a.poll)
+    node_engine = {}
+    for entry in a.nodes.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "=" in entry:
+            name, eng = entry.split("=", 1)
+            node_engine[name.strip()] = eng.strip()
+        else:
+            node_engine[entry] = a.engine
+    persistent_set = {x.strip() for x in a.persistent.split(",") if x.strip()}
+    run(node_engine, persistent_set, a.max_warm, a.idle_timeout, a.poll)
 
 
 if __name__ == "__main__":

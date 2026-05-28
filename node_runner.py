@@ -37,12 +37,13 @@ def summarize(text, n=48):
 
 
 # --- engines ---------------------------------------------------------------
-def mock_engine(node_id, messages):
+def mock_engine(node_id, new_msgs, history=None):
     """Deterministic stand-in for an LLM. It mimics 'the agent read the mail
     and decided what to do' by (a) carrying out any directives the incoming
-    mail asked of it and (b) acking the sender. No API, fully reproducible."""
+    mail asked of it and (b) acking the sender. No API, fully reproducible.
+    (history is ignored — the mock needs no memory.)"""
     out = []
-    for m in messages:
+    for m in new_msgs:
         body = m["body"]
         if body.startswith("ACK:"):
             continue  # don't react to acknowledgements -> breaks reply loops
@@ -54,29 +55,77 @@ def mock_engine(node_id, messages):
     return "\n".join(out)
 
 
-def claude_engine(node_id, messages):
-    """Real headless Claude. Each turn is a fresh `claude -p` subprocess — the
-    full coding harness, driven own-loop. The agent talks to the mesh by
-    emitting MAILTO:/NEEDCRED: lines, same protocol as mock."""
-    if shutil.which("claude") is None:
-        log(node_id, "ERROR: `claude` not on PATH. Use --engine mock, or install the CLI.")
-        sys.exit(127)
-    digest = "\n".join(f"- from {m['sender']}: {m['body']}" for m in messages)
-    prompt = (
-        f"<ROOKERY> You are mesh node '{node_id}'. New mail:\n{digest}\n\n"
-        "Respond concisely. To message another node, emit a line "
-        "`MAILTO:<node>:<text>`. To request a credential you lack, emit "
-        "`NEEDCRED:<resource>`. Prefix acknowledgements with `ACK:`."
+def _digest(messages):
+    return "\n".join(f"- from {m['sender']}: {m['body']}" for m in messages)
+
+
+def _mesh_prompt(node_id, new_msgs, history=None):
+    """Same instructions for every real engine -> same wire protocol as mock.
+    For persistent agents, `history` is the rehydrated conversation (memory)."""
+    p = f"You are agent node '{node_id}' in a multi-agent mesh.\n"
+    if history:
+        convo = "\n".join(f"  [{m['sender']}->{m['recipient']}] {m['body']}" for m in history)
+        p += f"Conversation so far (your memory, rehydrated):\n{convo}\n\n"
+    p += (
+        f"NEW mail to respond to now:\n{_digest(new_msgs)}\n\n"
+        "Reply with a SHORT plain-text message (no markdown code fences).\n"
+        "Mesh directives — each on its OWN line, exact format:\n"
+        "  MAILTO:<node>:<message>   send mail to another node\n"
+        "  NEEDCRED:<resource>       request a credential/secret you lack\n"
+        "Prefix an acknowledgement with ACK:. "
+        "Output only your message plus any directive lines."
     )
+    return p
+
+
+def claude_engine(node_id, new_msgs, history=None):
+    """Real headless Claude — a fresh `claude -p` turn, own-loop driven."""
+    if shutil.which("claude") is None:
+        log(node_id, "ERROR: `claude` not on PATH. Use --engine mock.")
+        sys.exit(127)
     proc = subprocess.run(
-        ["claude", "-p", prompt], capture_output=True, text=True, timeout=180
+        ["claude", "-p", _mesh_prompt(node_id, new_msgs, history)],
+        capture_output=True, text=True, timeout=240,
     )
     if proc.returncode != 0:
         log(node_id, f"claude exited {proc.returncode}: {proc.stderr.strip()[:200]}")
     return proc.stdout
 
 
-ENGINES = {"mock": mock_engine, "claude": claude_engine}
+def codex_engine(node_id, new_msgs, history=None):
+    """Real OpenAI Codex — non-interactive `codex exec`, read-only sandbox.
+    `-o` writes just the final assistant message, so we capture it cleanly."""
+    if shutil.which("codex") is None:
+        log(node_id, "ERROR: `codex` not on PATH. Use --engine mock/claude.")
+        sys.exit(127)
+    import tempfile
+    fd, out_path = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    try:
+        proc = subprocess.run(
+            ["codex", "exec", "--skip-git-repo-check", "-s", "read-only",
+             "--color", "never", "-o", out_path, _mesh_prompt(node_id, new_msgs, history)],
+            capture_output=True, text=True, timeout=300,
+        )
+        msg = ""
+        try:
+            with open(out_path) as fh:
+                msg = fh.read().strip()
+        except OSError:
+            pass
+        if not msg:
+            msg = proc.stdout
+        if proc.returncode != 0 and not msg:
+            log(node_id, f"codex exited {proc.returncode}: {proc.stderr.strip()[:200]}")
+        return msg
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+
+
+ENGINES = {"mock": mock_engine, "claude": claude_engine, "codex": codex_engine}
 
 
 # --- the phone-home pause --------------------------------------------------
@@ -116,7 +165,7 @@ def handle_directives(conn, node_id, response, poll, max_wait, managed=False):
                 # mail the grant later, which wakes a fresh turn. $0 while asleep.
                 R.set_status(conn, node_id, "asleep")
                 log(node_id, f"phoning home for '{resource}' (req #{req_id}) -- durable pause, exiting until approved")
-                return
+                return True
             # v1 self-poll mode: block in-process until approved.
             log(node_id, f"phoning home for '{resource}' (req #{req_id}) -- PAUSING")
             token = wait_for_credential(conn, node_id, req_id, poll, max_wait)
@@ -125,29 +174,45 @@ def handle_directives(conn, node_id, response, poll, max_wait, managed=False):
             else:
                 log(node_id, "credential not granted -- continuing without it")
             R.set_status(conn, node_id, "busy")
+    return False
 
 
-def run(node_id, engine_name, kind, poll, max_wait, once, managed):
+def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, idle_timeout):
     conn = R.connect()
-    R.register_node(conn, node_id, kind=kind, pid=os.getpid())
-    log(node_id, f"online (engine={engine_name}, pid={os.getpid()}, managed={managed}). Watching for mail…")
+    R.register_node(conn, node_id, kind=kind, pid=os.getpid(), lifecycle=lifecycle)
+    log(node_id, f"online (engine={engine_name}, pid={os.getpid()}, lifecycle={lifecycle}, "
+                 f"managed={managed}, idle_timeout={idle_timeout}s). Watching for mail…")
     engine = ENGINES[engine_name]
+    idle = 0.0
     try:
         while True:
             R.heartbeat(conn, node_id)
             R.set_status(conn, node_id, "idle")
-            msgs = R.fetch_undelivered(conn, node_id)
-            if not msgs:
+            new_msgs = R.fetch_undelivered(conn, node_id)
+            if not new_msgs:
                 if once:
                     break
+                if idle_timeout and idle >= idle_timeout:
+                    log(node_id, f"idle {int(idle)}s >= warm window -- sleeping ($0); rehydrates on next wake")
+                    break
                 time.sleep(poll)
+                idle += poll
                 continue
+            idle = 0.0
             R.set_status(conn, node_id, "busy")
-            R.claim(conn, [m["id"] for m in msgs])  # atomic: never re-inject
-            log(node_id, f"woke on {len(msgs)} message(s) -- unprompted")
-            response = engine(node_id, msgs)
-            handle_directives(conn, node_id, response, poll, max_wait, managed)
-            if once:
+            # Persistent agents rehydrate their full thread from the DB (memory).
+            history = None
+            if lifecycle == "persistent":
+                thread = R.fetch_thread(conn, node_id)
+                new_ids = {m["id"] for m in new_msgs}
+                history = [m for m in thread if m["id"] not in new_ids]
+                if history:
+                    log(node_id, f"rehydrated {len(history)} prior message(s) from the mailroom")
+            R.claim(conn, [m["id"] for m in new_msgs])  # atomic: never re-inject
+            log(node_id, f"woke on {len(new_msgs)} message(s) -- unprompted")
+            response = engine(node_id, new_msgs, history)
+            paused = handle_directives(conn, node_id, response, poll, max_wait, managed)
+            if once or paused:
                 break
     except KeyboardInterrupt:
         pass
@@ -166,8 +231,13 @@ def main():
     ap.add_argument("--once", action="store_true", help="process one batch then exit")
     ap.add_argument("--managed", action="store_true",
                     help="postmaster mode: on NEEDCRED, exit (durable pause) instead of blocking")
+    ap.add_argument("--lifecycle", choices=["ephemeral", "persistent"], default="ephemeral",
+                    help="ephemeral=no memory; persistent=rehydrate full thread from the mailroom")
+    ap.add_argument("--idle-timeout", type=float, default=0.0,
+                    help="persistent warm window: exit after this many idle seconds (0=never)")
     a = ap.parse_args()
-    run(a.node_id, a.engine, a.kind, a.poll, a.max_wait, a.once, a.managed)
+    run(a.node_id, a.engine, a.kind, a.poll, a.max_wait, a.once, a.managed,
+        a.lifecycle, a.idle_timeout)
 
 
 if __name__ == "__main__":

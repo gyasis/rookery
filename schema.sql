@@ -4,7 +4,8 @@
 CREATE TABLE IF NOT EXISTS nodes (
   node_id   TEXT PRIMARY KEY,
   kind      TEXT,            -- headless | daemon | terminal
-  status    TEXT,            -- idle | busy | waiting | offline
+  status    TEXT,            -- idle | busy | waiting | asleep | offline
+  lifecycle TEXT,            -- ephemeral (no memory) | persistent (rehydrates from DB)
   pid       INTEGER,         -- OS pid (for the pause.sh / resume.sh "video button")
   last_seen INTEGER          -- heartbeat epoch
 );

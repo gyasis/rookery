@@ -9,8 +9,9 @@ export ROOKERY_DB="$DIR/rookery.db"
 ./cleanup.sh
 echo
 
-echo "## start ONLY the postmaster — no persistent agents (they stay asleep)"
-python3 postmaster.py --nodes architect,triage --engine mock --poll 0.5 &
+echo "## start ONLY the postmaster — architect=persistent (rehydrates), triage=ephemeral"
+python3 postmaster.py --nodes architect,triage --engine mock \
+  --persistent architect --idle-timeout 3 --poll 0.5 &
 PM=$!
 trap 'kill $PM 2>/dev/null || true' EXIT
 sleep 1

@@ -35,13 +35,14 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 
 # --- nodes -----------------------------------------------------------------
-def register_node(conn, node_id, kind="headless", pid=None):
+def register_node(conn, node_id, kind="headless", pid=None, lifecycle="ephemeral"):
     conn.execute(
-        "INSERT INTO nodes(node_id, kind, status, pid, last_seen) "
-        "VALUES(?,?,?,?,?) "
+        "INSERT INTO nodes(node_id, kind, status, lifecycle, pid, last_seen) "
+        "VALUES(?,?,?,?,?,?) "
         "ON CONFLICT(node_id) DO UPDATE SET "
-        "kind=excluded.kind, pid=excluded.pid, last_seen=excluded.last_seen",
-        (node_id, kind, "idle", pid, now()),
+        "kind=excluded.kind, lifecycle=excluded.lifecycle, pid=excluded.pid, "
+        "last_seen=excluded.last_seen",
+        (node_id, kind, "idle", lifecycle, pid, now()),
     )
     conn.commit()
 
@@ -78,6 +79,16 @@ def fetch_undelivered(conn, recipient):
     return conn.execute(
         "SELECT * FROM inbox WHERE recipient=? AND delivered=0 ORDER BY created_at, id",
         (recipient,),
+    ).fetchall()
+
+
+def fetch_thread(conn, node):
+    """Full conversation involving this node (sent OR received), oldest first.
+    A persistent node's rehydrated memory — context lives in the DB, not the
+    process, so a killed-and-re-upped partner resumes with full history."""
+    return conn.execute(
+        "SELECT * FROM inbox WHERE sender=? OR recipient=? ORDER BY created_at, id",
+        (node, node),
     ).fetchall()
 
 

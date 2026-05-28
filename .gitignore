@@ -1,5 +1,5 @@
-rookery.db
-rookery.db-wal
-rookery.db-shm
+*.db
+*.db-wal
+*.db-shm
 __pycache__/
 *.pyc
