@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paired Debate — The "Mailroom" Agent-Mesh Architecture</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --ink-soft:#3a3a3a; --muted:#6b6b6b; --line:#e3ddd2;
+    --paper:#faf7f1; --paper-2:#f3eee4; --accent:#9a3b2e; --accent-2:#2f5d62;
+    --code-bg:#1e1c1a; --code-ink:#e8e2d6; --good:#2f7d4f; --warn:#b06a16; --bad:#9a3b2e;
+    --claude:#9a3b2e; --gemini:#2f5d62; --maxw:880px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0; background:var(--paper); color:var(--ink);
+    font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    font-size:18px; line-height:1.62; -webkit-font-smoothing:antialiased;}
+  .wrap{display:flex; max-width:1180px; margin:0 auto;}
+  nav.toc{position:sticky; top:0; align-self:flex-start; height:100vh; overflow-y:auto;
+    width:240px; padding:34px 18px 34px 28px; border-right:1px solid var(--line);
+    font-family:"Inter",system-ui,sans-serif; font-size:13px; background:var(--paper-2);}
+  nav.toc .brand{font-weight:700; letter-spacing:.5px; text-transform:uppercase; font-size:11px; color:var(--accent); margin-bottom:14px;}
+  nav.toc a{display:block; color:var(--ink-soft); text-decoration:none; padding:4px 0; line-height:1.35;}
+  nav.toc a:hover{color:var(--accent)}
+  main{flex:1; min-width:0; padding:48px 40px 120px; max-width:var(--maxw);}
+  header.head{border-bottom:3px double var(--line); padding-bottom:26px; margin-bottom:30px;}
+  .kicker{font-family:"Inter",sans-serif; text-transform:uppercase; letter-spacing:3px; font-size:11px; color:var(--accent); font-weight:600;}
+  h1{font-size:36px; line-height:1.12; margin:.35em 0 .25em; font-weight:700;}
+  .sub{color:var(--muted); font-size:16px; font-style:italic;}
+  .meta{font-family:"Inter",sans-serif; font-size:12px; color:var(--muted); margin-top:16px; display:flex; flex-wrap:wrap; gap:6px 18px;}
+  .meta b{color:var(--ink-soft); font-weight:600;}
+  h2{font-size:25px; margin:50px 0 14px; padding-top:10px; border-top:1px solid var(--line); font-weight:700;}
+  h2 .num{color:var(--accent); font-family:"Inter",sans-serif; font-size:15px; font-weight:700; margin-right:10px; vertical-align:2px;}
+  h3{font-size:18px; margin:26px 0 8px; font-weight:700;}
+  h4{font-size:14px; margin:18px 0 6px; font-family:"Inter",sans-serif; letter-spacing:.3px; color:var(--accent-2); text-transform:uppercase;}
+  p{margin:0 0 14px}
+  a{color:var(--accent)}
+  code{font-family:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; font-size:.82em; background:var(--paper-2); padding:1px 5px; border-radius:4px; color:var(--accent-2);}
+  pre{background:var(--code-bg); color:var(--code-ink); padding:16px 18px; border-radius:8px; overflow-x:auto; font-size:12.5px; line-height:1.5; margin:14px 0;}
+  pre code{background:none; color:var(--code-ink); padding:0; font-size:12.5px;}
+  .lead{font-size:20px; line-height:1.55; color:var(--ink-soft);}
+  ul,ol{margin:0 0 16px; padding-left:22px} li{margin:5px 0}
+  strong{font-weight:700}
+  table{border-collapse:collapse; width:100%; margin:18px 0; font-size:13.5px; font-family:"Inter",sans-serif;}
+  th,td{border:1px solid var(--line); padding:9px 11px; text-align:left; vertical-align:top;}
+  th{background:var(--paper-2); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.4px;}
+  tr:nth-child(even) td{background:#fcfaf5}
+  .callout{border-left:4px solid var(--accent); background:var(--paper-2); padding:14px 18px; margin:18px 0; border-radius:0 8px 8px 0;}
+  .callout.decision{border-color:var(--accent-2); background:#eef3f2;}
+  .callout.warn{border-color:var(--warn); background:#fbf2e3;}
+  .callout .label{font-family:"Inter",sans-serif; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1.5px; color:var(--accent); margin-bottom:6px;}
+  .callout.decision .label{color:var(--accent-2)} .callout.warn .label{color:var(--warn)}
+  .round{border:1px solid var(--line); border-radius:8px; margin:14px 0; overflow:hidden; background:#fff;}
+  .round .rhead{background:var(--paper-2); padding:8px 14px; font-family:"Inter",sans-serif; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--ink-soft); border-bottom:1px solid var(--line);}
+  .round .rbody{padding:12px 16px; font-size:15.5px;}
+  .who{display:inline-block; font-family:"Inter",sans-serif; font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:20px; margin-right:6px; vertical-align:1px;}
+  .who.c{background:#f6e6e3; color:var(--claude); border:1px solid #e3c2bb;}
+  .who.g{background:#e7eff0; color:var(--gemini); border:1px solid #bcd3d6;}
+  .verdict{display:inline-block; font-family:"Inter",sans-serif; font-size:11px; font-weight:700; padding:2px 9px; border-radius:5px; margin-left:6px;}
+  .verdict.concede{background:#e7f2ea; color:var(--good);}
+  .verdict.defend{background:#fbf2e3; color:var(--warn);}
+  .figure{border:1px dashed var(--line); border-radius:8px; padding:16px; margin:18px 0; background:#fff; font-family:"JetBrains Mono",monospace; font-size:12px; line-height:1.5; white-space:pre; overflow-x:auto; color:var(--ink-soft);}
+  .steps{counter-reset:step; list-style:none; padding-left:0;}
+  .steps li{counter-increment:step; position:relative; padding:10px 0 10px 44px; border-bottom:1px dotted var(--line);}
+  .steps li::before{content:counter(step); position:absolute; left:0; top:9px; width:28px; height:28px; background:var(--accent); color:#fff; border-radius:50%; font-family:"Inter",sans-serif; font-weight:700; font-size:14px; display:flex; align-items:center; justify-content:center;}
+  .tag{display:inline-block; font-family:"Inter",sans-serif; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; background:var(--paper-2); border:1px solid var(--line); color:var(--ink-soft); margin:0 4px 4px 0;}
+  .tag.green{background:#e7f2ea; color:var(--good); border-color:#bcdcc6}
+  .tag.red{background:#f6e6e3; color:var(--bad); border-color:#e3c2bb}
+  footer{margin-top:56px; padding-top:22px; border-top:3px double var(--line); font-size:13px; color:var(--muted); font-family:"Inter",sans-serif;}
+  @media(max-width:920px){ nav.toc{display:none} main{padding:30px 20px 80px} h1{font-size:28px} }
+  @media print{ nav.toc{display:none} body{background:#fff} pre{background:#f4f4f4;color:#111} pre code{color:#111} }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc">
+  <div class="brand">Paired Debate</div>
+  <a href="#decision">The decision</a>
+  <a href="#criteria">Agreed criteria</a>
+  <a href="#rounds">The 5 rounds</a>
+  <a href="#arch">The Mailroom (v1)</a>
+  <a href="#agree">Agreed / disagreed</a>
+  <a href="#risks">Risks &amp; fixes</a>
+  <a href="#verdict">tmux vs own-loop</a>
+  <a href="#spike">The first spike</a>
+</nav>
+<main>
+<header class="head">
+  <div class="kicker">Claude × Gemini · Structured Debate</div>
+  <h1>The "Mailroom" — an unprompted agent mesh you can build today</h1>
+  <div class="sub">Two transport tiers vs one bus → resolved. A durable SQLite system-of-record + a cheap background watcher that injects "you have mail" into a running agent. MCP optional.</div>
+  <div class="meta">
+    <span><b>For</b> Gyasi Sutton</span>
+    <span><b>Date</b> 2026-05-28</span>
+    <span><b>Format</b> 6-round paired debate (Claude drives, Gemini independent)</span>
+    <span><b>Status</b> GO for v1 spike</span>
+  </div>
+</header>
+
+<section id="decision">
+  <div class="callout decision">
+    <div class="label">The decision</div>
+    <p style="margin:0">Build a <strong>hybrid "Mailroom"</strong>: a durable <strong>SQLite store</strong> as the system-of-record, plus a cheap <strong>non-LLM background watcher</strong> ("the post office") that signals a running agent <em>"you have mail / they're talking about you"</em> only when real mail exists. This is effectively two tiers — but the realtime tier is <strong>nearly free</strong> (no NATS/Redis). <strong>MCP is optional</strong>: injection can be <code>tmux send-keys</code> (off-the-shelf) or own-loop. <strong>Closing-round verdict:</strong> the default node substrate is <strong>headless Claude (Agent SDK / <code>claude -p</code>)</strong> — own-loop reliability <em>with</em> the full coding harness, no rebuild — and terminal, headless-API, and headless-harness nodes can all share the one SQLite bus.</p>
+  </div>
+  <p class="lead">The single-bus-vs-two-tier question dissolved once we separated <strong>state</strong> (must be durable) from <strong>signal</strong> (must be cheap). You don't need a realtime bus for agents that think in seconds — you need <em>state guarantees</em> plus a doorbell.</p>
+</section>
+
+<h2 id="criteria"><span class="num">A</span>Criteria both sides agreed matter</h2>
+<ol>
+  <li><strong>Durability over latency.</strong> Coding agents respond in seconds–minutes; sub-ms delivery is pointless. A delegated task + its phone-home must survive a crash. → favors a persistent store.</li>
+  <li><strong>Economy: poll cheaply, wake rarely.</strong> The <em>poller</em> must be a non-LLM process (~$0). Only the <em>agent</em> waking costs a token-turn, and only when real mail exists. (Honors your economy-first rule.)</li>
+  <li><strong>Observability by construction.</strong> The DB <em>is</em> the audit log — every message, request, approval queryable in plain SQL. No black box.</li>
+  <li><strong>Vendor-neutral.</strong> Claude and Gemini are just rows addressed by name; the transport doesn't care which model is behind a node.</li>
+  <li><strong>Secrets never in prompts.</strong> A credential need triggers an out-of-band approval (CIBA) → short-lived token from the OS keychain, never the raw <code>.env</code>, never stored in the DB.</li>
+</ol>
+
+<h2 id="rounds"><span class="num">B</span>How the debate moved (5 rounds)</h2>
+
+<div class="round"><div class="rhead">Round 1 · Problem framing</div><div class="rbody">
+<span class="who g">Gemini</span> proposed three designs — SQLite "Post Office" via MCP, a filesystem mesh (<code>inotify</code>), and NATS JetStream — and argued a realtime bus is <em>over-engineering</em> for agents that think in seconds. Recommended the SQLite Post Office as the smallest spike.
+</div></div>
+
+<div class="round"><div class="rhead">Round 2 · Claude's counter + 10 scenarios</div><div class="rbody">
+<span class="who c">Claude</span> challenged five points. Outcomes:
+<ul style="margin:8px 0 0">
+  <li><strong>False dichotomy on "realtime"</strong> <span class="verdict concede">conceded</span> — Claude Code channels/Agent Teams give push nearly free; the right shape is SQLite=state + native push=signal.</li>
+  <li><strong>Polling burns tokens</strong> <span class="verdict concede">conceded</span> — must be event-push, not LLM-poll.</li>
+  <li><strong>Credential loop can't hold the tool call open</strong> <span class="verdict concede">conceded</span> — CIBA is async; use a durable "pending → resume" handshake.</li>
+  <li><strong>Cross-machine breaks SQLite-as-file</strong> <span class="verdict defend">defended w/ caveat</span> — multi-host needs a tiny sidecar service, not a NATS cluster.</li>
+  <li><strong>The non-Claude node (Gemini) isn't pushable for free</strong> <span class="verdict defend">defended</span> — needs its own watcher/wrapper.</li>
+</ul>
+</div></div>
+
+<div class="round"><div class="rhead">Round 3 · Your steer — drop the MCP assumption</div><div class="rbody">
+<span class="who c">You</span> pushed: maybe MCP isn't the channel — prefer a <strong>command-line continuous poller</strong> that, in the background, signals the agent "you have mail / they're talking about you." <span class="who g">Gemini</span> <span class="verdict concede">confirmed</span> the economics (dumb poller = $0; agent wakes only on real mail) and mapped three injection channels, only one of which uses MCP.
+</div></div>
+
+<div class="round"><div class="rhead">Round 4 · Implementation reality (no-MCP)</div><div class="rbody">
+Detailed the three injection mechanisms (own-loop, <code>tmux send-keys</code>, Claude-native hook), their failure modes, and the 6-piece spike. Surfaced the weakest link: knowing an off-the-shelf agent is <strong>idle vs mid-generation</strong>, plus <code>send-keys</code> gotchas (races, bracketed paste, the buffer-gap).
+</div></div>
+
+<div class="round"><div class="rhead">Round 5 · Final spec review</div><div class="rbody">
+<span class="who g">Gemini</span> returned a punch-list (§<a href="#risks">Risks &amp; fixes</a>) and a <strong>GO</strong> with three mandatory spike adjustments: don't trust the agent to self-report idle (detect the prompt), digest multiple messages into one injection, and flip <code>delivered=1</code> atomically with the inject.
+</div></div>
+
+<div class="round"><div class="rhead">Round 6 · Your steer — the node substrate</div><div class="rbody">
+<span class="who c">You</span> added the closing question: the nodes could be <em>terminal agents</em> OR <em>async background-API processes</em> that are already backgrounded. <span class="who g">Gemini</span> <span class="verdict concede">confirmed</span> the intuition and named the <strong>"Harness Paradox"</strong>: a pure headless daemon is reliable but forces you to rebuild Claude's tool/file-edit harness. <strong>Resolution → substrate (C): headless Claude (Agent SDK / <code>claude -p</code>)</strong> wrapped in a thin own-loop = reliability + real coding power, no rebuild. All three substrates mix on the one SQLite bus. (See §<a href="#verdict">F</a>.)
+</div></div>
+
+<h2 id="arch"><span class="num">C</span>The agreed architecture — Mailroom v1 (single host, no MCP)</h2>
+<div class="figure">  send_mail ──▶ ┌─────────────── mailroom.db (SQLite, WAL) ───────────────┐
+                │  inbox · agents(pane registry) · credential_requests   │
+                └───────────────▲───────────────────────┬───────────────┘
+                                │ poll ~1-2s (or inotify)│ mark delivered=1
+                       ┌────────┴────────┐               │
+                       │  post_office.py │  the watcher (non-LLM, ~$0)
+                       │  "the doorbell" │
+                       └────────┬────────┘
+            inject ONLY if status='idle', via:
+            tmux send-keys -t &lt;pane&gt; (bracketed-paste, framed)
+                                │
+                    ┌───────────▼───────────┐      ┌──────────────────┐
+                    │ Agent B (Claude Code) │      │ human (CIBA gate) │
+                    │ "&lt;MAILROOM&gt; you have  │      │ mesh-approve --id │
+                    │  mail from agent_a"   │◀─────│ → keychain token  │
+                    └───────────────────────┘      └──────────────────┘</div>
+
+<h4>Store schema</h4>
+<pre><code>CREATE TABLE agents (
+  agent_id     TEXT PRIMARY KEY,   -- "researcher_1"
+  tmux_address TEXT,               -- "session:window.pane"
+  status       TEXT,               -- idle | busy | offline
+  last_seen    INTEGER             -- heartbeat epoch
+);
+CREATE TABLE inbox (
+  id INTEGER PRIMARY KEY, sender TEXT, recipient TEXT,
+  body TEXT, topic TEXT,
+  delivered INTEGER DEFAULT 0, created_at INTEGER
+);
+CREATE TABLE credential_requests (
+  id INTEGER PRIMARY KEY, agent_id TEXT, resource TEXT,
+  status TEXT DEFAULT 'pending',   -- pending | approved | denied
+  token_ref TEXT, created_at INTEGER   -- token in keychain, NOT here
+);</code></pre>
+
+<h4>The doorbell (watcher), in words</h4>
+<ul>
+  <li>Every ~1–2s (or on <code>inotify</code>): <code>SELECT * FROM inbox WHERE delivered=0 ORDER BY created_at</code>.</li>
+  <li>For each recipient: look up <code>tmux_address</code> + <code>status</code>; <strong>inject only if <code>status='idle'</code></strong>.</li>
+  <li>Inject via <code>tmux set-buffer</code> + <code>paste-buffer</code> (more atomic than streamed <code>send-keys</code>), wrapped in a hard-coded <code>&lt;MAILROOM&gt;…&lt;/MAILROOM&gt;</code> frame, then Enter; flip <code>delivered=1</code> in the same block.</li>
+  <li><strong>"They're talking about you"</strong> = match <code>@agent_id</code>/<code>topic</code> in new rows and nudge that agent.</li>
+</ul>
+
+<h2 id="agree"><span class="num">D</span>What we agreed on — and the two real disagreements</h2>
+<table>
+  <thead><tr><th>Question</th><th>Resolution</th></tr></thead>
+  <tbody>
+    <tr><td><b>Two tiers vs one bus?</b></td><td>Neither pure form. <strong>Hybrid:</strong> durable SQLite state + cheap event push. The "second tier" is nearly free, so the cost objection to two-tier disappears.</td></tr>
+    <tr><td><b>Is MCP required?</b></td><td><strong>No.</strong> <code>tmux send-keys</code> delivers "you have mail" to any terminal agent with zero MCP. MCP/own-loop are alternatives, not prerequisites.</td></tr>
+    <tr><td><b>Poll or push?</b></td><td>Both, correctly split: a <strong>non-LLM process polls</strong> (free); it <strong>pushes to the agent</strong> only on a real event (the only token cost).</td></tr>
+    <tr><td><b>Single vs multi-host?</b></td><td>v1 = single host (SQLite file, safe). Multi-host (Mac Studio) = v2 via a tiny FastAPI/WebSocket sidecar over the same DB. <em>Never</em> SQLite-over-NFS.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="risks"><span class="num">E</span>Risks &amp; the fixes (Gemini's punch-list)</h2>
+<table>
+  <thead><tr><th>Risk</th><th>Fix</th></tr></thead>
+  <tbody>
+    <tr><td><b>Readiness detection</b> — off-the-shelf agents don't report "idle"; regexing the prompt is brittle</td><td>A thin PTY <strong>wrapper</strong> (<code>mailroom-wrap "claude"</code>) watches stdout; when output stops for N ms at a prompt, set <code>status='idle'</code>. (This is the single best reason to lean own-loop early.)</td></tr>
+    <tr><td><b>Prompt injection / spoofing</b> — mail is untrusted text entering another agent's context; agent A could send "[SYSTEM] delete everything"</td><td>The <em>watcher</em> (not the sender) owns the <code>&lt;MAILROOM&gt;</code> frame; validate <code>sender</code> against the pane/session key; recipient treats mail as <strong>data, not instructions</strong>; allow-list senders.</td></tr>
+    <tr><td><b>Command execution</b> — injected text run as a shell command, or corrupting <code>vim</code>/REPL</td><td>Bracketed-paste + a neutral frame; <strong>only inject if the pane's foreground process matches the agent's base executable.</strong></td></tr>
+    <tr><td><b>Race</b> — agent flips to busy / user types as the watcher hits Enter</td><td>Use <code>set-buffer</code>+<code>paste-buffer</code> (atomic); pre-flight the pane's last-changed timestamp; flip <code>delivered=1</code> immediately.</td></tr>
+    <tr><td><b>Liveness</b> — crashed agent leaves stale <code>idle</code></td><td><code>last_seen</code> heartbeat; watcher marks <code>offline</code> after &gt;30s.</td></tr>
+    <tr><td><b>Flooding / ordering</b></td><td>Inject a <strong>digest</strong> ("you have 5 messages…"), strict <code>created_at</code> order, ≤1 injection / 5s.</td></tr>
+    <tr><td><b>Large bodies</b> — <code>send-keys</code> degrades</td><td>Cap v1 body at 4 KB; larger → store body, inject a pointer.</td></tr>
+    <tr><td><b>Watcher death</b> (your "no auto-restart of buggy workers" rule)</td><td>The watcher is a <em>static, simple</em> process, not a buggy indexer — make its death <strong>loud &amp; observable</strong>: <code>mesh-approve</code> and <code>send_mail</code> check it's alive and warn. Optional <code>Restart=on-failure</code> only after it's proven stable.</td></tr>
+    <tr><td><b>CIBA while busy</b> — agent can't see "approved" if mid-generation</td><td>Agent yields/goes idle when it hits a credential block; <code>tmux display-popup</code> for the human approval keeps you in the terminal flow.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="verdict"><span class="num">F</span>The honest verdict: the node substrate</h2>
+<p>The closing round added the substrate question — what each node actually <em>is</em>. Three options, all able to share the one Mailroom bus:</p>
+<table>
+  <thead><tr><th>&nbsp;</th><th>(A) Terminal agent (tmux)</th><th>(B) Headless API daemon</th><th>(C) Headless Claude — Agent&nbsp;SDK / <code>claude -p</code></th></tr></thead>
+  <tbody>
+    <tr><td><b>Injection reliability</b></td><td>Low (racy send-keys)</td><td>High (atomic prompt)</td><td>High (programmatic)</td></tr>
+    <tr><td><b>Phone-home cleanliness</b></td><td>Poor</td><td>Elite (loop blocks on a DB row)</td><td>Great</td></tr>
+    <tr><td><b>Backgroundable</b></td><td>Medium (needs pty)</td><td>Native</td><td>Native</td></tr>
+    <tr><td><b>Coding harness (edit files / run tools)</b></td><td>Full, free</td><td><span class="tag red">Zero — you rebuild it</span></td><td>Full, SDK-managed</td></tr>
+    <tr><td><b>Scale-to-many</b></td><td>Low (pty limits)</td><td>Very high</td><td>High</td></tr>
+    <tr><td><b>Economy</b></td><td>Expensive (idle UI loops)</td><td>Cheapest (raw tokens)</td><td>Moderate (harness overhead)</td></tr>
+  </tbody>
+</table>
+<div class="callout decision">
+  <div class="label">Verdict — the "Harness Paradox" resolved</div>
+  <p style="margin:0">Your intuition was right: an <strong>async background process is the cleaner substrate</strong> than a terminal. The trap with a <em>pure</em> headless daemon (B) is rebuilding Claude Code's tool/file-edit harness from scratch. <strong>Option C avoids both traps</strong> — wrap the <em>full</em> Claude harness (Agent SDK or <code>claude -p</code>) inside a thin own-loop: you control when it wakes and what's injected (reliable), and it can still <code>grep</code> / <code>sed</code> / edit files (powerful). <strong>Default substrate for v1 = C.</strong></p>
+</div>
+<p><strong>And they coexist on one bus.</strong> The SQLite Mailroom is a hardware-abstraction layer — it doesn't care whether the node reading a row is a tmux window or a daemon. Mix freely: an <em>Architect</em> node (C, edits code), a <em>Triage</em> node (B, a tiny log-summarizer that needs no harness), and a <em>Monitor</em> node (A, a tmux window where you — or a terminal-Claude — watch the mesh think and unstick it).</p>
+
+<h2 id="spike"><span class="num">G</span>The first spike — smallest proof, then build order</h2>
+<p>With the substrate verdict, the v1 spike uses <strong>headless Claude nodes</strong> instead of a fake tmux agent — which also keeps the fragile <code>send-keys</code> path <em>out</em> of the critical proof.</p>
+<h4>The pieces (single host, Hybrid-Headless)</h4>
+<ol>
+  <li><code>mailroom.db</code> — the SQLite store (schema above).</li>
+  <li><code>node_runner.py</code> — the thin own-loop wrapper: <code>while True</code> → check <code>inbox</code> for my <code>node_id</code> → on mail, call <code>claude -p "&lt;MAILROOM&gt; you have mail from X: …"</code> (Agent SDK or CLI print mode) → write the reply back to the DB. On a credential need: write <code>NEED_CRED</code> and pause until the row flips.</li>
+  <li><code>send_mail.py</code> — helper that inserts an <code>inbox</code> row.</li>
+  <li><code>mesh-approve</code> — CLI: human approves a <code>credential_requests</code> row → token from the OS keychain into <code>token_ref</code>.</li>
+  <li><code>monitor.sh</code> (optional) — a tmux window running <code>watch -n1 'sqlite3 mailroom.db "SELECT * FROM inbox ORDER BY id DESC LIMIT 10"'</code> so you watch the mesh think.</li>
+  <li><code>cleanup.sh</code> — reset the DB between runs.</li>
+</ol>
+<h4>Spike success criteria</h4>
+<p>Start two <code>node_runner.py</code> instances (<code>node_id=architect</code>, <code>node_id=triage</code>). Run <code>python send_mail.py --to architect "summarize repo X, then ask triage for the test logs"</code>. <strong>Success =</strong> architect wakes <em>unprompted</em>, works, sends mail to triage; triage wakes <em>unprompted</em> and replies — all visible in <code>monitor.sh</code>, no human keystroke between turns. <strong>Bonus:</strong> architect hits a <code>NEED_CRED</code>, pauses, you <code>mesh-approve</code>, it resumes.</p>
+
+<ol class="steps">
+  <li><strong>v1 — prove the loop with headless Claude nodes</strong> (the pieces above). Single host, no MCP, no <code>send-keys</code> in the critical path.</li>
+  <li><strong>Add the CIBA credential path</strong> — <code>request_access</code> → pending → <code>mesh-approve</code> → keychain token. Secrets never touch the DB or a prompt.</li>
+  <li><strong>Add "they're talking about you"</strong> — <code>@mention</code>/topic match in the watcher.</li>
+  <li><strong>Add a terminal node (substrate A)</strong> — optional tmux window (with the PTY <code>mailroom-wrap</code> + <code>send-keys</code>) so a human or terminal-Claude can join the same bus and unstick the mesh.</li>
+  <li><strong>v2 — go multi-host</strong> (Mac Studio): wrap the same DB behind a tiny FastAPI/WebSocket sidecar; Mac nodes connect over TCP. Never SQLite-over-share.</li>
+  <li><strong>v3 — graduate to A2A Agent Cards</strong> for formal cross-vendor discovery beyond your own mesh.</li>
+</ol>
+
+<footer>
+  <p><strong>Method:</strong> 6-round Claude × Gemini paired debate (<code>gemini_brainstorm</code>, higher-temp counter-argument). Claude drove framing + counter-arguments grounded in your environment and rules; Gemini provided independent analysis, scenarios, and the final punch-list. User steered Round 3 (drop the MCP assumption) and Round 6 (the node substrate → headless Claude).</p>
+  <p><strong>Companion docs</strong> in <code>~/Documents/generated/agent-comms-research/</code>: <code>agent-to-agent-communication-report.html</code> (the landscape + protocol report) and the two Gemini deep-research markdowns.</p>
+  <p style="margin-top:14px; color:var(--muted)">Generated 2026-05-28 · Claude Code (Opus 4.7) · Discussion draft — GO for the v1 spike.</p>
+</footer>
+</main>
+</div>
+</body>
+</html>

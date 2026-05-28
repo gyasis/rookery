@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent-to-Agent Communication — Research Report & Path Forward</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --ink-soft:#3a3a3a; --muted:#6b6b6b; --line:#e3ddd2;
+    --paper:#faf7f1; --paper-2:#f3eee4; --accent:#9a3b2e; --accent-2:#2f5d62;
+    --code-bg:#1e1c1a; --code-ink:#e8e2d6; --good:#2f7d4f; --warn:#b06a16; --bad:#9a3b2e;
+    --maxw:860px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    font-size:18px; line-height:1.62; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{display:flex; gap:0; max-width:1180px; margin:0 auto;}
+  /* Sidebar TOC */
+  nav.toc{
+    position:sticky; top:0; align-self:flex-start; height:100vh; overflow-y:auto;
+    width:250px; padding:34px 18px 34px 28px; border-right:1px solid var(--line);
+    font-family:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif; font-size:13px;
+    background:var(--paper-2);
+  }
+  nav.toc .brand{font-weight:700; letter-spacing:.5px; text-transform:uppercase; font-size:11px; color:var(--accent); margin-bottom:14px;}
+  nav.toc a{display:block; color:var(--ink-soft); text-decoration:none; padding:4px 0; line-height:1.35;}
+  nav.toc a:hover{color:var(--accent)}
+  nav.toc a.sub{padding-left:14px; font-size:12px; color:var(--muted)}
+  main{flex:1; min-width:0; padding:48px 40px 120px; max-width:var(--maxw);}
+  header.head{border-bottom:3px double var(--line); padding-bottom:26px; margin-bottom:34px;}
+  .kicker{font-family:"Inter",system-ui,sans-serif; text-transform:uppercase; letter-spacing:3px; font-size:11px; color:var(--accent); font-weight:600;}
+  h1{font-size:38px; line-height:1.12; margin:.35em 0 .25em; font-weight:700;}
+  .sub{color:var(--muted); font-size:16px; font-style:italic;}
+  .meta{font-family:"Inter",system-ui,sans-serif; font-size:12px; color:var(--muted); margin-top:16px; display:flex; flex-wrap:wrap; gap:6px 18px;}
+  .meta b{color:var(--ink-soft); font-weight:600;}
+  h2{font-size:26px; margin:54px 0 14px; padding-top:10px; border-top:1px solid var(--line); font-weight:700;}
+  h2 .num{color:var(--accent); font-family:"Inter",sans-serif; font-size:15px; font-weight:700; margin-right:10px; vertical-align:2px;}
+  h3{font-size:19px; margin:28px 0 8px; color:var(--ink); font-weight:700;}
+  h4{font-size:15px; margin:20px 0 6px; font-family:"Inter",sans-serif; letter-spacing:.3px; color:var(--accent-2); text-transform:uppercase;}
+  p{margin:0 0 14px}
+  a{color:var(--accent)}
+  code{font-family:"JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; font-size:.82em; background:var(--paper-2); padding:1px 5px; border-radius:4px; color:var(--accent-2);}
+  pre{background:var(--code-bg); color:var(--code-ink); padding:18px 20px; border-radius:8px; overflow-x:auto; font-size:13px; line-height:1.5; margin:14px 0;}
+  pre code{background:none; color:var(--code-ink); padding:0; font-size:13px;}
+  .lead{font-size:20px; line-height:1.55; color:var(--ink-soft);}
+  ul,ol{margin:0 0 16px; padding-left:22px}
+  li{margin:5px 0}
+  strong{font-weight:700}
+  table{border-collapse:collapse; width:100%; margin:18px 0; font-size:14px; font-family:"Inter",system-ui,sans-serif;}
+  th,td{border:1px solid var(--line); padding:9px 11px; text-align:left; vertical-align:top;}
+  th{background:var(--paper-2); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.4px;}
+  tr:nth-child(even) td{background:#fcfaf5}
+  .callout{border-left:4px solid var(--accent); background:var(--paper-2); padding:14px 18px; margin:18px 0; border-radius:0 8px 8px 0;}
+  .callout.path{border-color:var(--accent-2); background:#eef3f2;}
+  .callout.warn{border-color:var(--warn); background:#fbf2e3;}
+  .callout .label{font-family:"Inter",sans-serif; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1.5px; color:var(--accent); margin-bottom:6px;}
+  .callout.path .label{color:var(--accent-2)}
+  .callout.warn .label{color:var(--warn)}
+  .tag{display:inline-block; font-family:"Inter",sans-serif; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; background:var(--paper-2); border:1px solid var(--line); color:var(--ink-soft); margin:0 4px 4px 0;}
+  .tag.green{background:#e7f2ea; color:var(--good); border-color:#bcdcc6}
+  .tag.blue{background:#e7eff0; color:var(--accent-2); border-color:#bcd3d6}
+  .tag.red{background:#f6e6e3; color:var(--bad); border-color:#e3c2bb}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:16px 0;}
+  .card{border:1px solid var(--line); border-radius:8px; padding:14px 16px; background:#fff;}
+  .card h4{margin-top:0}
+  .mode-cmp{display:grid; grid-template-columns:1fr 1fr; gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; margin:16px 0;}
+  .mode-cmp>div{padding:16px 18px}
+  .mode-cmp .async{background:#fbf2e3}
+  .mode-cmp .rt{background:#eef3f2}
+  .mode-cmp h4{margin-top:0}
+  .figure{border:1px dashed var(--line); border-radius:8px; padding:18px; margin:18px 0; background:#fff; font-family:"JetBrains Mono",monospace; font-size:12.5px; line-height:1.5; white-space:pre; overflow-x:auto; color:var(--ink-soft);}
+  .steps{counter-reset:step; list-style:none; padding-left:0;}
+  .steps li{counter-increment:step; position:relative; padding:10px 0 10px 44px; border-bottom:1px dotted var(--line);}
+  .steps li::before{content:counter(step); position:absolute; left:0; top:9px; width:28px; height:28px; background:var(--accent); color:#fff; border-radius:50%; font-family:"Inter",sans-serif; font-weight:700; font-size:14px; display:flex; align-items:center; justify-content:center;}
+  footer{margin-top:60px; padding-top:24px; border-top:3px double var(--line); font-size:13px; color:var(--muted); font-family:"Inter",sans-serif;}
+  .src{font-size:12.5px; line-height:1.5}
+  .src a{word-break:break-word}
+  @media(max-width:920px){
+    nav.toc{display:none}
+    main{padding:30px 20px 80px}
+    .grid2,.mode-cmp{grid-template-columns:1fr}
+    h1{font-size:30px}
+  }
+  @media print{
+    nav.toc{display:none} body{background:#fff} main{max-width:100%}
+    pre{background:#f4f4f4; color:#111; border:1px solid #ccc} pre code{color:#111}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc">
+  <div class="brand">Agent Comms</div>
+  <a href="#tldr">TL;DR &amp; your path</a>
+  <a href="#split">1 · The AutoGen/AG2 split</a>
+  <a href="#three">2 · The 3 ways agents talk</a>
+  <a href="#autogen04">3 · AutoGen 0.4 — pub/sub</a>
+  <a href="#ag2">4 · AG2 — swarm &amp; handoffs</a>
+  <a href="#protocols">5 · Protocol layer (A2A/MCP)</a>
+  <a href="#phonehome">6 · The phone-home loop</a>
+  <a href="#mesh">7 · Networking live sessions</a>
+  <a href="#messaging">8 · Slack/email as transport</a>
+  <a href="#security">9 · Security</a>
+  <a href="#newpath">10 · The recommended path</a>
+  <a href="#next">11 · Next steps</a>
+  <a href="#sources">Sources</a>
+</nav>
+
+<main>
+<header class="head">
+  <div class="kicker">Deep Research &amp; Investigation</div>
+  <h1>How agents talk to each other — unprompted</h1>
+  <div class="sub">AutoGen vs AG2, the A2A/MCP protocol layer, and a path to wiring your own Claude + Gemini agent mesh that can phone home for context &amp; credentials.</div>
+  <div class="meta">
+    <span><b>Prepared for</b> Gyasi Sutton</span>
+    <span><b>Date</b> 2026-05-28</span>
+    <span><b>Method</b> 2× Gemini deep-research + multi-hop web synthesis</span>
+    <span><b>Status</b> Discussion draft — for review &amp; paired-debate</span>
+  </div>
+</header>
+
+<section id="tldr">
+  <p class="lead">You asked a precise question: <em>how can different agents (coding agents, harnesses) talk to each other <strong>without being prompted each time</strong></em> — including the case where a sub-agent you handed a task realizes it's missing something and comes <strong>back to ask</strong> for more background or the credentials to connect to an app. This report answers that, and lays out the direction you're leaning toward.</p>
+
+  <div class="callout path">
+    <div class="label">The path you're leaning toward</div>
+    <p style="margin-bottom:8px"><strong>An A2A-style JSON message mesh</strong>, with <strong>two transport tiers</strong> and a credential gate:</p>
+    <ul style="margin-bottom:0">
+      <li><span class="tag blue">Tier 1 — async "mail"</span> JSON messages dropped in a shared bus/file inbox; an agent is alerted when its name is called. Like email between agents — durable, survives restarts.</li>
+      <li><span class="tag green">Tier 2 — realtime "in the room"</span> a swarm/event-bus layer for quick, low-latency back-and-forth when agents are live together.</li>
+      <li><span class="tag red">Credential gate — CIBA</span> when an agent needs secrets, it doesn't get the raw <code>.env</code> — it triggers an out-of-band approval and receives a short-lived scoped token.</li>
+    </ul>
+  </div>
+
+  <p>That instinct is well-aligned with where the industry landed in 2025–2026. Below is the full picture so you can decide the next steps machine-to-machine — <em>this is a map of the path, not an argument to eliminate options.</em></p>
+</section>
+
+<h2 id="split"><span class="num">01</span>The AutoGen / AG2 split (why it's confusing)</h2>
+<p>Your "<em>autogen now ag2 i think</em>" is correct — and the confusion is real, not yours. In <strong>November 2024</strong> the original creators (incl. Chi Wang) left Microsoft and forked the project. There are now <strong>two</strong> things, and they handle "unprompted" in opposite ways.</p>
+
+<table>
+  <thead><tr><th>&nbsp;</th><th>AG2 (the fork, <code>ag2ai</code>)</th><th>Microsoft AutoGen 0.4+</th></tr></thead>
+  <tbody>
+    <tr><td><b>What it is</b></td><td>Continuation of classic AutoGen 0.2 API</td><td>Complete ground-up rewrite</td></tr>
+    <tr><td><b>Architecture</b></td><td>Conversation-driven (agents take turns)</td><td>Event-driven actor model (pub/sub bus)</td></tr>
+    <tr><td><b>Mental model</b></td><td>A meeting with a moderator</td><td>A message bus / Slack for robots</td></tr>
+    <tr><td><b>pip installs</b></td><td><code>ag2</code> / <code>autogen</code> / <code>pyautogen</code></td><td><code>autogen-core</code>, <code>autogen-agentchat</code>, <code>autogen-ext</code></td></tr>
+    <tr><td><b>"Unprompted" comms</b></td><td>Simulated via speaker-selection or Swarm handoffs</td><td><b>Native</b> — agents publish to topics; subscribers wake unprompted</td></tr>
+  </tbody>
+</table>
+<div class="callout warn">
+  <div class="label">Gotcha</div>
+  <p style="margin:0">The old PyPI names (<code>autogen</code>, <code>pyautogen</code>) now install <strong>AG2</strong>, the fork — not Microsoft's rewrite. Microsoft's new framework only lives under the <code>autogen-core</code> / <code>autogen-agentchat</code> namespaces. Installing the wrong one is the #1 source of broken tutorials.</p>
+</div>
+
+<h2 id="three"><span class="num">02</span>The 3 ways agents talk (the whole field reduces to these)</h2>
+<p>Every framework, every protocol, is one of these three under the hood:</p>
+<div class="grid2">
+  <div class="card"><h4>1 · Direct call (RPC)</h4><p style="margin:0">A explicitly calls B and waits. <span class="tag">prompted</span> <span class="tag">synchronous</span> AG2 <code>initiate_chat</code>, OpenAI handoffs. Simple, but blocks — and a sub-agent that needs to pause will <em>time out</em>.</p></div>
+  <div class="card"><h4>2 · Moderated turn-taking</h4><p style="margin:0">A manager picks who speaks next. <span class="tag">semi-autonomous</span> AG2 <code>GroupChatManager</code>, AutoGen <code>SelectorGroupChat</code>. The agent doesn't choose to speak — the manager does.</p></div>
+  <div class="card" style="grid-column:1/-1; border-color:var(--accent-2); background:#eef3f2;"><h4 style="color:var(--accent-2)">3 · Publish / subscribe (event bus) — this is "unprompted"</h4><p style="margin:0">A publishes a message to a <strong>topic</strong>; any agent subscribed receives it, <strong>with no orchestrator deciding the turn</strong>. An agent emits an event and others react. <span class="tag green">truly agent-initiated</span> <span class="tag green">async</span> This is exactly what you described — "an agent can send and talk to other agents unprompted."</p></div>
+</div>
+
+<h2 id="autogen04"><span class="num">03</span>Microsoft AutoGen 0.4 — the genuine unprompted mechanism</h2>
+<p>This is the <strong>actor model</strong>. An agent is a <code>RoutedAgent</code>, decorates handlers with <code>@message_handler</code>, and <code>publish_message()</code> to a topic. Anyone subscribed reacts — nobody told it to.</p>
+<pre><code>from dataclasses import dataclass
+from autogen_core import RoutedAgent, message_handler, TopicId, default_subscription
+
+@dataclass
+class AnomalyDetectedEvent:
+    description: str
+    severity: int
+
+class MonitorAgent(RoutedAgent):                 # PUBLISHER
+    async def run_continuous_scan(self):
+        if self.found_anomaly():
+            # UNPROMPTED: the agent itself decides to broadcast
+            await self.publish_message(
+                AnomalyDetectedEvent("CPU spiking", severity=9),
+                topic_id=TopicId(type="alerts", source="server_1"),
+            )
+
+@default_subscription                            # SUBSCRIBER
+class ResponderAgent(RoutedAgent):
+    @message_handler
+    async def handle_anomaly(self, message: AnomalyDetectedEvent, ctx) -> None:
+        # Wakes up unprompted when a message hits the subscribed topic
+        if message.severity > 8:
+            print("CRITICAL — initiating mitigation")</code></pre>
+<p>Key behaviors that matter for your design:</p>
+<ul>
+  <li><strong>Publish is one-way / fire-and-forget</strong> — no return value. If you need an answer, the other agent publishes <em>its own</em> message back. This is precisely how phone-home works: the sub-agent just publishes a <code>NeedMoreContext</code> event whenever it wants.</li>
+  <li><strong>An agent won't receive its own published message</strong> (built-in loop prevention).</li>
+  <li>It <em>also</em> supports direct request/response (<code>send_message</code>) when you do want a blocking answer.</li>
+  <li>The runtime natively <strong>persists actor state &amp; event logs</strong> → durable, long-running agents that survive restarts.</li>
+</ul>
+<p>On top of the core, the <code>autogen-agentchat</code> layer rebuilds familiar team constructs: <code>RoundRobinGroupChat</code>, <code>SelectorGroupChat</code> (LLM picks next speaker), <code>Swarm</code> (handoffs), <strong>Magentic-One</strong> (Orchestrator + Task/Progress Ledgers + WebSurfer/FileSurfer/Coder workers), and <strong>GraphFlow</strong> (deterministic <code>DiGraph</code> state machines with message filtering).</p>
+
+<h2 id="ag2"><span class="num">04</span>AG2 (the fork) — Swarm + handoffs = semi-autonomous</h2>
+<p>AG2 keeps the conversational model but adds <strong>Swarm</strong>, where agents <strong>hand off control to each other autonomously</strong> based on conditions — no human re-prompting each step.</p>
+<pre><code>from autogen.agentchat.contrib.swarm_agent import (
+    AfterWorkOption, OnCondition, register_hand_off
+)
+
+register_hand_off(agent=triage_agent, hand_to=[
+    OnCondition(flight_agent,  "User wants to cancel or modify a flight."),
+    OnCondition(billing_agent, "User has a billing question."),
+])
+
+register_hand_off(agent=flight_agent, hand_to=[
+    OnCondition(billing_agent, "Flight cancelled. Proceed to refund."),
+    ],
+    after_work=AfterWorkOption.REVERT_TO_USER,   # stuck? phone home to the human
+)</code></pre>
+<ul>
+  <li><code>OnCondition</code> → becomes a function the LLM can call; <em>the agent itself decides</em> "I should hand this to billing now." Agent choosing to talk to another agent, unprompted by you.</li>
+  <li><code>OnContextCondition</code> → handoff fires automatically from shared-memory state changes.</li>
+  <li><code>AfterWorkOption</code> → the fallback when no tool is called: <code>TERMINATE</code>, <code>STAY</code>, or <code>REVERT_TO_USER</code> (your escape hatch to a human).</li>
+</ul>
+<p>For free-for-all chat: <code>GroupChat</code> + <code>GroupChatManager</code> with <code>speaker_selection_method</code> = <code>auto</code> (LLM picks), <code>round_robin</code>, <code>random</code>, <code>manual</code>, or a custom Python function. Human-in-the-loop is via <code>UserProxyAgent</code> with <code>human_input_mode</code> = <code>ALWAYS</code> / <code>TERMINATE</code> / <code>NEVER</code>.</p>
+
+<div class="callout">
+  <div class="label">Why Swarm handoffs beat LLM speaker-selection</div>
+  <p style="margin:0"><code>SelectorGroupChat</code> burns an extra LLM call between <em>every</em> turn and can hallucinate the next speaker or loop. Swarm handoffs are plain tool-calls — and models are heavily fine-tuned for accurate JSON tool-calling, so routing is more reliable and cheaper.</p>
+</div>
+
+<h2 id="protocols"><span class="num">05</span>The protocol layer — A2A vs MCP (don't conflate them)</h2>
+<p>This is central to the path you're choosing. The two protocols are complementary, not competing:</p>
+<div class="mode-cmp">
+  <div class="rt"><h4>MCP — agent ↔ tools</h4><p style="margin:0">Anthropic's Model Context Protocol. Gives <em>one</em> agent a USB-port to databases/APIs. The agent sees <strong>inside</strong> the tool (typed function signatures). JSON-RPC 2.0 over stdio (local) or SSE/HTTP (remote). <em>Vertical</em> integration.</p></div>
+  <div class="async"><h4>A2A — agent ↔ agent</h4><p style="margin:0">Google's Agent2Agent (donated to the <strong>Linux Foundation</strong>, June 2025). Agents stay <strong>opaque</strong> to each other; B publishes an <strong>"Agent Card"</strong> (JSON at a well-known URL describing skills + auth) and others discover &amp; task it. <em>Horizontal</em> collaboration.</p></div>
+</div>
+<p>The A2A task lifecycle is <code>submitted → working → <strong>input-required</strong> → completed</code>. That <code>input-required</code> state <em>is</em> the standardized "agent phones home for more info" you're describing — baked into the protocol. IBM's <strong>ACP</strong> merged into A2A v1.0 (Aug 2025), adding enterprise state-sync &amp; fault tolerance. Cisco's <strong>AGNTCY</strong> ("Internet of Agents") provides the registry + transport (DNS/TCP-IP for agents). <strong>ANP</strong> is the decentralized/Web3 variant using W3C DIDs.</p>
+
+<table>
+  <thead><tr><th>&nbsp;</th><th>MCP</th><th>A2A (+ACP)</th><th>AGNTCY</th><th>ANP</th></tr></thead>
+  <tbody>
+    <tr><td><b>Focus</b></td><td>Agent→tools/data</td><td>Agent↔agent</td><td>Agent network fabric</td><td>Decentralized agentic web</td></tr>
+    <tr><td><b>Discovery</b></td><td>Explicit config</td><td>Agent Cards (JSON)</td><td>OASF + directory</td><td>W3C DID / WNS</td></tr>
+    <tr><td><b>Transport</b></td><td>JSON-RPC (stdio/SSE)</td><td>JSON-RPC over HTTPS/SSE + webhooks</td><td>SLIM, gRPC, HTTP/2</td><td>P2P network</td></tr>
+    <tr><td><b>Best for</b></td><td>Expose DBs/APIs to an agent</td><td>Multi-agent task delegation</td><td>Multi-vendor at scale</td><td>Cross-domain open internet</td></tr>
+  </tbody>
+</table>
+<p><strong>Most production stacks run both:</strong> MCP for each agent's tools, A2A for agent-to-agent. For mixing <strong>Claude + Gemini specifically</strong> across machines, A2A is the vendor-neutral bridge.</p>
+
+<h2 id="phonehome"><span class="num">06</span>Your scenario: the "phone-home for context / credentials" loop</h2>
+<p>Your story: <em>Claude gives a sub-agent a task. Ideally Claude front-loads everything, but the sub-agent might realize mid-task it needs more background, or the env/creds to connect to an app — and should be able to come back and ask, unprompted.</em> This is a named pattern with two halves.</p>
+
+<h3>(a) The pause-and-ask — durable interrupt</h3>
+<p>The cleanest model is <strong>LangGraph's <code>interrupt()</code></strong>: a node pauses, <strong>checkpoints its full state to a DB</strong>, and waits. The parent (or you) supplies the missing info, and it <strong>resumes from exactly where it stopped</strong>.</p>
+<pre><code>from langgraph.types import interrupt, Command
+
+def sub_agent_node(state: dict):
+    if not state.get("db_credentials"):
+        # Agent initiates a phone-home for missing context
+        creds = interrupt({"reason": "need_db_credentials", "agent": "sub_agent_1"})
+        state["db_credentials"] = creds       # resumes here once provided
+    return do_work(state)
+
+# Resume from the orchestrator OR a human/Slack channel:
+# graph.invoke(Command(resume={"user":"admin","pass":"..."}),
+#              config={"configurable": {"thread_id": "123"}})</code></pre>
+<p>Equivalents in other frameworks:</p>
+<ul>
+  <li><strong>AG2:</strong> <code>AfterWorkOption.REVERT_TO_USER</code> or a <code>UserProxyAgent</code>.</li>
+  <li><strong>AutoGen 0.4:</strong> the sub-agent publishes a <code>NeedInput</code> event; an orchestrator/UserProxy subscribed to that topic answers.</li>
+  <li><strong>OpenAI Agents SDK:</strong> a <code>handoff()</code> back to the orchestrator or a Human agent; <code>on_handoff</code> middleware can inject JIT credentials during the transition.</li>
+  <li><strong>Semantic Kernel:</strong> <code>HandoffOrchestration</code> — a mesh topology that natively pauses for human input when no peer can satisfy the need.</li>
+  <li><strong>Google ADK:</strong> <code>RemoteA2aAgent</code> streams an event back over A2A JSON-RPC; orchestrator intercepts it without breaking the session.</li>
+</ul>
+
+<h3>(b) Handing over secrets safely (do NOT paste <code>.env</code> into a prompt)</h3>
+<div class="callout warn">
+  <div class="label">The principle</div>
+  <p style="margin:0">Front-load <em>non-secret</em> context. For secrets, the sub-agent requests <strong>just-in-time, scoped tokens via an approval channel</strong> — never the raw long-lived key. If a hijacked agent (via prompt injection) holds a static key, it can exfiltrate it with one outbound request.</p>
+</div>
+<ul>
+  <li><strong>CIBA (Client-Initiated Backchannel Authentication):</strong> the agent says "I need to connect to X," an out-of-band channel (Slack/phone) asks the human to approve, and on approval the agent gets a <strong>scoped, short-lived token</strong>.</li>
+  <li><strong>JIT secret brokers</strong> (e.g. Aembit): the agent never holds the secret; a broker checks intent + policy + the agent's workload identity (SPIFFE / W3C DID) and mints a ~60-second ephemeral token for that one task.</li>
+  <li><strong>ESCALATE.md:</strong> a lightweight convention — agent posts a request, human replies APPROVE/DENY in Slack/email, all logged.</li>
+</ul>
+
+<h2 id="mesh"><span class="num">07</span>Networking multiple LIVE agent sessions (Claude + Gemini mesh)</h2>
+<p>This is your "two open Claude sessions talk to each other / network with a Gemini result." In 2026 there are concrete, working options — from official to dead-simple:</p>
+<table>
+  <thead><tr><th>Approach</th><th>How it works</th><th>Flavor</th></tr></thead>
+  <tbody>
+    <tr><td><b>Claude Code Agent Teams</b> <span class="tag">official, experimental</span></td><td>One session = lead, others = teammates each in own context; <strong>messages auto-delivered</strong>; idle teammates auto-notify the lead. Enable via <code>CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</code>.</td><td>Realtime</td></tr>
+    <tr><td><b>Claude Code "channels"</b> <span class="tag">experimental</span></td><td>MCP servers <strong>push notifications into the chat unprompted</strong> — no "any new messages?" polling. The real unprompted delivery for your case.</td><td>Realtime</td></tr>
+    <tr><td><b>claude-peers-mcp / cc2cc</b></td><td>An MCP server as a <strong>local message bus</strong> so Claude instances DM each other ad-hoc.</td><td>Realtime</td></tr>
+    <tr><td><b>tmux-bridge-mcp</b></td><td>MCP server over stdio exposing <code>tmux_list_panes</code> / <code>tmux_read</code> / <code>tmux_send_keys</code> — a Claude in pane 1 reads &amp; commands a Gemini/Codex in pane 2.</td><td>Realtime</td></tr>
+    <tr><td><b>Octobots-style SQLite "taskbox"</b></td><td>Orchestrator writes JSON tasks to a shared SQLite DB; sub-agents poll, claim, and write status/clarification back. Independent live sessions collaborate async.</td><td>Async mail</td></tr>
+    <tr><td><b>JSON-file mailbox</b></td><td>Two instances poll a shared JSON file as an inbox. Crude but works today, zero infra.</td><td>Async mail</td></tr>
+    <tr><td><b><code>claude mcp serve</code></b></td><td>Run Claude Code itself as an MCP server so another agent (or a Gemini-driven client) invokes its tools remotely.</td><td>Bridge</td></tr>
+    <tr><td><b>A2A protocol</b></td><td>Cross-machine, cross-vendor — the standards-based way a Claude agent and a Gemini agent discover &amp; task each other.</td><td>Either</td></tr>
+  </tbody>
+</table>
+<p>Notice these split neatly onto <strong>your two tiers</strong>: the realtime ones are your "in the room" layer; the SQLite/JSON-file ones are your "mail" layer.</p>
+
+<h2 id="messaging"><span class="num">08</span>Messaging channels AS the transport (Slack / email)</h2>
+<p>Your "Slack messages or emails like features" is a real, common transport. An agent DMs you (or another agent) and <strong>waits for the reply as its input</strong>:</p>
+<ul>
+  <li><strong>Webhook-wrapper pattern:</strong> agent calls a <code>request_human_input</code> tool → HTTP POST to a Slack webhook → execution suspends (persistent checkpointer) → human replies / clicks Approve → backend locates the paused <code>thread_id</code> and resumes the graph.</li>
+  <li>Slack's 3-second rule → apps <code>200 OK</code> immediately, process async in the background.</li>
+  <li>Mutation tools return a <strong>confirmation card</strong>; the real write only happens on Approve. Tools like <code>polos</code> / <code>hitl-agent-ts</code> wrap this over LangGraph interrupts.</li>
+</ul>
+
+<h2 id="security"><span class="num">09</span>Security — the part most people skip</h2>
+<div class="callout warn">
+  <div class="label">The "lethal trifecta"</div>
+  <p style="margin:0">Danger = <strong>private-data access</strong> + <strong>exposure to untrusted content</strong> + <strong>external communication</strong>. An agent-initiated comms mesh has all three by design, so contain it deliberately.</p>
+</div>
+<ul>
+  <li><strong>Prompt injection → exfiltration:</strong> a poisoned <code>README</code>/issue can tell an agent to send its keys out. Static env-var secrets make this trivial — hence JIT tokens (§6b).</li>
+  <li><strong>Sandbox execution:</strong> run agents in Docker with <strong>no internet egress</strong> (<code>IPAddressDeny=any</code>) except allow-listed domains.</li>
+  <li><strong>Kernel-level guards:</strong> eBPF tools (e.g. Inner Warden) block a hijacked agent's unauthorized syscalls / anomalous "phone-home" IPs at wire speed.</li>
+  <li><strong>Verifiable identity:</strong> A2A v1.0 signed Agent Cards; SPIFFE / W3C DID workload identity so the broker knows <em>which</em> agent is asking before minting a token.</li>
+</ul>
+
+<h2 id="newpath"><span class="num">10</span>The recommended path for your setup</h2>
+<p>Putting your instinct together with the research, here's a concrete shape — <strong>a two-tier JSON mesh + a credential gate</strong>, vendor-neutral so Claude and Gemini both plug in:</p>
+
+<div class="figure">  ┌─────────────────────────────────────────────────────────────┐
+  │                      ORCHESTRATOR (Claude)                    │
+  │   delegates tasks · front-loads non-secret context           │
+  └───────────────┬───────────────────────────┬─────────────────┘
+                  │                            │
+        Tier 2: REALTIME "in the room"   Tier 1: ASYNC "mail"
+        (event bus / channels / tmux)    (JSON inbox: SQLite or files)
+                  │                            │
+        ┌─────────▼─────────┐        ┌─────────▼──────────┐
+        │ sub-agent (Claude)│        │ sub-agent (Gemini) │
+        │  publishes:       │        │  drops message:    │
+        │  NeedContext ●────┼───────▶│  "need DB creds"   │
+        └─────────┬─────────┘        └─────────┬──────────┘
+                  │                            │
+                  ▼   needs a SECRET?          ▼
+        ┌───────────────────── CIBA / JIT broker ──────────────────┐
+        │  out-of-band approval (Slack DM) → scoped 60s token       │
+        │  never the raw .env                                       │
+        └──────────────────────────────────────────────────────────┘</div>
+
+<h4>Why this shape</h4>
+<ul>
+  <li><strong>Two tiers because the two needs are genuinely different.</strong> "Mail" (durable JSON inbox) is right for delegated work that may sit for minutes/hours and must survive a restart. "In the room" (event bus / Claude channels) is right for quick live back-and-forth. You named this distinction yourself — it's correct.</li>
+  <li><strong>JSON messages + name-addressing</strong> = the A2A mental model without forcing full A2A on day one. You can start with a SQLite taskbox / JSON inbox and graduate to formal A2A Agent Cards when you need cross-machine or cross-vendor discovery.</li>
+  <li><strong>CIBA as the credential gate</strong> keeps the scary part (secrets) out of prompts and behind an approval you see.</li>
+  <li><strong>Vendor-neutral</strong> so a Gemini result and a Claude session are just two nodes on the same bus.</li>
+</ul>
+
+<div class="callout path">
+  <div class="label">Build order (cheapest first, matches your local-first instinct)</div>
+  <ol style="margin:0">
+    <li><strong>Start with Tier-1 mail:</strong> a shared SQLite "taskbox" (or JSON-file inbox) + a tiny MCP server that lets any agent <code>send(to, msg)</code> / <code>inbox()</code>. Proves the loop with zero heavy infra.</li>
+    <li><strong>Add the phone-home:</strong> give sub-agents a <code>request_more(reason)</code> tool that writes a <code>NeedContext</code> row; orchestrator polls/subscribes and answers. (LangGraph <code>interrupt()</code> if you want durable pause/resume.)</li>
+    <li><strong>Add Tier-2 realtime</strong> only where latency hurts: Claude Code Agent Teams / channels for live sessions, or AutoGen 0.4 pub/sub if you want a real event bus.</li>
+    <li><strong>Add the CIBA credential gate</strong> before any agent touches a real secret.</li>
+    <li><strong>Graduate to A2A Agent Cards</strong> when you need Claude↔Gemini across machines or want formal discovery.</li>
+  </ol>
+</div>
+
+<h2 id="next"><span class="num">11</span>Next steps</h2>
+<p>This report is the map; here's how I'd move from here. (Pick — none of this is locked.)</p>
+<ol class="steps">
+  <li><strong>Paired-debate the two-tier vs single-bus decision.</strong> Run <code>/paired-debate</code> (Claude × Gemini) on "two transport tiers vs one unified event bus for a Claude+Gemini coding mesh" — you sit in. Sharpens the architecture before any code.</li>
+  <li><strong>Spike the Tier-1 mailbox.</strong> A ~100-line MCP "agent-inbox" server over SQLite: <code>send</code>, <code>inbox</code>, <code>request_more</code>. Smallest thing that proves unprompted agent→agent + phone-home.</li>
+  <li><strong>Decide the realtime layer.</strong> Try Claude Code Agent Teams (official, zero-build) first; reach for AutoGen 0.4 pub/sub only if you need a true cross-process event bus.</li>
+  <li><strong>Prototype the CIBA gate</strong> with a Slack approval → scoped token, so the "give me the env to connect" moment is safe by construction.</li>
+</ol>
+
+<footer>
+  <p><strong>Backing material</strong> (full text saved alongside this report):</p>
+  <ul class="src">
+    <li><code>autogen-ag2-agent-comms_…md</code> — deep research on AutoGen 0.4 vs AG2 internals, with code.</li>
+    <li><code>agent-to-agent-protocols-survey_…md</code> — deep research on A2A/MCP/ACP/ANP, multi-session networking, security.</li>
+    <li>Folder: <code>~/Documents/generated/agent-comms-research/</code></li>
+  </ul>
+  <p id="sources" style="margin-top:18px"><strong>Selected sources</strong></p>
+  <div class="src">
+    <p>
+      <a href="https://www.microsoft.com/en-us/research/blog/autogen-v0-4-reimagining-the-foundation-of-agentic-ai-for-scale-extensibility-and-robustness/">AutoGen v0.4 — Microsoft Research</a> ·
+      <a href="https://microsoft.github.io/autogen/stable//user-guide/core-user-guide/core-concepts/topic-and-subscription.html">AutoGen — Topic &amp; Subscription docs</a> ·
+      <a href="https://dev.to/maximsaplin/microsoft-autogen-has-split-in-2-wait-3-no-4-parts-2p58">The AutoGen split — DEV</a> ·
+      <a href="https://docs.ag2.ai/latest/docs/user-guide/basic-concepts/introducing-swarm-orchestration/">AG2 — Swarm Orchestration</a> ·
+      <a href="https://docs.ag2.ai/0.8.6/docs/user-guide/advanced-concepts/swarm/deep-dive/">AG2 — Swarm deep-dive</a> ·
+      <a href="https://www.intuz.com/blog/mcp-vs-a2a">MCP vs A2A (2026) — Intuz</a> ·
+      <a href="https://www.gravitee.io/blog/googles-agent-to-agent-a2a-and-anthropics-model-context-protocol-mcp">A2A &amp; MCP — Gravitee</a> ·
+      <a href="https://atlan.com/know/google-a2a-protocol/">Google A2A — Atlan</a> ·
+      <a href="https://www.digitalapplied.com/blog/ai-agent-protocol-ecosystem-map-2026-mcp-a2a-acp-ucp">Protocol ecosystem map 2026</a> ·
+      <a href="https://www.langchain.com/langgraph">LangGraph</a> ·
+      <a href="https://code.claude.com/docs/en/agent-teams">Claude Code Agent Teams</a> ·
+      <a href="https://dev.to/non4me/how-i-made-two-claude-code-instances-talk-to-each-other-with-json-files-obviously-22a5">Two Claude instances via JSON files — DEV</a> ·
+      <a href="https://github.com/anthropics/claude-code/issues/36871">Claude Code channels bridge — GH #36871</a> ·
+      <a href="https://github.com/anthropics/claude-code/issues/28300">Cross-machine A2A — GH #28300</a> ·
+      <a href="https://workos.com/blog/ciba-human-approval-ai-agents">CIBA human approval — WorkOS</a> ·
+      <a href="https://escalate.md/">ESCALATE.md</a> ·
+      <a href="https://aembit.io/">Aembit — JIT workload identity</a> ·
+      <a href="https://docs.slack.dev/ai/developing-agents/">Slack — developing agents</a>
+    </p>
+  </div>
+  <p style="margin-top:18px; color:var(--muted)">Generated 2026-05-28 · Claude Code (Opus 4.7) · 2× Gemini deep-research + multi-hop web synthesis · Discussion draft for review.</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>
