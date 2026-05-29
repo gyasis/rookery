@@ -18,6 +18,7 @@ Env: ROOKERY_DB (local mailroom), ROOKERY_MAILROOM (this mailroom's id),
 import argparse
 import json
 import os
+import ssl
 import time
 import urllib.request
 
@@ -48,7 +49,12 @@ def _post(base_url, body, token=None):
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(base_url.rstrip("/") + "/send", data=data,
                                  method="POST", headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as r:
+    ctx = None
+    if base_url.startswith("https") and os.environ.get("ROOKERY_INSECURE_TLS"):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
         return json.loads(r.read() or b"{}")
 
 

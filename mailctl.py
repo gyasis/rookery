@@ -10,10 +10,22 @@ Copy just this one file to the peer; it needs nothing but Python 3.
 import argparse
 import json
 import os
+import ssl
 import time
 import urllib.request
 
 TOKEN = os.environ.get("ROOKERY_TOKEN")  # overridden by --token
+
+
+def _ctx(url):
+    # ROOKERY_INSECURE_TLS=1 skips cert verification for a self-signed sidecar
+    # on a TRUSTED LAN. For the internet, use a CA-signed cert or a tunnel.
+    if url.startswith("https") and os.environ.get("ROOKERY_INSECURE_TLS"):
+        c = ssl.create_default_context()
+        c.check_hostname = False
+        c.verify_mode = ssl.CERT_NONE
+        return c
+    return None
 
 
 def call(url, path, method="GET", body=None):
@@ -22,7 +34,7 @@ def call(url, path, method="GET", body=None):
     if TOKEN:
         headers["Authorization"] = f"Bearer {TOKEN}"
     req = urllib.request.Request(url.rstrip("/") + path, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=15, context=_ctx(url)) as r:
         return json.loads(r.read() or b"{}")
 
 

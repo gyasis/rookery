@@ -111,6 +111,7 @@ cd ~/Documents/code/rookery
 ./demo_federation.sh      # two mailrooms (home+mac): alice@home <-> bob@mac relayed across
 ./demo_terminal.sh        # substrate A: mail injected into a tmux pane (a human/agent joins)
 ./demo_a2a_push.sh        # A2A push: sidecar POSTs the completed task to your webhook
+./demo_tls.sh             # HTTPS sidecar (self-signed cert) + token = auth + encryption
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
@@ -177,9 +178,11 @@ can discover and task Rookery:
   `mailctl.py` sends the token from `--token`/`$ROOKERY_TOKEN`.
 
 > **Auth ≠ encryption.** A bearer token authenticates but sends in clear text.
-> On a trusted **LAN** that's fine. Over the **internet**, put the sidecar behind
-> **TLS or a tunnel** (Tailscale / SSH `-L` / Cloudflare Tunnel) — never expose
-> plain HTTP + token to the open internet.
+> On a trusted **LAN** that's fine. Over the **internet**, add **TLS**:
+> `./gen_cert.sh` then `mailroom_server --tls-cert rookery-cert.pem --tls-key
+> rookery-key.pem --token …` → HTTPS; **TLS + token = auth + encryption**.
+> (Self-signed clients set `ROOKERY_INSECURE_TLS=1`; for real internet use a
+> CA-signed cert or a **tunnel** — Tailscale / SSH `-L` / Cloudflare.)
 
 - **Push:** include `configuration.pushNotificationConfig` `{url, token}` in
   `message/send`; the sidecar returns `submitted` immediately and **POSTs the
@@ -283,6 +286,7 @@ seam for the full hardened security layer.
 | `relay.py` | federation relay — forwards `node@remote` mail to that mailroom's sidecar (directory: `mailrooms.json`) |
 | `terminal_node.py` | substrate A — bridges a human/terminal-agent in a pane into the mesh (injector: tmux / wezterm / zellij) |
 | `webhook_sink.py` | tiny test receiver for A2A push notifications (prints each POST) |
+| `gen_cert.sh` | generate a self-signed cert for the HTTPS sidecar (`--tls-cert`/`--tls-key`) |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
 | `demo_postmaster.sh` | mode B proof (agents asleep, postmaster wakes them) |
@@ -306,5 +310,5 @@ A2A agent card + `message/send`/`tasks/get` + `message/stream` (SSE) + bearer au
 MCP bridge (Claude Code sessions/subagents join the mesh) + federation
 (`node@mailroom` across multiple mailrooms via relays).
 terminal node (substrate A) — a human/terminal-agent joins via a pane (tmux/wezterm/zellij).
-A2A push notifications (webhook).
-Next: TLS/tunnel helper for internet use.
+A2A push notifications (webhook); TLS sidecar (`--tls-cert/--tls-key` + `gen_cert.sh`)
+and tunnel guidance for internet use. **Backlog cleared.**

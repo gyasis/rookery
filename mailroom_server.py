@@ -11,6 +11,7 @@ locking is broken; peers talk to THIS service over TCP instead.
 import argparse
 import json
 import os
+import ssl
 import threading
 import time
 import urllib.request
@@ -309,6 +310,8 @@ def main():
                     help="how peers reach this sidecar (goes in the A2A Agent Card)")
     ap.add_argument("--default-node", default="mailroom",
                     help="A2A message recipient when none is given in metadata.recipient")
+    ap.add_argument("--tls-cert", default=None, help="PEM cert -> serve HTTPS (with --tls-key)")
+    ap.add_argument("--tls-key", default=None, help="PEM private key for --tls-cert")
     ap.add_argument("--token", default=os.environ.get("ROOKERY_TOKEN"),
                     help="require Authorization: Bearer <token> on non-public endpoints "
                          "(default $ROOKERY_TOKEN). /health + agent-card stay public.")
@@ -319,12 +322,20 @@ def main():
     policy = security.get_policy(token=a.token)  # seed the swappable security policy
     R.connect()  # ensure DB + schema exist
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
+    scheme = "http"
+    if a.tls_cert and a.tls_key:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(a.tls_cert, a.tls_key)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+        scheme = "https"
     auth_on = policy.security_schemes() is not None
-    print(f"[mailroom] serving {R.DB_PATH} on http://{a.host}:{a.port}  "
+    print(f"[mailroom] serving {R.DB_PATH} on {scheme}://{a.host}:{a.port}  "
           f"auth={'ON' if auth_on else 'OFF'}  policy={type(policy).__name__}", flush=True)
-    if auth_on and a.host == "0.0.0.0":
+    if scheme == "https" and auth_on:
+        print("[mailroom] TLS + token = auth + encryption (internet-safe).", flush=True)
+    elif auth_on and a.host == "0.0.0.0":
         print("[mailroom] NOTE: the token authenticates but does NOT encrypt. Over the internet, "
-              "put this behind TLS or a tunnel (Tailscale/SSH/Cloudflare).", flush=True)
+              "add TLS (--tls-cert/--tls-key) or a tunnel (Tailscale/SSH -L/Cloudflare).", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
