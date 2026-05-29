@@ -120,7 +120,7 @@ def _push_watch(sender, mid, tid, ctx, url, token, timeout=120):
         time.sleep(0.5)
 
 
-def a2a_rpc(conn, rpc):
+def a2a_rpc(conn, rpc, principal="a2a"):
     """Handle one A2A JSON-RPC request. Supports message/send and tasks/get."""
     rid = rpc.get("id")
     method = rpc.get("method")
@@ -141,8 +141,8 @@ def a2a_rpc(conn, rpc):
         sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
         text = _a2a_text(msg.get("parts"))
         pol = security.get_policy()
-        if not pol.authorize("a2a", "task", recipient):
-            return err(-32003, f"not authorized to task '{recipient}'")
+        if not pol.authorize(principal, "task", recipient):
+            return err(-32003, f"principal '{principal}' not authorized to task '{recipient}'")
         chk = pol.inspect_inbound(sender, recipient, text)
         if not chk:
             return err(-32004, f"message rejected: {chk.reason}")
@@ -220,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply({"messages": _rows(R.fetch_thread(c, q["node"][0]))})
         self._reply({"error": "not found"}, 404)
 
-    def _a2a_stream(self, conn, rpc):
+    def _a2a_stream(self, conn, rpc, principal="a2a"):
         """A2A message/stream over Server-Sent Events: submitted -> artifact(s)
         -> completed, as the target node replies. Falls to 'working' on timeout."""
         rid = rpc.get("id")
@@ -231,9 +231,9 @@ class Handler(BaseHTTPRequestHandler):
         sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
         text = _a2a_text(msg.get("parts"))
         pol = security.get_policy()
-        if not pol.authorize("a2a", "task", recipient):
+        if not pol.authorize(principal, "task", recipient):
             return self._reply({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32003, "message": f"not authorized to task '{recipient}'"}})
+                                "error": {"code": -32003, "message": f"principal '{principal}' not authorized to task '{recipient}'"}})
         chk = pol.inspect_inbound(sender, recipient, text)
         if not chk:
             return self._reply({"jsonrpc": "2.0", "id": rid,
@@ -276,14 +276,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         pol = security.get_policy()
-        if not pol.is_public_path(u.path) and pol.authenticate(self.headers) is None:
+        principal = pol.authenticate(self.headers)
+        if not pol.is_public_path(u.path) and principal is None:
             return self._reply({"error": "unauthorized"}, 401)
         d = self._json_body()
         c = R.connect()
         if u.path == "/a2a":
             if d.get("method") == "message/stream":
-                return self._a2a_stream(c, d)
-            return self._reply(a2a_rpc(c, d))
+                return self._a2a_stream(c, d, principal)
+            return self._reply(a2a_rpc(c, d, principal))
         if u.path == "/send":
             mid = R.send(c, d["sender"], d["recipient"], d["body"], d.get("topic"))
             return self._reply({"id": mid})

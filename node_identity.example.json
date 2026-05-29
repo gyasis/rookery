@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to node_identity.json (gitignored), replace tokens with secrets (openssl rand -hex 24), then start the sidecar with ROOKERY_SECURITY=policy_hardened:HardenedPolicy ROOKERY_NODE_IDENTITY=node_identity.json. 'may_task' is the per-principal ACL; '*' = task anything.",
+  "principals": {
+    "architect": {"token": "REPLACE-WITH-A-SECRET", "may_task": ["researcher", "reviewer", "coder"]},
+    "guest":     {"token": "REPLACE-WITH-A-SECRET", "may_task": ["researcher"]}
+  }
+}

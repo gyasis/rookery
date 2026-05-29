@@ -113,6 +113,7 @@ cd ~/Documents/code/rookery
 ./demo_terminal.sh        # substrate A: mail injected into a tmux pane (a human/agent joins)
 ./demo_a2a_push.sh        # A2A push: sidecar POSTs the completed task to your webhook
 ./demo_signed_card.sh     # A2A signed agent card (Ed25519): valid verifies, tampered fails
+./demo_hardened.sh        # hardened policy: per-node identity + per-target ACL (guest denied reviewer)
 ./demo_tls.sh             # HTTPS sidecar (self-signed cert) + token = auth + encryption
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
@@ -277,6 +278,17 @@ the sender is told. See `policy_example.py` for a hardened reference (blocks
 `./demo_security.sh` for a node blocking a dangerous message. This module is the
 seam for the full hardened security layer.
 
+**`policy_hardened.py` is that hardened layer** — swap it in with
+`ROOKERY_SECURITY="policy_hardened:HardenedPolicy"`. Instead of one shared token,
+**every principal has its own bearer token (per-node identity)** plus an ACL of
+which nodes it may task (`may_task`, `"*"` = all). The token identifies the
+caller; an unknown token is rejected (no anonymous fallthrough); tasking a node
+outside the ACL is denied with the principal named. Config is a JSON registry
+pointed to by `ROOKERY_NODE_IDENTITY` (see `node_identity.example.json`, kept out
+of git). The authenticated principal is threaded into `authorize`, so authz is
+per-caller, not global. `./demo_hardened.sh` proves it: no token → 401, guest →
+task `researcher` OK but `reviewer` denied, architect → `reviewer` OK.
+
 ## Files
 
 | File | Role |
@@ -290,6 +302,8 @@ seam for the full hardened security layer.
 | `mesh_approve.py` | human side of the CIBA credential gate |
 | `security.py` | **swappable** SecurityPolicy: auth · authz · credential mint/resolve · inbound message inspection |
 | `policy_example.py` | reference hardened policy (template) — blocks injection patterns, denies a sensitive node |
+| `policy_hardened.py` | **hardened** SecurityPolicy — per-node identity (per-principal bearer token) + per-target ACL; `ROOKERY_SECURITY=policy_hardened:HardenedPolicy` |
+| `node_identity.example.json` | template for the per-node token + `may_task` ACL registry (copy to `node_identity.json`) |
 | `gen_card_key.py` / `verify_card.py` | generate the Ed25519 card key / verify a served card's signature |
 | `monitor.sh` | live DB view (the Monitor node) |
 | `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** card / JSON-RPC (`message/send`, `tasks/get`, `message/stream` SSE) + bearer auth |
@@ -324,9 +338,13 @@ MCP bridge (Claude Code sessions/subagents join the mesh) + federation
 (`node@mailroom` across multiple mailrooms via relays).
 terminal node (substrate A) — a human/terminal-agent joins via a pane (tmux/wezterm/zellij).
 A2A push notifications (webhook); TLS sidecar (`--tls-cert/--tls-key` + `gen_cert.sh`)
-and tunnel guidance for internet use. **Backlog cleared.**
+and tunnel guidance for internet use.
+Relay **dead-letter queue** (retries + sender alert + requeue);
+A2A **signed agent cards** (Ed25519 — `gen_card_key.py` / `verify_card.py`);
+**hardened SecurityPolicy** with per-node identity + per-target authorization
+(`policy_hardened.py`). **Backlog + the three follow-ups cleared.**
 
 **Possible future work (not requested — just noted):**
-- **Relay dead-letter queue** — mail addressed to an unknown / unreachable mailroom currently stays pending; route it to a DLQ with retries + alerting.
-- **A2A signed Agent Cards** — verifiable agent identity (the card carries a signature) instead of trusting the URL.
-- **Per-node identity in a hardened SecurityPolicy** — distinct credentials/mTLS per node and real per-skill authorization, vs today's single shared bearer token.
+- **Out-of-band key pinning** for signed cards (JWKS / DID) — today the card carries its own public key (proves integrity, not identity); pin it externally for true identity.
+- **mTLS per node** — client-cert identity at the transport layer, complementing the per-principal bearer tokens.
+- **Rotation / revocation** for the per-node token registry — expiry, rotation, and a revocation list on the identity store.

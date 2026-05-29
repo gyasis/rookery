@@ -4,3 +4,4 @@
 __pycache__/
 *.pyc
 *.pem
+node_identity.json
