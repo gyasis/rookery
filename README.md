@@ -287,6 +287,7 @@ seam for the full hardened security layer.
 | `terminal_node.py` | substrate A — bridges a human/terminal-agent in a pane into the mesh (injector: tmux / wezterm / zellij) |
 | `webhook_sink.py` | tiny test receiver for A2A push notifications (prints each POST) |
 | `gen_cert.sh` | generate a self-signed cert for the HTTPS sidecar (`--tls-cert`/`--tls-key`) |
+| `run_all_demos.sh` | run the whole demo suite end to end + PASS/FAIL matrix (`--all` adds paid demos) |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
 | `demo_postmaster.sh` | mode B proof (agents asleep, postmaster wakes them) |
@@ -312,3 +313,8 @@ MCP bridge (Claude Code sessions/subagents join the mesh) + federation
 terminal node (substrate A) — a human/terminal-agent joins via a pane (tmux/wezterm/zellij).
 A2A push notifications (webhook); TLS sidecar (`--tls-cert/--tls-key` + `gen_cert.sh`)
 and tunnel guidance for internet use. **Backlog cleared.**
+
+**Possible future work (not requested — just noted):**
+- **Relay dead-letter queue** — mail addressed to an unknown / unreachable mailroom currently stays pending; route it to a DLQ with retries + alerting.
+- **A2A signed Agent Cards** — verifiable agent identity (the card carries a signature) instead of trusting the URL.
+- **Per-node identity in a hardened SecurityPolicy** — distinct credentials/mTLS per node and real per-skill authorization, vs today's single shared bearer token.
