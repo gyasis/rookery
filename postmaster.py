@@ -84,6 +84,12 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
             return "persistent"
         return "ephemeral"
 
+    # register the roster up front so discovery (the A2A agent card) lists them
+    for n in nodes:
+        kind = "sdk" if node_engine[n] == "claude-sdk" else node_engine[n]
+        R.register_node(conn, n, kind=kind, lifecycle=lifecycle(n))
+        R.set_status(conn, n, "offline")
+
     log(f"online. managing {node_engine}. persistent={sorted(persistent_set)} "
         f"(max_warm={max_warm}, warm window={idle_timeout:g}s). agents sleep until mail.")
     running = {}        # node_id -> Popen (at most one live turn per node)

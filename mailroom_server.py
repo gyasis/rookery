@@ -15,9 +15,115 @@ from urllib.parse import urlparse, parse_qs
 
 import rookery as R
 
+# Set from CLI in main(). PUBLIC_URL is what goes in the Agent Card (how peers
+# reach us); DEFAULT_NODE routes A2A messages with no explicit recipient.
+PUBLIC_URL = "http://localhost:8765"
+DEFAULT_NODE = "mailroom"
+
 
 def _rows(rs):
     return [dict(r) for r in rs]
+
+
+# --- A2A (Agent2Agent) interop -------------------------------------------
+def _a2a_text(parts):
+    """Pull text out of A2A message parts (v0.3 `{kind:text,text}` and v1.0
+    `{text,mediaType}` both carry a `text` field)."""
+    return "\n".join(p["text"] for p in (parts or []) if isinstance(p, dict) and p.get("text"))
+
+
+def agent_card(conn):
+    """A2A Agent Card — published at /.well-known/agent-card.json so external,
+    cross-vendor agents can DISCOVER Rookery. Each registered node is a skill;
+    route to one with message metadata.recipient=<node>."""
+    skills = []
+    for n in conn.execute("SELECT node_id, kind, lifecycle FROM nodes ORDER BY node_id").fetchall():
+        skills.append({
+            "id": n["node_id"],
+            "name": n["node_id"],
+            "description": f"Rookery {n['lifecycle'] or 'node'} ({n['kind'] or 'node'}); "
+                           f"route with metadata.recipient='{n['node_id']}'.",
+            "tags": ["rookery", n["kind"] or "node"],
+            "examples": [f"Send a task to {n['node_id']}"],
+            "inputModes": ["text/plain"],
+            "outputModes": ["text/plain"],
+        })
+    if not skills:
+        skills.append({
+            "id": "mailroom", "name": "Rookery mailroom",
+            "description": "Send a message into the Rookery mesh (metadata.recipient selects the node).",
+            "tags": ["rookery"], "examples": ["hello"],
+            "inputModes": ["text/plain"], "outputModes": ["text/plain"],
+        })
+    return {
+        "protocolVersion": "0.3.0",
+        "name": "Rookery Mesh",
+        "description": "A local-first agent mesh (SQLite mailroom). Send a task via message/send; "
+                       "route to a node with message metadata.recipient.",
+        "url": f"{PUBLIC_URL}/a2a",
+        "preferredTransport": "JSONRPC",
+        "version": "0.1.0",
+        "provider": {"organization": "Rookery", "url": PUBLIC_URL},
+        "capabilities": {"streaming": False, "pushNotifications": False, "stateTransitionHistory": False},
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": skills,
+    }
+
+
+_A2A_STATE = {"pending": "submitted", "inflight": "working", "done": "completed"}
+
+
+def a2a_rpc(conn, rpc):
+    """Handle one A2A JSON-RPC request. Supports message/send and tasks/get."""
+    rid = rpc.get("id")
+    method = rpc.get("method")
+    params = rpc.get("params") or {}
+
+    def ok(result):
+        return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+    def err(code, msg):
+        return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": msg}}
+
+    if method == "message/send":
+        msg = params.get("message") or {}
+        meta = msg.get("metadata") or params.get("metadata") or {}
+        recipient = meta.get("recipient") or DEFAULT_NODE
+        # colon-free sender id: ':' is the MAILTO:<node>:<text> delimiter, so an
+        # "a2a:client" sender would mis-route the reply.
+        sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
+        text = _a2a_text(msg.get("parts"))
+        mid = R.send(conn, sender, recipient, text)
+        return ok({
+            "id": f"a2a-{mid}",
+            "contextId": msg.get("contextId") or f"ctx-{mid}",
+            "status": {"state": "submitted"},
+            "history": [msg],
+        })
+
+    if method == "tasks/get":
+        tid = str(params.get("id") or "")
+        tail = tid.rsplit("-", 1)[-1]
+        if not tail.isdigit():
+            return err(-32602, "bad task id")
+        mid = int(tail)
+        row = conn.execute("SELECT * FROM inbox WHERE id=?", (mid,)).fetchone()
+        if not row:
+            return err(-32001, "task not found")
+        # replies are mail addressed back to the original A2A sender
+        replies = conn.execute(
+            "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id", (row["sender"], mid)
+        ).fetchall()
+        state = "completed" if replies else _A2A_STATE.get(row["status"], "unknown")
+        artifacts = [{
+            "artifactId": f"reply-{r['id']}", "name": "reply",
+            "parts": [{"text": r["body"], "mediaType": "text/plain"}],
+        } for r in replies]
+        return ok({"id": tid, "contextId": row["topic"] or f"ctx-{mid}",
+                   "status": {"state": state}, "artifacts": artifacts})
+
+    return err(-32601, f"method not supported: {method}")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -42,6 +148,8 @@ class Handler(BaseHTTPRequestHandler):
         c = R.connect()
         if u.path == "/health":
             return self._reply({"ok": True, "db": R.DB_PATH})
+        if u.path in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
+            return self._reply(agent_card(c))
         if u.path == "/inbox":
             return self._reply({"messages": _rows(R.fetch_undelivered(c, q["node"][0]))})
         if u.path == "/thread":
@@ -52,6 +160,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         d = self._json_body()
         c = R.connect()
+        if u.path == "/a2a":
+            return self._reply(a2a_rpc(c, d))
         if u.path == "/send":
             mid = R.send(c, d["sender"], d["recipient"], d["body"], d.get("topic"))
             return self._reply({"id": mid})
@@ -77,7 +187,14 @@ def main():
     ap = argparse.ArgumentParser(description="Rookery mailroom HTTP sidecar.")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--public-url", default=None,
+                    help="how peers reach this sidecar (goes in the A2A Agent Card)")
+    ap.add_argument("--default-node", default="mailroom",
+                    help="A2A message recipient when none is given in metadata.recipient")
     a = ap.parse_args()
+    global PUBLIC_URL, DEFAULT_NODE
+    PUBLIC_URL = a.public_url or f"http://{a.host}:{a.port}"
+    DEFAULT_NODE = a.default_node
     R.connect()  # ensure DB + schema exist
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     print(f"[mailroom] serving {R.DB_PATH} on http://{a.host}:{a.port}", flush=True)

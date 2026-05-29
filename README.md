@@ -105,6 +105,7 @@ cd ~/Documents/code/rookery
 ./demo_postmaster.sh      # mode B — agents asleep, postmaster wakes them; persistence
 ./demo_research.sh        # research queue: 3 tasks dispatched, researcher→writer handoff
 ./demo_multihost.sh       # HTTP sidecar + a node that speaks only HTTP (multi-host transport)
+./a2a_demo.sh             # external agent discovers Rookery (Agent Card) + tasks it via A2A JSON-RPC
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
@@ -150,6 +151,22 @@ Three levels, weakest-to-strongest durability:
    so a paused node can even **exit**; a fresh run resumes from the rows. Costs
    **$0** while paused and survives reboot. This is the agent-native pause.
 
+## A2A interop (cross-vendor discovery)
+
+The sidecar speaks **A2A** (Agent2Agent), so external agents on other frameworks
+can discover and task Rookery:
+
+- **Discover:** `GET /.well-known/agent-card.json` → an Agent Card whose `skills`
+  are the registered Rookery nodes.
+- **Task:** `POST /a2a` JSON-RPC `message/send` (route to a node with
+  `message.metadata.recipient`) → returns a Task; the message lands in the
+  mailroom and a node processes it.
+- **Poll:** `POST /a2a` JSON-RPC `tasks/get` → Task `state` + the node's reply as
+  an artifact.
+
+Run `./a2a_demo.sh` for a full discover → send → get round-trip. (Streaming /
+push / auth are not implemented yet.)
+
 ## Files
 
 | File | Role |
@@ -162,7 +179,7 @@ Three levels, weakest-to-strongest durability:
 | `send_mail.py` | drop a message into the mailroom |
 | `mesh_approve.py` | human side of the CIBA credential gate |
 | `monitor.sh` | live DB view (the Monitor node) |
-| `mailroom_server.py` | stdlib HTTP sidecar over the mailroom — lets other machines join over the LAN |
+| `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** agent card &amp; JSON-RPC (`message/send`, `tasks/get`) |
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
@@ -182,6 +199,6 @@ Three levels, weakest-to-strongest durability:
 ## Roadmap
 
 Done: prove the loop · CIBA real keychain/env resolution · `@mention` routing ·
-durable delivery (in-flight/ack) · warm SDK session · multi-host HTTP sidecar.
-Next: terminal node (substrate A, tmux+send-keys) · v3 A2A Agent Cards for
-cross-vendor discovery.
+durable delivery (in-flight/ack) · warm SDK session · multi-host HTTP sidecar ·
+A2A agent card + `message/send`/`tasks/get` (cross-vendor discovery).
+Next: terminal node (substrate A, tmux+send-keys); A2A streaming / push / auth.
