@@ -27,6 +27,7 @@ import rookery as R
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DIR_PATH = os.environ.get("ROOKERY_MAILROOMS", os.path.join(_HERE, "mailrooms.json"))
 MAX_HOPS = 4
+MAX_ATTEMPTS = 3  # relay forward attempts before dead-lettering
 
 
 def log(msg):
@@ -67,6 +68,15 @@ def _hops(topic):
     return 0
 
 
+def _dead_letter(conn, msg, reason):
+    R.dlq(conn, msg["id"], reason)
+    log(f"DEAD-LETTER #{msg['id']} ({msg['sender']} -> {msg['recipient']}): {reason}")
+    # alert the sender — unless this IS a dead-letter notice (avoid alert loops)
+    if not (msg["body"] or "").startswith("DEAD-LETTER:"):
+        R.send(conn, "relay", msg["sender"],
+               f"DEAD-LETTER: your message to {msg['recipient']} was not delivered — {reason}")
+
+
 def run(self_id, directory, poll):
     conn = R.connect()
     log(f"online as mailroom '{self_id}'. routes: {[k for k in directory if isinstance(directory.get(k), dict)]}")
@@ -83,10 +93,10 @@ def run(self_id, directory, poll):
                 continue
             entry = directory.get(mr)
             if not isinstance(entry, dict) or not entry.get("url"):
-                continue  # unknown mailroom -> leave pending (could DLQ later)
+                _dead_letter(conn, r, f"unknown mailroom '{mr}'")
+                continue
             if _hops(r["topic"]) >= MAX_HOPS:
-                R.ack(conn, [r["id"]])
-                log(f"dropped #{r['id']} (>{MAX_HOPS} hops) -> loop guard")
+                _dead_letter(conn, r, f"exceeded {MAX_HOPS} relay hops (loop guard)")
                 continue
             # reply-routable sender: <orig>@<self>
             sender = r["sender"] if "@" in r["sender"] else f"{r['sender']}@{self_id}"
@@ -97,14 +107,32 @@ def run(self_id, directory, poll):
                 R.ack(conn, [r["id"]])  # relayed -> done locally
                 log(f"relayed #{r['id']}: {sender} -> {local}@{mr}")
             except Exception as e:
-                log(f"relay of #{r['id']} to '{mr}' FAILED ({e}); leaving pending")
+                att = R.bump_attempt(conn, r["id"])
+                if att >= MAX_ATTEMPTS:
+                    _dead_letter(conn, r, f"forward to '{mr}' failed after {att} attempts: {e}")
+                else:
+                    log(f"relay #{r['id']} -> '{mr}' attempt {att}/{MAX_ATTEMPTS} failed ({e}); retrying")
         time.sleep(poll)
 
 
 def main():
     ap = argparse.ArgumentParser(description="Run the Rookery federation relay.")
     ap.add_argument("--poll", type=float, default=1.0)
+    ap.add_argument("--list-dlq", action="store_true", help="list dead-lettered messages and exit")
+    ap.add_argument("--requeue-dlq", type=int, metavar="ID", help="requeue a dead-lettered message and exit")
     a = ap.parse_args()
+    conn = R.connect()
+    if a.list_dlq:
+        rows = R.list_dlq(conn)
+        if not rows:
+            print("DLQ empty.")
+        for r in rows:
+            print(f"#{r['id']}  {r['sender']} -> {r['recipient']}  attempts={r['attempts']}  reason: {r['note']}")
+        return
+    if a.requeue_dlq is not None:
+        R.requeue_dlq(conn, a.requeue_dlq)
+        print(f"requeued #{a.requeue_dlq} (status -> pending)")
+        return
     self_id, directory = load_directory()
     if not self_id:
         raise SystemExit("set ROOKERY_MAILROOM (this mailroom's id) or a 'self' key in the directory")

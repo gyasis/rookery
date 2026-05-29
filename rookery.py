@@ -121,6 +121,30 @@ def ack(conn, ids):
     conn.commit()
 
 
+def dlq(conn, msg_id, reason):
+    """Move a message to the dead-letter queue (undeliverable) with a reason."""
+    conn.execute("UPDATE inbox SET status='dlq', note=? WHERE id=?", (reason, msg_id))
+    conn.commit()
+
+
+def bump_attempt(conn, msg_id):
+    conn.execute("UPDATE inbox SET attempts=attempts+1 WHERE id=?", (msg_id,))
+    conn.commit()
+    return conn.execute("SELECT attempts FROM inbox WHERE id=?", (msg_id,)).fetchone()["attempts"]
+
+
+def list_dlq(conn):
+    return conn.execute("SELECT * FROM inbox WHERE status='dlq' ORDER BY id").fetchall()
+
+
+def requeue_dlq(conn, msg_id):
+    conn.execute(
+        "UPDATE inbox SET status='pending', attempts=0, note=NULL WHERE id=? AND status='dlq'",
+        (msg_id,),
+    )
+    conn.commit()
+
+
 def requeue_stale(conn, dead_after):
     """Return in-flight mail to 'pending' ONLY when the node that claimed it has
     gone silent (genuinely dead) — judged by the recipient node's last_seen, not

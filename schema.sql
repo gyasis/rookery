@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS inbox (
   recipient    TEXT NOT NULL,
   body         TEXT NOT NULL,
   topic        TEXT,
-  status       TEXT NOT NULL DEFAULT 'pending',  -- pending -> inflight -> done
+  status       TEXT NOT NULL DEFAULT 'pending',  -- pending -> inflight -> done | dlq
+  attempts     INTEGER NOT NULL DEFAULT 0,       -- relay forward attempts (for DLQ)
+  note         TEXT,                             -- dead-letter reason, etc.
   claimed_at   INTEGER,                          -- when a node picked it up (for stale requeue)
   delivered    INTEGER NOT NULL DEFAULT 0,       -- 1 once status=done (kept for transcript queries)
   created_at   INTEGER NOT NULL,

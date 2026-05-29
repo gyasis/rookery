@@ -109,6 +109,7 @@ cd ~/Documents/code/rookery
 ./demo_a2a_secure.sh      # A2A with bearer auth (401 without token) + message/stream over SSE
 ./demo_security.sh        # a node blocks a dangerous inbound message (swappable policy)
 ./demo_federation.sh      # two mailrooms (home+mac): alice@home <-> bob@mac relayed across
+./demo_dlq.sh             # dead-letter queue: undeliverable mail -> DLQ + sender alert + requeue
 ./demo_terminal.sh        # substrate A: mail injected into a tmux pane (a human/agent joins)
 ./demo_a2a_push.sh        # A2A push: sidecar POSTs the completed task to your webhook
 ./demo_tls.sh             # HTTPS sidecar (self-signed cert) + token = auth + encryption
@@ -233,6 +234,10 @@ is relayed across, bob replies, and it's relayed back. Loops are bounded by a
 hop count (`relay/<n>`, max 4). Nodes, the sidecar, `MAILTO:` directives, and the
 MCP `send` tool all accept `node@mailroom` unchanged — only the relay is new, so
 keep `node` ids `@`-free.
+
+Undeliverable mail — an **unknown** mailroom, or a known one **unreachable** after
+`MAX_ATTEMPTS` retries — goes to a **dead-letter queue** (`status='dlq'`) and the
+sender is alerted; inspect/recover with `relay.py --list-dlq` / `--requeue-dlq <id>`.
 
 ## Security is a swappable module
 
