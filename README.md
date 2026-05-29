@@ -112,6 +112,7 @@ cd ~/Documents/code/rookery
 ./demo_dlq.sh             # dead-letter queue: undeliverable mail -> DLQ + sender alert + requeue
 ./demo_terminal.sh        # substrate A: mail injected into a tmux pane (a human/agent joins)
 ./demo_a2a_push.sh        # A2A push: sidecar POSTs the completed task to your webhook
+./demo_signed_card.sh     # A2A signed agent card (Ed25519): valid verifies, tampered fails
 ./demo_tls.sh             # HTTPS sidecar (self-signed cert) + token = auth + encryption
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
@@ -189,6 +190,10 @@ can discover and task Rookery:
 - **Push:** include `configuration.pushNotificationConfig` `{url, token}` in
   `message/send`; the sidecar returns `submitted` immediately and **POSTs the
   completed Task to your webhook** when the node replies (no polling/streaming).
+- **Signed cards:** serve with `--card-key <ed25519.pem>` (`gen_card_key.py`) and
+  the agent card carries an **Ed25519 signature** + public key; verify with
+  `verify_card.py <url>`. (Embedding proves integrity; pin the key out-of-band —
+  JWKS/DID — for true identity.)
 
 Run `./a2a_demo.sh` (open), `./demo_a2a_secure.sh` (auth + streaming), or
 `./demo_a2a_push.sh` (webhook push) for the round-trip.
@@ -285,6 +290,7 @@ seam for the full hardened security layer.
 | `mesh_approve.py` | human side of the CIBA credential gate |
 | `security.py` | **swappable** SecurityPolicy: auth · authz · credential mint/resolve · inbound message inspection |
 | `policy_example.py` | reference hardened policy (template) — blocks injection patterns, denies a sensitive node |
+| `gen_card_key.py` / `verify_card.py` | generate the Ed25519 card key / verify a served card's signature |
 | `monitor.sh` | live DB view (the Monitor node) |
 | `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** card / JSON-RPC (`message/send`, `tasks/get`, `message/stream` SSE) + bearer auth |
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |

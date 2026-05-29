@@ -17,8 +17,10 @@ Decision points (override any in a subclass; base defaults are permissive):
 Swap it: set ROOKERY_SECURITY="my.module:MyPolicy" (a SecurityPolicy subclass),
 or call security.set_policy(obj). Default = DefaultPolicy (current behavior).
 """
+import base64
 import hmac
 import importlib
+import json
 import os
 import re
 import shutil
@@ -114,6 +116,46 @@ def mint_pointer(resource):
     if os.environ.get(env_var):
         return f"env://{env_var}", "env (verified set)"
     return f"env://{env_var}", f"NOT FOUND — store it first: export {env_var}=…"
+
+
+# --- A2A signed agent cards (Ed25519) --------------------------------------
+def _canonical(card):
+    """Deterministic bytes of the card MINUS its signature (so signer + verifier
+    agree)."""
+    body = {k: v for k, v in card.items() if k != "signature"}
+    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+
+
+def sign_card(card, key_pem_path):
+    """Attach an Ed25519 signature (+ the public key) to an agent card."""
+    from cryptography.hazmat.primitives import serialization
+    with open(key_pem_path, "rb") as fh:
+        priv = serialization.load_pem_private_key(fh.read(), password=None)
+    pub = priv.public_key().public_bytes(serialization.Encoding.Raw,
+                                         serialization.PublicFormat.Raw)
+    card["signature"] = {
+        "alg": "ed25519",
+        "publicKey": base64.b64encode(pub).decode(),
+        "value": base64.b64encode(priv.sign(_canonical(card))).decode(),
+    }
+    return card
+
+
+def verify_card(card):
+    """Verify a card's Ed25519 signature against its embedded public key.
+    Returns (ok, info). NOTE: embedding the key proves integrity; for true
+    identity, pin the public key out-of-band (JWKS/DID) rather than trusting
+    the one in the card."""
+    sig = card.get("signature")
+    if not isinstance(sig, dict) or not sig.get("value"):
+        return False, "no signature"
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(sig["publicKey"]))
+        pub.verify(base64.b64decode(sig["value"]), _canonical(card))
+        return True, sig["publicKey"][:16] + "…"
+    except Exception as e:
+        return False, str(e)
 
 
 _POLICY = None

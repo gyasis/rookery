@@ -26,6 +26,7 @@ import security  # swappable auth/authz/credential/inspection policy
 # ALL security decisions go through security.get_policy().
 PUBLIC_URL = "http://localhost:8765"
 DEFAULT_NODE = "mailroom"
+CARD_KEY = None  # Ed25519 private-key path -> sign the agent card
 
 
 def _rows(rs):
@@ -79,6 +80,8 @@ def agent_card(conn):
     schemes = security.get_policy().security_schemes()
     if schemes:
         card.update(schemes)
+    if CARD_KEY:
+        security.sign_card(card, CARD_KEY)  # Ed25519 signature over the whole card
     return card
 
 
@@ -315,10 +318,12 @@ def main():
     ap.add_argument("--token", default=os.environ.get("ROOKERY_TOKEN"),
                     help="require Authorization: Bearer <token> on non-public endpoints "
                          "(default $ROOKERY_TOKEN). /health + agent-card stay public.")
+    ap.add_argument("--card-key", default=None, help="Ed25519 private key (PEM) -> sign the agent card")
     a = ap.parse_args()
-    global PUBLIC_URL, DEFAULT_NODE
+    global PUBLIC_URL, DEFAULT_NODE, CARD_KEY
     PUBLIC_URL = a.public_url or f"http://{a.host}:{a.port}"
     DEFAULT_NODE = a.default_node
+    CARD_KEY = a.card_key
     policy = security.get_policy(token=a.token)  # seed the swappable security policy
     R.connect()  # ensure DB + schema exist
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
