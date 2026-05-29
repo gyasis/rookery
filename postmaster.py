@@ -25,6 +25,7 @@ import rookery as R
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 NODE_RUNNER = os.path.join(_HERE, "node_runner.py")
+SDK_NODE = os.path.join(_HERE, "sdk_node.py")
 
 
 def log(msg):
@@ -39,6 +40,17 @@ def has_mail(conn, node):
 
 
 def wake(node, engine, lifecycle, idle_timeout, allowed_tools="", model=None):
+    if engine == "claude-sdk":
+        # warm long-lived Claude session (hooks off) — kills the ~115s cold start.
+        cmd = [sys.executable, SDK_NODE, "--node-id", node,
+               "--idle-timeout", str(idle_timeout), "--poll", "1"]
+        if allowed_tools:
+            cmd += ["--allowed-tools", allowed_tools]
+        if model:
+            cmd += ["--model", model]
+        proc = subprocess.Popen(cmd)
+        log(f"mail for '{node}' -> woke a WARM SDK session (window {idle_timeout:g}s, pid {proc.pid})")
+        return proc
     cmd = [sys.executable, NODE_RUNNER, "--node-id", node, "--engine", engine, "--managed"]
     if lifecycle == "persistent":
         # warm window: self-polls and self-reaps after idle_timeout; rehydrates from DB.
@@ -61,7 +73,10 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
     nodes = list(node_engine)
 
     def lifecycle(n):
-        return "persistent" if n in persistent_set else "ephemeral"
+        # claude-sdk nodes are inherently warm/persistent (they hold a live session)
+        if node_engine.get(n) == "claude-sdk" or n in persistent_set:
+            return "persistent"
+        return "ephemeral"
 
     log(f"online. managing {node_engine}. persistent={sorted(persistent_set)} "
         f"(max_warm={max_warm}, warm window={idle_timeout:g}s). agents sleep until mail.")
@@ -119,8 +134,9 @@ def main():
     ap.add_argument("--nodes", required=True,
                     help="roster, comma-separated. Per-node engine with "
                          "name=engine, e.g. architect=claude,reviewer=codex")
-    ap.add_argument("--engine", choices=["mock", "claude", "codex"], default="mock",
-                    help="default engine for roster entries with no =engine")
+    ap.add_argument("--engine", choices=["mock", "claude", "codex", "claude-sdk"], default="mock",
+                    help="default engine for roster entries with no =engine "
+                         "(claude-sdk = warm long-lived session, no cold start)")
     ap.add_argument("--persistent", default="",
                     help="comma list of nodes that are persistent power-partners "
                          "(rehydrate from DB + join the warm pool); others are ephemeral")

@@ -81,13 +81,19 @@ python3 postmaster.py --nodes architect=claude,reviewer=codex \
   --persistent architect --max-warm 5 --idle-timeout 600
 ```
 
-> **Latency note:** keeping the *node* warm avoids respawn/poll teardown, but the
-> big cost we measured (`claude -p` cold start ~2–3 min) is only removed by also
-> resuming the *LLM* session (`claude -p --resume`, `codex exec resume`). Warm
-> window + session-resume together is the real latency fix — resume is the
-> next step (the warm window is wired; resume is not yet).
+> **Latency — solved via the Agent SDK.** Plain `claude -p` pays **~115s every
+> call** in this environment (the user's SessionStart hooks), *not* fixed by
+> model, MCP, or `--resume` (all measured). The fix is a **warm long-lived
+> session** through the Claude Agent SDK with `setting_sources=[]` (hooks off):
+> open the session once, reuse it per turn. Measured: **open 2s · first turn 7s ·
+> warm turns ~2s** — vs ~115s/turn. Use `engine=claude-sdk` for persistent
+> partners; the node is `sdk_node.py`. (Tool-using SDK nodes pass `mcp_servers`
+> explicitly since `setting_sources=[]` also skips global MCP.)
 
-## Run the demos (zero API spend)
+## Run the demos
+
+Prereqs: Python 3 (stdlib only for the core). Paid demos need `claude` and
+`codex` logged in; the SDK demos also need `pip install claude-agent-sdk`.
 
 ```bash
 cd ~/Documents/code/rookery
@@ -98,6 +104,7 @@ cd ~/Documents/code/rookery
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
+./demo_real_sdk.sh        # warm SDK node: 3 sequential turns, ~7s then ~2s (vs ~115s each)
 ```
 
 Both send one task to `architect` and show:
@@ -141,7 +148,8 @@ Three levels, weakest-to-strongest durability:
 | `schema.sql` | the mailroom tables (single source of truth) |
 | `rookery.py` | shared lib: connect/init, nodes, mail, credentials |
 | `node_runner.py` | the own-loop node (mock / `claude -p` / `codex exec`; `--lifecycle`, `--allowed-tools`) |
-| `postmaster.py` | mode B: central watcher; per-node engines, `--persistent`, `--max-warm` |
+| `sdk_node.py` | warm long-lived Claude session (Agent SDK) — `engine=claude-sdk`, kills cold start |
+| `postmaster.py` | mode B: central watcher; per-node engines (incl. `claude-sdk`), `--persistent`, `--max-warm` |
 | `send_mail.py` | drop a message into the mailroom |
 | `mesh_approve.py` | human side of the CIBA credential gate |
 | `monitor.sh` | live DB view (the Monitor node) |
