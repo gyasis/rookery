@@ -109,6 +109,7 @@ cd ~/Documents/code/rookery
 ./demo_a2a_secure.sh      # A2A with bearer auth (401 without token) + message/stream over SSE
 ./demo_security.sh        # a node blocks a dangerous inbound message (swappable policy)
 ./demo_federation.sh      # two mailrooms (home+mac): alice@home <-> bob@mac relayed across
+./demo_terminal.sh        # substrate A: mail injected into a tmux pane (a human/agent joins)
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
@@ -275,6 +276,7 @@ seam for the full hardened security layer.
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |
 | `rookery_mcp.py` | MCP server — `send` / `check_inbox` / `await_message` / `roster` tools for a Claude Code session + subagents |
 | `relay.py` | federation relay — forwards `node@remote` mail to that mailroom's sidecar (directory: `mailrooms.json`) |
+| `terminal_node.py` | substrate A — bridges a human/terminal-agent in a pane into the mesh (injector: tmux / wezterm / zellij) |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
 | `demo_postmaster.sh` | mode B proof (agents asleep, postmaster wakes them) |
@@ -297,4 +299,5 @@ durable delivery (in-flight/ack) · warm SDK session · multi-host HTTP sidecar 
 A2A agent card + `message/send`/`tasks/get` + `message/stream` (SSE) + bearer auth.
 MCP bridge (Claude Code sessions/subagents join the mesh) + federation
 (`node@mailroom` across multiple mailrooms via relays).
-Next: terminal node (substrate A, tmux+send-keys); A2A push notifications; TLS/tunnel helper for internet use.
+terminal node (substrate A) — a human/terminal-agent joins via a pane (tmux/wezterm/zellij).
+Next: A2A push notifications; TLS/tunnel helper for internet use.
