@@ -108,6 +108,7 @@ cd ~/Documents/code/rookery
 ./a2a_demo.sh             # external agent discovers Rookery (Agent Card) + tasks it via A2A JSON-RPC
 ./demo_a2a_secure.sh      # A2A with bearer auth (401 without token) + message/stream over SSE
 ./demo_security.sh        # a node blocks a dangerous inbound message (swappable policy)
+./demo_federation.sh      # two mailrooms (home+mac): alice@home <-> bob@mac relayed across
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
@@ -203,6 +204,26 @@ agents drive these from Bash. Same mailroom underneath either way.
 A **background subagent** + these tools = it talks to other agents
 asynchronously while you keep working in the main context.
 
+## Federation — multiple mailrooms (`node@mailroom`)
+
+Run several independent mailrooms (one per machine / trust domain) and relay
+between them — the mental model is **email**. Address with **`node@mailroom`**
+(a bare `node` = local). Each mailroom runs `relay.py`, which forwards mail
+addressed to a remote mailroom to that mailroom's sidecar, rewriting the sender
+to `<orig>@<self>` so replies route home. Mailrooms resolve via a directory
+(see `mailrooms.example.json`):
+
+```json
+{ "home": {"url": "http://192.168.0.146:8765", "token": "..."},
+  "mac":  {"url": "http://192.168.0.159:8765", "token": "..."} }
+```
+Set `ROOKERY_MAILROOMS` (directory path) and `ROOKERY_MAILROOM` (this box's id).
+`./demo_federation.sh` runs two mailrooms on localhost: `alice@home → bob@mac`
+is relayed across, bob replies, and it's relayed back. Loops are bounded by a
+hop count (`relay/<n>`, max 4). Nodes, the sidecar, `MAILTO:` directives, and the
+MCP `send` tool all accept `node@mailroom` unchanged — only the relay is new, so
+keep `node` ids `@`-free.
+
 ## Security is a swappable module
 
 All security decisions route through a single `SecurityPolicy` (`security.py`), so
@@ -253,6 +274,7 @@ seam for the full hardened security layer.
 | `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** card / JSON-RPC (`message/send`, `tasks/get`, `message/stream` SSE) + bearer auth |
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |
 | `rookery_mcp.py` | MCP server — `send` / `check_inbox` / `await_message` / `roster` tools for a Claude Code session + subagents |
+| `relay.py` | federation relay — forwards `node@remote` mail to that mailroom's sidecar (directory: `mailrooms.json`) |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
 | `demo_postmaster.sh` | mode B proof (agents asleep, postmaster wakes them) |
@@ -273,4 +295,6 @@ seam for the full hardened security layer.
 Done: prove the loop · CIBA real keychain/env resolution · `@mention` routing ·
 durable delivery (in-flight/ack) · warm SDK session · multi-host HTTP sidecar ·
 A2A agent card + `message/send`/`tasks/get` + `message/stream` (SSE) + bearer auth.
+MCP bridge (Claude Code sessions/subagents join the mesh) + federation
+(`node@mailroom` across multiple mailrooms via relays).
 Next: terminal node (substrate A, tmux+send-keys); A2A push notifications; TLS/tunnel helper for internet use.
