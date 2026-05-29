@@ -86,7 +86,7 @@ def send(conn, sender, recipient, body, topic=None):
 
 def fetch_undelivered(conn, recipient):
     return conn.execute(
-        "SELECT * FROM inbox WHERE recipient=? AND delivered=0 ORDER BY created_at, id",
+        "SELECT * FROM inbox WHERE recipient=? AND status='pending' ORDER BY created_at, id",
         (recipient,),
     ).fetchall()
 
@@ -102,14 +102,35 @@ def fetch_thread(conn, node):
 
 
 def claim(conn, ids):
-    """Mark messages delivered the instant we pick them up (claim pattern) so
-    the poller never re-injects the same mail. Trade-off: a crash mid-handling
-    drops the claimed mail — acceptable for v1, noted in the README."""
+    """Mark messages IN-FLIGHT when a node picks them up, so the poller won't
+    re-inject them while they're being processed. If the node crashes before
+    ack(), requeue_stale() returns them to 'pending' (no lost mail)."""
     conn.executemany(
-        "UPDATE inbox SET delivered=1, delivered_at=? WHERE id=?",
+        "UPDATE inbox SET status='inflight', claimed_at=? WHERE id=?",
         [(now(), i) for i in ids],
     )
     conn.commit()
+
+
+def ack(conn, ids):
+    """Mark in-flight messages DONE after the turn handled them successfully."""
+    conn.executemany(
+        "UPDATE inbox SET status='done', delivered=1, delivered_at=? WHERE id=?",
+        [(now(), i) for i in ids],
+    )
+    conn.commit()
+
+
+def requeue_stale(conn, timeout):
+    """Return in-flight messages older than `timeout` seconds back to 'pending'
+    (a node claimed them then crashed mid-turn). Returns the count requeued."""
+    cur = conn.execute(
+        "UPDATE inbox SET status='pending', claimed_at=NULL "
+        "WHERE status='inflight' AND claimed_at < ?",
+        (now() - timeout,),
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 # --- credentials (the CIBA phone-home) -------------------------------------

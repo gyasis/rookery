@@ -29,6 +29,7 @@ _MENTION = re.compile(r"@([A-Za-z0-9_-]+)")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 NODE_RUNNER = os.path.join(_HERE, "node_runner.py")
 SDK_NODE = os.path.join(_HERE, "sdk_node.py")
+INFLIGHT_TIMEOUT = 120  # seconds before a claimed-but-unacked message is requeued
 
 
 def log(msg):
@@ -37,7 +38,7 @@ def log(msg):
 
 def has_mail(conn, node):
     row = conn.execute(
-        "SELECT COUNT(*) AS c FROM inbox WHERE recipient=? AND delivered=0", (node,)
+        "SELECT COUNT(*) AS c FROM inbox WHERE recipient=? AND status='pending'", (node,)
     ).fetchone()
     return row["c"] > 0
 
@@ -91,6 +92,11 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
     last_mention_id = 0
     try:
         while True:
+            # 0. durability: return mail claimed by a node that crashed mid-turn
+            requeued = R.requeue_stale(conn, INFLIGHT_TIMEOUT)
+            if requeued:
+                log(f"requeued {requeued} stale in-flight message(s) (node crashed mid-turn)")
+
             # 1. reap finished turns (ephemeral one-shots, or persistent warm windows that timed out)
             for n, p in list(running.items()):
                 if p.poll() is not None:

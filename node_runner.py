@@ -256,7 +256,8 @@ def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, id
                         engine_kw.update(session_id=sid, resume=False)
                     else:
                         engine_kw.update(session_id=sid, resume=True)
-            R.claim(conn, [m["id"] for m in new_msgs])  # atomic: never re-inject
+            ids = [m["id"] for m in new_msgs]
+            R.claim(conn, ids)  # in-flight: won't re-inject; requeued if we crash now
             log(node_id, f"woke on {len(new_msgs)} message(s) -- unprompted")
             response = engine(node_id, new_msgs, history, **engine_kw)
             paused, acted = handle_directives(conn, node_id, response, poll, max_wait, managed)
@@ -268,6 +269,7 @@ def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, id
                 if reply_to and reply_to != node_id:
                     R.send(conn, node_id, reply_to, response.strip()[:4000])
                     log(node_id, f"-> auto-reply to {reply_to}: {summarize(response)}")
+            R.ack(conn, ids)  # turn handled these -> done
             if once or paused:
                 break
     except KeyboardInterrupt:

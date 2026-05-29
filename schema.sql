@@ -17,11 +17,13 @@ CREATE TABLE IF NOT EXISTS inbox (
   recipient    TEXT NOT NULL,
   body         TEXT NOT NULL,
   topic        TEXT,
-  delivered    INTEGER NOT NULL DEFAULT 0,
+  status       TEXT NOT NULL DEFAULT 'pending',  -- pending -> inflight -> done
+  claimed_at   INTEGER,                          -- when a node picked it up (for stale requeue)
+  delivered    INTEGER NOT NULL DEFAULT 0,       -- 1 once status=done (kept for transcript queries)
   created_at   INTEGER NOT NULL,
   delivered_at INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_inbox_undelivered ON inbox(recipient, delivered);
+CREATE INDEX IF NOT EXISTS idx_inbox_pending ON inbox(recipient, status);
 
 -- The CIBA "phone-home" path. token_ref is a POINTER to a secret (e.g. a
 -- keychain item / JIT broker handle) — the real secret is NEVER stored here.

@@ -116,7 +116,8 @@ async def run(node_id, poll, idle_timeout, max_wait, allowed_tools, model, mcp_s
                 first = False
             else:
                 prompt = _mesh_prompt(node_id, new, None)  # warm session already remembers
-            R.claim(conn, [m["id"] for m in new])
+            ids = [m["id"] for m in new]
+            R.claim(conn, ids)  # in-flight: requeued if we crash before ack
             turn_no += 1
             t = time.time()
             log(node_id, f"woke on {len(new)} message(s) -- unprompted (turn #{turn_no})")
@@ -125,6 +126,7 @@ async def run(node_id, poll, idle_timeout, max_wait, allowed_tools, model, mcp_s
             kind = "COLD first turn" if turn_no == 1 else "WARM turn"
             log(node_id, f"turn #{turn_no} done in {time.time() - t:.0f}s ({kind})")
             paused, _ = handle_directives(conn, node_id, text, poll, max_wait, managed=True)
+            R.ack(conn, ids)  # turn handled these -> done
             if paused:
                 break
     R.set_status(conn, node_id, "offline")

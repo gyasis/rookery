@@ -172,7 +172,7 @@ Three levels, weakest-to-strongest durability:
 
 ## Known v1 limitations (deliberate)
 
-- **Claim-on-fetch:** mail is marked delivered when picked up, so a crash mid-handling drops it. Fine for the spike; v2 adds an in-flight/ack state.
+- **Durable delivery:** mail goes `pending` → `inflight` (on claim) → `done` (on ack); the postmaster requeues `inflight` mail abandoned by a node that crashed mid-turn (after `INFLIGHT_TIMEOUT`). Mode A (no postmaster) has no requeuer.
 - **Single host.** SQLite-on-a-share has broken locking. Multi-host (Mac Studio) = v2: wrap this same DB behind a tiny FastAPI/WebSocket sidecar; nodes connect over TCP.
 - **Credential `token_ref` is a pointer**, not a secret — resolved at use time via `rookery.resolve_secret()` (`env://VAR` or `keychain://service/account` via libsecret `secret-tool`). The secret never touches the DB.
 
