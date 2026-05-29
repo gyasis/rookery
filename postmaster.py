@@ -38,13 +38,17 @@ def has_mail(conn, node):
     return row["c"] > 0
 
 
-def wake(node, engine, lifecycle, idle_timeout):
+def wake(node, engine, lifecycle, idle_timeout, allowed_tools="", model=None):
     cmd = [sys.executable, NODE_RUNNER, "--node-id", node, "--engine", engine, "--managed"]
     if lifecycle == "persistent":
         # warm window: self-polls and self-reaps after idle_timeout; rehydrates from DB.
         cmd += ["--lifecycle", "persistent", "--idle-timeout", str(idle_timeout)]
     else:
         cmd += ["--once"]   # ephemeral: one turn then gone, no memory
+    if allowed_tools:
+        cmd += ["--allowed-tools", allowed_tools]   # only claude nodes use it
+    if model:
+        cmd += ["--model", model]
     proc = subprocess.Popen(cmd)
     tag = (f"WARM persistent (window {idle_timeout:g}s)"
            if lifecycle == "persistent" else "one-shot ephemeral")
@@ -52,7 +56,7 @@ def wake(node, engine, lifecycle, idle_timeout):
     return proc
 
 
-def run(node_engine, persistent_set, max_warm, idle_timeout, poll):
+def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools="", model=None):
     conn = R.connect()
     nodes = list(node_engine)
 
@@ -97,7 +101,8 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll):
                         log(f"warm pool full ({len(warm)}/{max_warm}) -> evicting '{victim}' (rehydrates later)")
                         running[victim].terminate()
                         continue   # free the slot this tick; wake n next tick
-                running[n] = wake(n, node_engine[n], lifecycle(n), idle_timeout)
+                running[n] = wake(n, node_engine[n], lifecycle(n), idle_timeout,
+                                  allowed_tools, model)
                 woke_at[n] = time.time()
 
             time.sleep(poll)
@@ -123,6 +128,9 @@ def main():
                     help="max concurrently-warm persistent agents (the warm pool cap)")
     ap.add_argument("--idle-timeout", type=float, default=600.0,
                     help="persistent warm window in seconds before a partner sleeps ($0)")
+    ap.add_argument("--allowed-tools", default="",
+                    help="MCP tools claude nodes may fire, e.g. mcp__deeplakesearch__retrieve_context")
+    ap.add_argument("--model", default=None, help="claude model override for all claude nodes")
     ap.add_argument("--poll", type=float, default=0.5)
     a = ap.parse_args()
     node_engine = {}
@@ -136,7 +144,8 @@ def main():
         else:
             node_engine[entry] = a.engine
     persistent_set = {x.strip() for x in a.persistent.split(",") if x.strip()}
-    run(node_engine, persistent_set, a.max_warm, a.idle_timeout, a.poll)
+    run(node_engine, persistent_set, a.max_warm, a.idle_timeout, a.poll,
+        allowed_tools=a.allowed_tools, model=a.model)
 
 
 if __name__ == "__main__":

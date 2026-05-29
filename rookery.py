@@ -64,6 +64,13 @@ def get_node(conn, node_id):
     return conn.execute("SELECT * FROM nodes WHERE node_id=?", (node_id,)).fetchone()
 
 
+def set_session_ref(conn, node_id, session_ref):
+    conn.execute(
+        "UPDATE nodes SET session_ref=? WHERE node_id=?", (session_ref, node_id)
+    )
+    conn.commit()
+
+
 # --- mail ------------------------------------------------------------------
 def send(conn, sender, recipient, body, topic=None):
     cur = conn.execute(

@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   kind      TEXT,            -- headless | daemon | terminal
   status    TEXT,            -- idle | busy | waiting | asleep | offline
   lifecycle TEXT,            -- ephemeral (no memory) | persistent (rehydrates from DB)
+  session_ref TEXT,          -- LLM session id for persistent agents (claude --resume)
   pid       INTEGER,         -- OS pid (for the pause.sh / resume.sh "video button")
   last_seen INTEGER          -- heartbeat epoch
 );

@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 
 import rookery as R
 
@@ -37,11 +38,11 @@ def summarize(text, n=48):
 
 
 # --- engines ---------------------------------------------------------------
-def mock_engine(node_id, new_msgs, history=None):
+def mock_engine(node_id, new_msgs, history=None, **kw):
     """Deterministic stand-in for an LLM. It mimics 'the agent read the mail
     and decided what to do' by (a) carrying out any directives the incoming
     mail asked of it and (b) acking the sender. No API, fully reproducible.
-    (history is ignored — the mock needs no memory.)"""
+    (history/session kwargs ignored — the mock needs no memory.)"""
     out = []
     for m in new_msgs:
         body = m["body"]
@@ -49,7 +50,14 @@ def mock_engine(node_id, new_msgs, history=None):
             continue  # don't react to acknowledgements -> breaks reply loops
         for line in body.splitlines():
             line = line.strip()
-            if line.startswith("MAILTO:") or line.startswith("NEEDCRED:"):
+            if line.startswith("RESEARCH:"):
+                # simulate "search a topic, hand findings to <next>" (real version
+                # = a Claude node calling the DeepLake MCP). Format RESEARCH:<topic>:<next>
+                topic, _, nxt = line[len("RESEARCH:"):].partition(":")
+                topic = topic.strip()
+                nxt = nxt.strip() or "writer"
+                out.append(f"MAILTO:{nxt}:FINDINGS({topic}): [mock] 3 key points on {topic} retrieved.")
+            elif line.startswith("MAILTO:") or line.startswith("NEEDCRED:"):
                 out.append(line)
         out.append(f"MAILTO:{m['sender']}:ACK: {node_id} handled \"{summarize(body)}\"")
     return "\n".join(out)
@@ -78,21 +86,38 @@ def _mesh_prompt(node_id, new_msgs, history=None):
     return p
 
 
-def claude_engine(node_id, new_msgs, history=None):
-    """Real headless Claude — a fresh `claude -p` turn, own-loop driven."""
+def claude_engine(node_id, new_msgs, history=None, session_id=None, resume=False,
+                  model=None, allowed_tools=None, **kw):
+    """Real headless Claude — a fresh `claude -p` turn. Prompt goes via STDIN
+    (avoids the variadic --mcp-config eating a positional prompt). MCP stays ON
+    so tool-using agents (e.g. DeepLake search) work; pass allowed_tools so the
+    agent can fire those MCP tools non-interactively. Persistent agents pass a
+    stable session_id + --resume to keep LLM memory across kills.
+    Note: ~115s startup per call in this env (SessionStart hooks), not fixed by
+    model/MCP — a long-lived session (Agent SDK) is the real latency fix."""
     if shutil.which("claude") is None:
         log(node_id, "ERROR: `claude` not on PATH. Use --engine mock.")
         sys.exit(127)
-    proc = subprocess.run(
-        ["claude", "-p", _mesh_prompt(node_id, new_msgs, history)],
-        capture_output=True, text=True, timeout=240,
-    )
+    cmd = ["claude", "-p"]
+    if model:
+        cmd += ["--model", model]
+    if allowed_tools:
+        cmd += ["--allowedTools", *allowed_tools]   # safe with stdin prompt (no positional to eat)
+    if resume and session_id:
+        cmd += ["--resume", session_id]
+        prompt = _mesh_prompt(node_id, new_msgs, None)   # session already holds history
+    elif session_id:
+        cmd += ["--session-id", session_id]
+        prompt = _mesh_prompt(node_id, new_msgs, history)
+    else:
+        prompt = _mesh_prompt(node_id, new_msgs, history)
+    proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=300)
     if proc.returncode != 0:
         log(node_id, f"claude exited {proc.returncode}: {proc.stderr.strip()[:200]}")
     return proc.stdout
 
 
-def codex_engine(node_id, new_msgs, history=None):
+def codex_engine(node_id, new_msgs, history=None, **kw):
     """Real OpenAI Codex — non-interactive `codex exec`, read-only sandbox.
     `-o` writes just the final assistant message, so we capture it cleanly."""
     if shutil.which("codex") is None:
@@ -149,6 +174,9 @@ def wait_for_credential(conn, node_id, req_id, poll, max_wait):
 
 
 def handle_directives(conn, node_id, response, poll, max_wait, managed=False):
+    """Returns (paused, acted): paused=True if a managed NEEDCRED exited the turn;
+    acted=True if the agent sent mail or requested a credential."""
+    acted = False
     for line in response.splitlines():
         line = line.strip()
         if line.startswith("MAILTO:"):
@@ -157,15 +185,17 @@ def handle_directives(conn, node_id, response, poll, max_wait, managed=False):
             if target:
                 R.send(conn, node_id, target, text.strip())
                 log(node_id, f"-> mail to {target}: {summarize(text)}")
+                acted = True
         elif line.startswith("NEEDCRED:"):
             resource = line[len("NEEDCRED:"):].strip()
             req_id = R.request_credential(conn, node_id, resource)
+            acted = True
             if managed:
                 # Durable pause: record the need and EXIT. The postmaster will
                 # mail the grant later, which wakes a fresh turn. $0 while asleep.
                 R.set_status(conn, node_id, "asleep")
                 log(node_id, f"phoning home for '{resource}' (req #{req_id}) -- durable pause, exiting until approved")
-                return True
+                return True, acted
             # v1 self-poll mode: block in-process until approved.
             log(node_id, f"phoning home for '{resource}' (req #{req_id}) -- PAUSING")
             token = wait_for_credential(conn, node_id, req_id, poll, max_wait)
@@ -174,10 +204,11 @@ def handle_directives(conn, node_id, response, poll, max_wait, managed=False):
             else:
                 log(node_id, "credential not granted -- continuing without it")
             R.set_status(conn, node_id, "busy")
-    return False
+    return False, acted
 
 
-def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, idle_timeout):
+def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, idle_timeout,
+        allowed_tools=None, model=None):
     conn = R.connect()
     R.register_node(conn, node_id, kind=kind, pid=os.getpid(), lifecycle=lifecycle)
     log(node_id, f"online (engine={engine_name}, pid={os.getpid()}, lifecycle={lifecycle}, "
@@ -208,10 +239,35 @@ def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, id
                 history = [m for m in thread if m["id"] not in new_ids]
                 if history:
                     log(node_id, f"rehydrated {len(history)} prior message(s) from the mailroom")
+            engine_kw = {}
+            if engine_name == "claude":
+                if allowed_tools:
+                    engine_kw["allowed_tools"] = allowed_tools
+                if model:
+                    engine_kw["model"] = model
+                # Persistent claude nodes keep LLM memory via a stable session id
+                # (stored in the DB so it survives the kill -> --resume on next wake).
+                if lifecycle == "persistent":
+                    node = R.get_node(conn, node_id)
+                    sid = node["session_ref"] if node else None
+                    if not sid:
+                        sid = str(uuid.uuid4())
+                        R.set_session_ref(conn, node_id, sid)
+                        engine_kw.update(session_id=sid, resume=False)
+                    else:
+                        engine_kw.update(session_id=sid, resume=True)
             R.claim(conn, [m["id"] for m in new_msgs])  # atomic: never re-inject
             log(node_id, f"woke on {len(new_msgs)} message(s) -- unprompted")
-            response = engine(node_id, new_msgs, history)
-            paused = handle_directives(conn, node_id, response, poll, max_wait, managed)
+            response = engine(node_id, new_msgs, history, **engine_kw)
+            paused, acted = handle_directives(conn, node_id, response, poll, max_wait, managed)
+            # Fallback: an ephemeral worker that emitted no directive still returns
+            # its result to whoever asked (robust round-trip even if the model
+            # forgets the MAILTO: protocol).
+            if not acted and lifecycle == "ephemeral" and response and response.strip():
+                reply_to = new_msgs[-1]["sender"]
+                if reply_to and reply_to != node_id:
+                    R.send(conn, node_id, reply_to, response.strip()[:4000])
+                    log(node_id, f"-> auto-reply to {reply_to}: {summarize(response)}")
             if once or paused:
                 break
     except KeyboardInterrupt:
@@ -235,9 +291,14 @@ def main():
                     help="ephemeral=no memory; persistent=rehydrate full thread from the mailroom")
     ap.add_argument("--idle-timeout", type=float, default=0.0,
                     help="persistent warm window: exit after this many idle seconds (0=never)")
+    ap.add_argument("--allowed-tools", default="",
+                    help="space/comma-separated MCP tools the claude agent may fire, "
+                         "e.g. mcp__deeplakesearch__retrieve_context")
+    ap.add_argument("--model", default=None, help="claude model override (e.g. haiku)")
     a = ap.parse_args()
+    allowed = [t for t in a.allowed_tools.replace(",", " ").split() if t]
     run(a.node_id, a.engine, a.kind, a.poll, a.max_wait, a.once, a.managed,
-        a.lifecycle, a.idle_timeout)
+        a.lifecycle, a.idle_timeout, allowed_tools=allowed, model=a.model)
 
 
 if __name__ == "__main__":

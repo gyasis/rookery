@@ -91,8 +91,13 @@ python3 postmaster.py --nodes architect=claude,reviewer=codex \
 
 ```bash
 cd ~/Documents/code/rookery
-./demo.sh              # mode A — two self-polling nodes
-./demo_postmaster.sh   # mode B — agents asleep, postmaster wakes them
+# free (mock, instant):
+./demo.sh                 # mode A — two self-polling nodes
+./demo_postmaster.sh      # mode B — agents asleep, postmaster wakes them; persistence
+./demo_research.sh        # research queue: 3 tasks dispatched, researcher→writer handoff
+# paid (real models):
+./demo_real.sh            # Claude architect ↔ Codex reviewer
+./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
 ```
 
 Both send one task to `architect` and show:
@@ -135,14 +140,17 @@ Three levels, weakest-to-strongest durability:
 |---|---|
 | `schema.sql` | the mailroom tables (single source of truth) |
 | `rookery.py` | shared lib: connect/init, nodes, mail, credentials |
-| `node_runner.py` | the own-loop node (mock + `claude -p`; `--managed` for mode B) |
-| `postmaster.py` | mode B: central watcher that wakes sleeping agents on mail |
+| `node_runner.py` | the own-loop node (mock / `claude -p` / `codex exec`; `--lifecycle`, `--allowed-tools`) |
+| `postmaster.py` | mode B: central watcher; per-node engines, `--persistent`, `--max-warm` |
 | `send_mail.py` | drop a message into the mailroom |
 | `mesh_approve.py` | human side of the CIBA credential gate |
 | `monitor.sh` | live DB view (the Monitor node) |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
 | `demo_postmaster.sh` | mode B proof (agents asleep, postmaster wakes them) |
+| `demo_research.sh` | research-queue proof (mock): dispatch + handoff + persistence |
+| `demo_real.sh` | real Claude ↔ Codex handoff |
+| `demo_real_research.sh` | real DeepLake tool-use → Claude → Codex → human |
 | `cleanup.sh` | reset the mailroom |
 | `docs/` | the research + paired-debate reports (`index.html`) |
 
