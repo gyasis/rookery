@@ -39,7 +39,7 @@ def has_mail(conn, node):
     return row["c"] > 0
 
 
-def wake(node, engine, lifecycle, idle_timeout, allowed_tools="", model=None):
+def wake(node, engine, lifecycle, idle_timeout, allowed_tools="", model=None, mcp=""):
     if engine == "claude-sdk":
         # warm long-lived Claude session (hooks off) — kills the ~115s cold start.
         cmd = [sys.executable, SDK_NODE, "--node-id", node,
@@ -48,6 +48,8 @@ def wake(node, engine, lifecycle, idle_timeout, allowed_tools="", model=None):
             cmd += ["--allowed-tools", allowed_tools]
         if model:
             cmd += ["--model", model]
+        if mcp:
+            cmd += ["--mcp", mcp]
         proc = subprocess.Popen(cmd)
         log(f"mail for '{node}' -> woke a WARM SDK session (window {idle_timeout:g}s, pid {proc.pid})")
         return proc
@@ -68,7 +70,7 @@ def wake(node, engine, lifecycle, idle_timeout, allowed_tools="", model=None):
     return proc
 
 
-def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools="", model=None):
+def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools="", model=None, mcp=""):
     conn = R.connect()
     nodes = list(node_engine)
 
@@ -117,7 +119,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                         running[victim].terminate()
                         continue   # free the slot this tick; wake n next tick
                 running[n] = wake(n, node_engine[n], lifecycle(n), idle_timeout,
-                                  allowed_tools, model)
+                                  allowed_tools, model, mcp)
                 woke_at[n] = time.time()
 
             time.sleep(poll)
@@ -147,6 +149,8 @@ def main():
     ap.add_argument("--allowed-tools", default="",
                     help="MCP tools claude nodes may fire, e.g. mcp__deeplakesearch__retrieve_context")
     ap.add_argument("--model", default=None, help="claude model override for all claude nodes")
+    ap.add_argument("--mcp", default="",
+                    help="comma list of MCP servers (from ~/.claude.json) to attach to claude-sdk nodes")
     ap.add_argument("--poll", type=float, default=0.5)
     a = ap.parse_args()
     node_engine = {}
@@ -161,7 +165,7 @@ def main():
             node_engine[entry] = a.engine
     persistent_set = {x.strip() for x in a.persistent.split(",") if x.strip()}
     run(node_engine, persistent_set, a.max_warm, a.idle_timeout, a.poll,
-        allowed_tools=a.allowed_tools, model=a.model)
+        allowed_tools=a.allowed_tools, model=a.model, mcp=a.mcp)
 
 
 if __name__ == "__main__":

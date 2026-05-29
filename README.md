@@ -105,7 +105,12 @@ cd ~/Documents/code/rookery
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
 ./demo_real_sdk.sh        # warm SDK node: 3 sequential turns, ~7s then ~2s (vs ~115s each)
+./demo_real_sdk_research.sh # warm SDK + DeepLake MCP tool → Codex writer → human
 ```
+
+> **Warm SDK + tools:** a `claude-sdk` node attaches MCP servers explicitly via
+> `--mcp <name>` (looked up in `~/.claude.json`), since `setting_sources=[]`
+> skips global MCP. E.g. `--mcp deeplakesearch --allowed-tools mcp__deeplakesearch__retrieve_context`.
 
 Both send one task to `architect` and show:
 1. `architect` wakes **unprompted**, mails `triage`, then **pauses** on a credential.

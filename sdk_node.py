@@ -15,6 +15,7 @@ carries memory for turns 2..N, so no re-send).
 """
 import argparse
 import asyncio
+import json
 import os
 import time
 
@@ -29,6 +30,31 @@ from claude_agent_sdk import (
 )
 
 
+def load_mcp_servers(names):
+    """Selectively re-add named MCP servers from ~/.claude.json. setting_sources=[]
+    drops global MCP (to skip hooks), so a tool-using SDK node passes the few
+    servers it needs explicitly — hooks stay off, only these servers load."""
+    if not names:
+        return {}
+    try:
+        d = json.load(open(os.path.expanduser("~/.claude.json")))
+    except Exception:
+        return {}
+    pool = dict(d.get("mcpServers") or {})
+    for pdata in (d.get("projects") or {}).values():
+        pool.update((pdata or {}).get("mcpServers") or {})
+    out = {}
+    for n in names:
+        cfg = pool.get(n)
+        if not cfg:
+            continue
+        cfg = dict(cfg)
+        if "type" not in cfg:
+            cfg["type"] = "stdio" if cfg.get("command") else ("http" if cfg.get("url") else "stdio")
+        out[n] = cfg
+    return out
+
+
 async def collect_text(client) -> str:
     parts = []
     async for msg in client.receive_response():
@@ -39,7 +65,7 @@ async def collect_text(client) -> str:
     return "\n".join(parts)
 
 
-async def run(node_id, poll, idle_timeout, max_wait, allowed_tools, model):
+async def run(node_id, poll, idle_timeout, max_wait, allowed_tools, model, mcp_servers=None):
     conn = R.connect()
     R.register_node(conn, node_id, kind="sdk", pid=os.getpid(), lifecycle="persistent")
 
@@ -54,6 +80,10 @@ async def run(node_id, poll, idle_timeout, max_wait, allowed_tools, model):
         opts["permission_mode"] = "acceptEdits"
     if model:
         opts["model"] = model
+    if mcp_servers:
+        # re-add only the servers this node needs (hooks still off)
+        opts["mcp_servers"] = mcp_servers
+        log(node_id, f"MCP servers attached: {list(mcp_servers)}")
     options = ClaudeAgentOptions(**opts)
 
     log(node_id, "opening warm Claude session (SDK) — startup paid ONCE…")
@@ -109,9 +139,13 @@ def main():
     ap.add_argument("--max-wait", type=int, default=0)
     ap.add_argument("--allowed-tools", default="")
     ap.add_argument("--model", default=None)
+    ap.add_argument("--mcp", default="",
+                    help="comma list of MCP server names from ~/.claude.json to attach "
+                         "(e.g. deeplakesearch)")
     a = ap.parse_args()
     allowed = [t for t in a.allowed_tools.replace(",", " ").split() if t]
-    asyncio.run(run(a.node_id, a.poll, a.idle_timeout, a.max_wait, allowed, a.model))
+    mcp = load_mcp_servers([s.strip() for s in a.mcp.split(",") if s.strip()])
+    asyncio.run(run(a.node_id, a.poll, a.idle_timeout, a.max_wait, allowed, a.model, mcp))
 
 
 if __name__ == "__main__":
