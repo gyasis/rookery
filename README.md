@@ -110,6 +110,7 @@ cd ~/Documents/code/rookery
 ./demo_security.sh        # a node blocks a dangerous inbound message (swappable policy)
 ./demo_federation.sh      # two mailrooms (home+mac): alice@home <-> bob@mac relayed across
 ./demo_terminal.sh        # substrate A: mail injected into a tmux pane (a human/agent joins)
+./demo_a2a_push.sh        # A2A push: sidecar POSTs the completed task to your webhook
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
@@ -180,8 +181,12 @@ can discover and task Rookery:
 > **TLS or a tunnel** (Tailscale / SSH `-L` / Cloudflare Tunnel) — never expose
 > plain HTTP + token to the open internet.
 
-Run `./a2a_demo.sh` (open) or `./demo_a2a_secure.sh` (auth + streaming) for the
-round-trip. (Push notifications are not implemented yet.)
+- **Push:** include `configuration.pushNotificationConfig` `{url, token}` in
+  `message/send`; the sidecar returns `submitted` immediately and **POSTs the
+  completed Task to your webhook** when the node replies (no polling/streaming).
+
+Run `./a2a_demo.sh` (open), `./demo_a2a_secure.sh` (auth + streaming), or
+`./demo_a2a_push.sh` (webhook push) for the round-trip.
 
 ## Use it from Claude Code (MCP + CLI)
 
@@ -277,6 +282,7 @@ seam for the full hardened security layer.
 | `rookery_mcp.py` | MCP server — `send` / `check_inbox` / `await_message` / `roster` tools for a Claude Code session + subagents |
 | `relay.py` | federation relay — forwards `node@remote` mail to that mailroom's sidecar (directory: `mailrooms.json`) |
 | `terminal_node.py` | substrate A — bridges a human/terminal-agent in a pane into the mesh (injector: tmux / wezterm / zellij) |
+| `webhook_sink.py` | tiny test receiver for A2A push notifications (prints each POST) |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
 | `demo_postmaster.sh` | mode B proof (agents asleep, postmaster wakes them) |
@@ -300,4 +306,5 @@ A2A agent card + `message/send`/`tasks/get` + `message/stream` (SSE) + bearer au
 MCP bridge (Claude Code sessions/subagents join the mesh) + federation
 (`node@mailroom` across multiple mailrooms via relays).
 terminal node (substrate A) — a human/terminal-agent joins via a pane (tmux/wezterm/zellij).
-Next: A2A push notifications; TLS/tunnel helper for internet use.
+A2A push notifications (webhook).
+Next: TLS/tunnel helper for internet use.

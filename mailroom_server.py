@@ -11,7 +11,9 @@ locking is broken; peers talk to THIS service over TCP instead.
 import argparse
 import json
 import os
+import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -68,7 +70,7 @@ def agent_card(conn):
         "preferredTransport": "JSONRPC",
         "version": "0.1.0",
         "provider": {"organization": "Rookery", "url": PUBLIC_URL},
-        "capabilities": {"streaming": True, "pushNotifications": False, "stateTransitionHistory": False},
+        "capabilities": {"streaming": True, "pushNotifications": True, "stateTransitionHistory": False},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
         "skills": skills,
@@ -80,6 +82,38 @@ def agent_card(conn):
 
 
 _A2A_STATE = {"pending": "submitted", "inflight": "working", "done": "completed"}
+
+
+def _post_webhook(url, payload, token=None):
+    data = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+    with urllib.request.urlopen(req, timeout=15):
+        pass
+
+
+def _push_watch(sender, mid, tid, ctx, url, token, timeout=120):
+    """Background: when the node replies, POST the completed Task to the client's
+    webhook (A2A push notifications) instead of the client polling/streaming."""
+    conn = R.connect()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        replies = conn.execute(
+            "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id", (sender, mid)
+        ).fetchall()
+        if replies:
+            task = {"id": tid, "contextId": ctx, "status": {"state": "completed"},
+                    "artifacts": [{"artifactId": f"reply-{r['id']}",
+                                   "parts": [{"text": r["body"], "mediaType": "text/plain"}]}
+                                  for r in replies]}
+            try:
+                _post_webhook(url, task, token)
+            except Exception:
+                pass
+            return
+        time.sleep(0.5)
 
 
 def a2a_rpc(conn, rpc):
@@ -109,9 +143,18 @@ def a2a_rpc(conn, rpc):
         if not chk:
             return err(-32004, f"message rejected: {chk.reason}")
         mid = R.send(conn, sender, recipient, text)
+        ctx = msg.get("contextId") or f"ctx-{mid}"
+        # A2A push notifications: if the client gave a webhook, POST the result later
+        pn = (params.get("configuration") or {}).get("pushNotificationConfig") or meta.get("pushNotification")
+        if isinstance(pn, dict) and pn.get("url"):
+            threading.Thread(
+                target=_push_watch,
+                args=(sender, mid, f"a2a-{mid}", ctx, pn["url"], pn.get("token")),
+                daemon=True,
+            ).start()
         return ok({
             "id": f"a2a-{mid}",
-            "contextId": msg.get("contextId") or f"ctx-{mid}",
+            "contextId": ctx,
             "status": {"state": "submitted"},
             "history": [msg],
         })
