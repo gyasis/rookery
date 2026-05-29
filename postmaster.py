@@ -17,11 +17,14 @@ where agents can be truly paused and still get driven.
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import time
 
 import rookery as R
+
+_MENTION = re.compile(r"@([A-Za-z0-9_-]+)")
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 NODE_RUNNER = os.path.join(_HERE, "node_runner.py")
@@ -85,6 +88,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
     running = {}        # node_id -> Popen (at most one live turn per node)
     woke_at = {}        # node_id -> last wake time (for warm-pool LRU eviction)
     granted_seen = set()
+    last_mention_id = 0
     try:
         while True:
             # 1. reap finished turns (ephemeral one-shots, or persistent warm windows that timed out)
@@ -105,7 +109,25 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                            f"CRED_GRANTED:{r['resource']}:{r['token_ref']}")
                     log(f"credential #{r['id']} approved -> mailed grant to '{r['node_id']}'")
 
-            # 3. wake any managed node that has mail and isn't already running
+            # 3. "they're talking about you": notify a managed node @mentioned in
+            #    new mail it isn't the recipient of (scan each message once).
+            for r in conn.execute(
+                "SELECT * FROM inbox WHERE id > ? ORDER BY id", (last_mention_id,)
+            ).fetchall():
+                last_mention_id = max(last_mention_id, r["id"])
+                body = r["body"] or ""
+                # skip postmaster notices and acks (acks often echo the original
+                # text, which would re-trigger the same mention)
+                if r["sender"] == "postmaster" or body.startswith("ACK:"):
+                    continue
+                for m in set(_MENTION.findall(body)):
+                    if m in nodes and m != r["recipient"] and m != r["sender"]:
+                        R.send(conn, "postmaster", m,
+                               f"MENTION by {r['sender']} (in mail to {r['recipient']}): "
+                               f"{(r['body'] or '')[:140]}")
+                        log(f"@{m} mentioned by {r['sender']} -> notified")
+
+            # 4. wake any managed node that has mail and isn't already running
             for n in nodes:
                 if n in running or not has_mail(conn, n):
                     continue

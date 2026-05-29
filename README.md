@@ -47,6 +47,9 @@ An engine (mock or Claude) drives the mesh by emitting lines:
 | `NEEDCRED:<resource>` | phone home for a credential, then **pause** until approved |
 | `ACK: …` | acknowledgement — never auto-replied to (loop prevention) |
 
+The postmaster also watches for **`@<node>`** mentions in any message and notifies
+the mentioned node ("they're talking about you") — even if it isn't the recipient.
+
 ## Two modes (both kept on purpose)
 
 | Mode | Who polls | Pause = | When to use |
@@ -171,7 +174,7 @@ Three levels, weakest-to-strongest durability:
 
 - **Claim-on-fetch:** mail is marked delivered when picked up, so a crash mid-handling drops it. Fine for the spike; v2 adds an in-flight/ack state.
 - **Single host.** SQLite-on-a-share has broken locking. Multi-host (Mac Studio) = v2: wrap this same DB behind a tiny FastAPI/WebSocket sidecar; nodes connect over TCP.
-- **Credential `token_ref` is a pointer**, not a secret — real keychain/JIT-broker resolution is a TODO hook in `mesh_approve.py`.
+- **Credential `token_ref` is a pointer**, not a secret — resolved at use time via `rookery.resolve_secret()` (`env://VAR` or `keychain://service/account` via libsecret `secret-tool`). The secret never touches the DB.
 
 ## Roadmap
 

@@ -9,8 +9,31 @@ No args  -> list pending credential requests.
 --id N --deny     -> deny request N.
 """
 import argparse
-import uuid
+import os
+import re
+import shutil
+import subprocess
 import rookery as R
+
+
+def mint_pointer(resource):
+    """Pick a real, verified pointer to the secret for <resource> — never the
+    secret itself. Prefers the OS keychain (secret-tool), falls back to an env
+    var. Returns (token_ref, status)."""
+    env_var = "ROOKERY_SECRET_" + re.sub(r"[^A-Za-z0-9]", "_", resource).upper()
+    if shutil.which("secret-tool"):
+        try:
+            r = subprocess.run(
+                ["secret-tool", "lookup", "service", "rookery", "account", resource],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0 and r.stdout:
+                return f"keychain://rookery/{resource}", "keychain (verified present)"
+        except Exception:
+            pass
+    if os.environ.get(env_var):
+        return f"env://{env_var}", "env (verified set)"
+    return f"env://{env_var}", f"NOT FOUND — store it first: export {env_var}=…  (or: secret-tool store --label rookery service rookery account {resource})"
 
 
 def list_pending(conn):
@@ -30,7 +53,7 @@ def main():
     g.add_argument("--approve", action="store_true")
     g.add_argument("--deny", action="store_true")
     ap.add_argument("--token-ref", default=None,
-                    help="explicit secret pointer; default mints a JIT ref")
+                    help="explicit secret pointer; default mints a verified keychain/env ref")
     a = ap.parse_args()
     conn = R.connect()
 
@@ -49,10 +72,14 @@ def main():
         return
 
     # default action is approve
-    token_ref = a.token_ref or f"jit://{row['resource']}/{uuid.uuid4().hex[:12]}"
+    if a.token_ref:
+        token_ref, status = a.token_ref, "explicit"
+    else:
+        token_ref, status = mint_pointer(row["resource"])
     R.approve_credential(conn, a.req_id, token_ref)
-    print(f"approved #{a.req_id} for node '{row['node_id']}' -> token_ref={token_ref}")
-    print("(pointer only — the real secret resolves from the keychain/JIT broker at use time)")
+    print(f"approved #{a.req_id} for node '{row['node_id']}' -> token_ref={token_ref}  [{status}]")
+    print("(pointer only — the agent calls rookery.resolve_secret(token_ref) at use time; "
+          "the secret is never written to the DB)")
 
 
 if __name__ == "__main__":

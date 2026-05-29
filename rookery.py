@@ -7,7 +7,9 @@ AND the audit log. Every helper here is small and stdlib-only so any node
 same bus.
 """
 import os
+import shutil
 import sqlite3
+import subprocess
 import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -148,3 +150,27 @@ def deny_credential(conn, req_id):
         (now(), req_id),
     )
     conn.commit()
+
+
+def resolve_secret(token_ref):
+    """Resolve a credential POINTER to the real secret at the moment of use.
+    The secret is NEVER stored in the DB — only the pointer is. Supports:
+      env://VAR                     -> os.environ[VAR]
+      keychain://<service>/<account> -> `secret-tool lookup` (libsecret)
+    Returns the secret string, or None if it can't be resolved."""
+    if not token_ref:
+        return None
+    if token_ref.startswith("env://"):
+        return os.environ.get(token_ref[len("env://"):])
+    if token_ref.startswith("keychain://"):
+        service, _, account = token_ref[len("keychain://"):].partition("/")
+        if shutil.which("secret-tool") and account:
+            try:
+                r = subprocess.run(
+                    ["secret-tool", "lookup", "service", service, "account", account],
+                    capture_output=True, text=True, timeout=10,
+                )
+                return r.stdout or None
+            except Exception:
+                return None
+    return None
