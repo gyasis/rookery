@@ -25,6 +25,7 @@ import time
 import uuid
 
 import rookery as R
+import security  # inbound message inspection (swappable policy)
 
 
 def log(node_id, msg):
@@ -207,6 +208,24 @@ def handle_directives(conn, node_id, response, poll, max_wait, managed=False):
     return False, acted
 
 
+def screen(conn, node_id, msgs):
+    """Run each inbound message through the security policy BEFORE the agent sees
+    it (the prompt-injection / content seam, covering ALL mail — internal node->
+    node included). Rejected mail is quarantined (acked out of the queue) and the
+    sender is told. No-op under DefaultPolicy."""
+    pol = security.get_policy()
+    allowed = []
+    for m in msgs:
+        d = pol.inspect_inbound(m["sender"], node_id, m["body"])
+        if d:
+            allowed.append(m)
+        else:
+            log(node_id, f"BLOCKED inbound #{m['id']} from {m['sender']}: {d.reason}")
+            R.send(conn, node_id, m["sender"], f"REJECTED by policy: {d.reason}")
+            R.ack(conn, [m["id"]])  # quarantine: remove from the pending queue
+    return allowed
+
+
 def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, idle_timeout,
         allowed_tools=None, model=None):
     conn = R.connect()
@@ -220,6 +239,8 @@ def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, id
             R.heartbeat(conn, node_id)
             R.set_status(conn, node_id, "idle")
             new_msgs = R.fetch_undelivered(conn, node_id)
+            if new_msgs:
+                new_msgs = screen(conn, node_id, new_msgs)  # policy vets inbound
             if not new_msgs:
                 if once:
                     break

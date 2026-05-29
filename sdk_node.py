@@ -20,7 +20,7 @@ import os
 import time
 
 import rookery as R
-from node_runner import handle_directives, _mesh_prompt, log
+from node_runner import handle_directives, _mesh_prompt, log, screen
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -97,6 +97,8 @@ async def run(node_id, poll, idle_timeout, max_wait, allowed_tools, model, mcp_s
             R.heartbeat(conn, node_id)
             R.set_status(conn, node_id, "idle")
             new = R.fetch_undelivered(conn, node_id)
+            if new:
+                new = screen(conn, node_id, new)  # policy vets inbound
             if not new:
                 if idle_timeout and idle >= idle_timeout:
                     log(node_id, f"idle {int(idle)}s — closing warm session, sleeping ($0)")

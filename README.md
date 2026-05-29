@@ -107,6 +107,7 @@ cd ~/Documents/code/rookery
 ./demo_multihost.sh       # HTTP sidecar + a node that speaks only HTTP (multi-host transport)
 ./a2a_demo.sh             # external agent discovers Rookery (Agent Card) + tasks it via A2A JSON-RPC
 ./demo_a2a_secure.sh      # A2A with bearer auth (401 without token) + message/stream over SSE
+./demo_security.sh        # a node blocks a dangerous inbound message (swappable policy)
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
@@ -205,9 +206,13 @@ class Hardened(security.SecurityPolicy):
 ROOKERY_SECURITY="mypolicy:Hardened" python3 mailroom_server.py --host 0.0.0.0
 ```
 
-The A2A message path already calls `authorize` + `inspect_inbound`; internal
-node→node mail does not yet (a future hook). This module is the seam for the
-hardened security layer.
+**`inspect_inbound` covers ALL mail:** the A2A boundary screens at send-time, and
+**every node screens its inbound at the consuming end** (before the agent sees
+it) — so internal node→node mail is vetted too. Rejected mail is quarantined and
+the sender is told. See `policy_example.py` for a hardened reference (blocks
+`rm -rf` / `DROP TABLE` / injection phrases; denies tasking `vault`) and
+`./demo_security.sh` for a node blocking a dangerous message. This module is the
+seam for the full hardened security layer.
 
 ## Files
 
@@ -221,6 +226,7 @@ hardened security layer.
 | `send_mail.py` | drop a message into the mailroom |
 | `mesh_approve.py` | human side of the CIBA credential gate |
 | `security.py` | **swappable** SecurityPolicy: auth · authz · credential mint/resolve · inbound message inspection |
+| `policy_example.py` | reference hardened policy (template) — blocks injection patterns, denies a sensitive node |
 | `monitor.sh` | live DB view (the Monitor node) |
 | `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** card / JSON-RPC (`message/send`, `tasks/get`, `message/stream` SSE) + bearer auth |
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |
