@@ -104,6 +104,7 @@ cd ~/Documents/code/rookery
 ./demo.sh                 # mode A — two self-polling nodes
 ./demo_postmaster.sh      # mode B — agents asleep, postmaster wakes them; persistence
 ./demo_research.sh        # research queue: 3 tasks dispatched, researcher→writer handoff
+./demo_multihost.sh       # HTTP sidecar + a node that speaks only HTTP (multi-host transport)
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
@@ -161,6 +162,8 @@ Three levels, weakest-to-strongest durability:
 | `send_mail.py` | drop a message into the mailroom |
 | `mesh_approve.py` | human side of the CIBA credential gate |
 | `monitor.sh` | live DB view (the Monitor node) |
+| `mailroom_server.py` | stdlib HTTP sidecar over the mailroom — lets other machines join over the LAN |
+| `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
 | `demo_postmaster.sh` | mode B proof (agents asleep, postmaster wakes them) |
@@ -173,11 +176,12 @@ Three levels, weakest-to-strongest durability:
 ## Known v1 limitations (deliberate)
 
 - **Durable delivery:** mail goes `pending` → `inflight` (on claim) → `done` (on ack); the postmaster requeues `inflight` mail abandoned by a node that crashed mid-turn (after `INFLIGHT_TIMEOUT`). Mode A (no postmaster) has no requeuer.
-- **Single host.** SQLite-on-a-share has broken locking. Multi-host (Mac Studio) = v2: wrap this same DB behind a tiny FastAPI/WebSocket sidecar; nodes connect over TCP.
+- **Multi-host** is via `mailroom_server.py` (stdlib HTTP sidecar over the mailroom) + `mailctl.py` (one-file peer client). Run the sidecar with `--host 0.0.0.0`; a peer (e.g. the Mac Studio) copies `mailctl.py` and runs `loop --url http://<host>:8765 --node <name>`. Never put the SQLite file on a network share — peers talk to the sidecar over TCP.
 - **Credential `token_ref` is a pointer**, not a secret — resolved at use time via `rookery.resolve_secret()` (`env://VAR` or `keychain://service/account` via libsecret `secret-tool`). The secret never touches the DB.
 
 ## Roadmap
 
-v1 prove the loop (here) → CIBA real keychain resolution → `@mention`/topic
-"they're talking about you" → terminal node (substrate A, tmux+send-keys) →
-v2 multi-host sidecar → v3 A2A Agent Cards for cross-vendor discovery.
+Done: prove the loop · CIBA real keychain/env resolution · `@mention` routing ·
+durable delivery (in-flight/ack) · warm SDK session · multi-host HTTP sidecar.
+Next: terminal node (substrate A, tmux+send-keys) · v3 A2A Agent Cards for
+cross-vendor discovery.
