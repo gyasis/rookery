@@ -121,13 +121,18 @@ def ack(conn, ids):
     conn.commit()
 
 
-def requeue_stale(conn, timeout):
-    """Return in-flight messages older than `timeout` seconds back to 'pending'
-    (a node claimed them then crashed mid-turn). Returns the count requeued."""
+def requeue_stale(conn, dead_after):
+    """Return in-flight mail to 'pending' ONLY when the node that claimed it has
+    gone silent (genuinely dead) — judged by the recipient node's last_seen, not
+    by how long the turn is taking. A node heartbeats WHILE it works, so a slow
+    model (e.g. Ollama taking minutes) keeps its claim and is NOT requeued.
+    Returns the count requeued."""
     cur = conn.execute(
         "UPDATE inbox SET status='pending', claimed_at=NULL "
-        "WHERE status='inflight' AND claimed_at < ?",
-        (now() - timeout,),
+        "WHERE status='inflight' AND recipient IN ("
+        "  SELECT node_id FROM nodes WHERE last_seen IS NULL OR last_seen < ?"
+        ")",
+        (now() - dead_after,),
     )
     conn.commit()
     return cur.rowcount

@@ -17,10 +17,11 @@ import argparse
 import asyncio
 import json
 import os
+import threading
 import time
 
 import rookery as R
-from node_runner import handle_directives, _mesh_prompt, log, screen
+from node_runner import handle_directives, _mesh_prompt, log, screen, _heartbeat_loop
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -123,8 +124,13 @@ async def run(node_id, poll, idle_timeout, max_wait, allowed_tools, model, mcp_s
             turn_no += 1
             t = time.time()
             log(node_id, f"woke on {len(new)} message(s) -- unprompted (turn #{turn_no})")
-            await client.query(prompt)
-            text = await collect_text(client)
+            _stop = threading.Event()
+            threading.Thread(target=_heartbeat_loop, args=(node_id, _stop), daemon=True).start()
+            try:
+                await client.query(prompt)
+                text = await collect_text(client)
+            finally:
+                _stop.set()
             kind = "COLD first turn" if turn_no == 1 else "WARM turn"
             log(node_id, f"turn #{turn_no} done in {time.time() - t:.0f}s ({kind})")
             paused, _ = handle_directives(conn, node_id, text, poll, max_wait, managed=True)

@@ -241,7 +241,7 @@ seam for the full hardened security layer.
 
 ## Known v1 limitations (deliberate)
 
-- **Durable delivery:** mail goes `pending` → `inflight` (on claim) → `done` (on ack); the postmaster requeues `inflight` mail abandoned by a node that crashed mid-turn (after `INFLIGHT_TIMEOUT`). Mode A (no postmaster) has no requeuer.
+- **Durable delivery + slow models:** mail goes `pending` → `inflight` (on claim) → `done` (on ack). A node **heartbeats while it works**, so the postmaster requeues `inflight` mail **only after the claiming node goes silent** (`NODE_DEAD_AFTER`, judged by `last_seen`) — a slow model (e.g. Ollama taking minutes) keeps its claim and is never double-processed. The mesh is async, so a sender never blocks on a slow node; the reply lands whenever. Mode A (no postmaster) has no requeuer.
 - **Multi-host** is via `mailroom_server.py` (stdlib HTTP sidecar over the mailroom) + `mailctl.py` (one-file peer client). Run the sidecar with `--host 0.0.0.0`; a peer (e.g. the Mac Studio) copies `mailctl.py` and runs `loop --url http://<host>:8765 --node <name>`. Never put the SQLite file on a network share — peers talk to the sidecar over TCP.
 - **Credential `token_ref` is a pointer**, not a secret — resolved at use time via `rookery.resolve_secret()` (`env://VAR` or `keychain://service/account` via libsecret `secret-tool`). The secret never touches the DB.
 

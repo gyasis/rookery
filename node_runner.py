@@ -21,11 +21,24 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
 import rookery as R
 import security  # inbound message inspection (swappable policy)
+
+
+def _heartbeat_loop(node_id, stop_evt, interval=10):
+    """Keep a node's last_seen fresh WHILE it works (its own DB connection, since
+    the engine call may be long — e.g. a slow local model). Lets the supervisor
+    tell 'slow but alive' apart from 'crashed'."""
+    hc = R.connect()
+    while not stop_evt.wait(interval):
+        try:
+            R.heartbeat(hc, node_id)
+        except Exception:
+            pass
 
 
 def log(node_id, msg):
@@ -278,9 +291,15 @@ def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, id
                     else:
                         engine_kw.update(session_id=sid, resume=True)
             ids = [m["id"] for m in new_msgs]
-            R.claim(conn, ids)  # in-flight: won't re-inject; requeued if we crash now
+            R.claim(conn, ids)  # in-flight: won't re-inject; requeued only if we go silent
             log(node_id, f"woke on {len(new_msgs)} message(s) -- unprompted")
-            response = engine(node_id, new_msgs, history, **engine_kw)
+            # heartbeat WHILE the engine runs (a slow model is alive, not crashed)
+            _stop = threading.Event()
+            threading.Thread(target=_heartbeat_loop, args=(node_id, _stop), daemon=True).start()
+            try:
+                response = engine(node_id, new_msgs, history, **engine_kw)
+            finally:
+                _stop.set()
             paused, acted = handle_directives(conn, node_id, response, poll, max_wait, managed)
             # Fallback: an ephemeral worker that emitted no directive still returns
             # its result to whoever asked (robust round-trip even if the model

@@ -29,7 +29,9 @@ _MENTION = re.compile(r"@([A-Za-z0-9_-]+)")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 NODE_RUNNER = os.path.join(_HERE, "node_runner.py")
 SDK_NODE = os.path.join(_HERE, "sdk_node.py")
-INFLIGHT_TIMEOUT = 120  # seconds before a claimed-but-unacked message is requeued
+# A node heartbeats while it works; requeue its in-flight mail only after it has
+# been silent this long (genuinely dead) — NOT because a turn is slow.
+NODE_DEAD_AFTER = 60
 
 
 def log(msg):
@@ -98,10 +100,11 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
     last_mention_id = 0
     try:
         while True:
-            # 0. durability: return mail claimed by a node that crashed mid-turn
-            requeued = R.requeue_stale(conn, INFLIGHT_TIMEOUT)
+            # 0. durability: return mail claimed by a node that has gone SILENT
+            #    (dead) — a slow-but-heartbeating node keeps its claim.
+            requeued = R.requeue_stale(conn, NODE_DEAD_AFTER)
             if requeued:
-                log(f"requeued {requeued} stale in-flight message(s) (node crashed mid-turn)")
+                log(f"requeued {requeued} in-flight message(s) (claiming node went silent)")
 
             # 1. reap finished turns (ephemeral one-shots, or persistent warm windows that timed out)
             for n, p in list(running.items()):
