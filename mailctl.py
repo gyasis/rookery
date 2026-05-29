@@ -9,16 +9,19 @@ Copy just this one file to the peer; it needs nothing but Python 3.
 """
 import argparse
 import json
+import os
 import time
 import urllib.request
+
+TOKEN = os.environ.get("ROOKERY_TOKEN")  # overridden by --token
 
 
 def call(url, path, method="GET", body=None):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        url.rstrip("/") + path, data=data, method=method,
-        headers={"Content-Type": "application/json"},
-    )
+    headers = {"Content-Type": "application/json"}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
+    req = urllib.request.Request(url.rstrip("/") + path, data=data, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read() or b"{}")
 
@@ -64,7 +67,12 @@ def main():
     lp.add_argument("--url", required=True)
     lp.add_argument("--node", required=True)
     lp.add_argument("--poll", type=float, default=1.0)
+    for p in (s, i, lp):
+        p.add_argument("--token", default=None, help="Bearer token (default $ROOKERY_TOKEN)")
     a = ap.parse_args()
+    global TOKEN
+    if getattr(a, "token", None):
+        TOKEN = a.token
 
     if a.cmd == "send":
         print(call(a.url, "/send", "POST",

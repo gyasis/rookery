@@ -106,6 +106,7 @@ cd ~/Documents/code/rookery
 ./demo_research.sh        # research queue: 3 tasks dispatched, researcher→writer handoff
 ./demo_multihost.sh       # HTTP sidecar + a node that speaks only HTTP (multi-host transport)
 ./a2a_demo.sh             # external agent discovers Rookery (Agent Card) + tasks it via A2A JSON-RPC
+./demo_a2a_secure.sh      # A2A with bearer auth (401 without token) + message/stream over SSE
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
@@ -164,8 +165,20 @@ can discover and task Rookery:
 - **Poll:** `POST /a2a` JSON-RPC `tasks/get` → Task `state` + the node's reply as
   an artifact.
 
-Run `./a2a_demo.sh` for a full discover → send → get round-trip. (Streaming /
-push / auth are not implemented yet.)
+- **Stream:** `POST /a2a` JSON-RPC `message/stream` → Server-Sent Events
+  (`submitted` → `artifact-update` with the reply → `status-update` `completed`).
+- **Auth:** start the sidecar with `--token <tok>` (or `$ROOKERY_TOKEN`). Then
+  `/a2a` + the REST endpoints require `Authorization: Bearer <tok>`; `/health`
+  and the agent card stay public (the card advertises the `bearerAuth` scheme).
+  `mailctl.py` sends the token from `--token`/`$ROOKERY_TOKEN`.
+
+> **Auth ≠ encryption.** A bearer token authenticates but sends in clear text.
+> On a trusted **LAN** that's fine. Over the **internet**, put the sidecar behind
+> **TLS or a tunnel** (Tailscale / SSH `-L` / Cloudflare Tunnel) — never expose
+> plain HTTP + token to the open internet.
+
+Run `./a2a_demo.sh` (open) or `./demo_a2a_secure.sh` (auth + streaming) for the
+round-trip. (Push notifications are not implemented yet.)
 
 ## Files
 
@@ -179,7 +192,7 @@ push / auth are not implemented yet.)
 | `send_mail.py` | drop a message into the mailroom |
 | `mesh_approve.py` | human side of the CIBA credential gate |
 | `monitor.sh` | live DB view (the Monitor node) |
-| `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** agent card &amp; JSON-RPC (`message/send`, `tasks/get`) |
+| `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** card / JSON-RPC (`message/send`, `tasks/get`, `message/stream` SSE) + bearer auth |
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
@@ -200,5 +213,5 @@ push / auth are not implemented yet.)
 
 Done: prove the loop · CIBA real keychain/env resolution · `@mention` routing ·
 durable delivery (in-flight/ack) · warm SDK session · multi-host HTTP sidecar ·
-A2A agent card + `message/send`/`tasks/get` (cross-vendor discovery).
-Next: terminal node (substrate A, tmux+send-keys); A2A streaming / push / auth.
+A2A agent card + `message/send`/`tasks/get` + `message/stream` (SSE) + bearer auth.
+Next: terminal node (substrate A, tmux+send-keys); A2A push notifications; TLS/tunnel helper for internet use.

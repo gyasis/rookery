@@ -9,16 +9,24 @@ mailctl.py (or any HTTP client). NEVER put the SQLite file on a network share â€
 locking is broken; peers talk to THIS service over TCP instead.
 """
 import argparse
+import hmac
 import json
+import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import rookery as R
 
 # Set from CLI in main(). PUBLIC_URL is what goes in the Agent Card (how peers
-# reach us); DEFAULT_NODE routes A2A messages with no explicit recipient.
+# reach us); DEFAULT_NODE routes A2A messages with no explicit recipient;
+# TOKEN (if set) is the required Bearer credential for non-public endpoints.
 PUBLIC_URL = "http://localhost:8765"
 DEFAULT_NODE = "mailroom"
+TOKEN = None
+
+# Public (no auth): discovery + liveness. Everything else needs the token.
+OPEN_PATHS = {"/health", "/.well-known/agent-card.json", "/.well-known/agent.json"}
 
 
 def _rows(rs):
@@ -55,7 +63,7 @@ def agent_card(conn):
             "tags": ["rookery"], "examples": ["hello"],
             "inputModes": ["text/plain"], "outputModes": ["text/plain"],
         })
-    return {
+    card = {
         "protocolVersion": "0.3.0",
         "name": "Rookery Mesh",
         "description": "A local-first agent mesh (SQLite mailroom). Send a task via message/send; "
@@ -64,11 +72,15 @@ def agent_card(conn):
         "preferredTransport": "JSONRPC",
         "version": "0.1.0",
         "provider": {"organization": "Rookery", "url": PUBLIC_URL},
-        "capabilities": {"streaming": False, "pushNotifications": False, "stateTransitionHistory": False},
+        "capabilities": {"streaming": True, "pushNotifications": False, "stateTransitionHistory": False},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
         "skills": skills,
     }
+    if TOKEN:
+        card["securitySchemes"] = {"bearerAuth": {"type": "http", "scheme": "bearer"}}
+        card["security"] = [{"bearerAuth": []}]
+    return card
 
 
 _A2A_STATE = {"pending": "submitted", "inflight": "working", "done": "completed"}
@@ -142,8 +154,14 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}")
 
+    def _authed(self):
+        h = self.headers.get("Authorization", "")
+        return h.startswith("Bearer ") and hmac.compare_digest(h[7:].strip(), TOKEN)
+
     def do_GET(self):
         u = urlparse(self.path)
+        if TOKEN and u.path not in OPEN_PATHS and not self._authed():
+            return self._reply({"error": "unauthorized"}, 401)
         q = parse_qs(u.query)
         c = R.connect()
         if u.path == "/health":
@@ -156,11 +174,60 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply({"messages": _rows(R.fetch_thread(c, q["node"][0]))})
         self._reply({"error": "not found"}, 404)
 
+    def _a2a_stream(self, conn, rpc):
+        """A2A message/stream over Server-Sent Events: submitted -> artifact(s)
+        -> completed, as the target node replies. Falls to 'working' on timeout."""
+        rid = rpc.get("id")
+        params = rpc.get("params") or {}
+        msg = params.get("message") or {}
+        meta = msg.get("metadata") or params.get("metadata") or {}
+        recipient = meta.get("recipient") or DEFAULT_NODE
+        sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
+        text = _a2a_text(msg.get("parts"))
+        mid = R.send(conn, sender, recipient, text)
+        tid, ctx = f"a2a-{mid}", (msg.get("contextId") or f"ctx-{mid}")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def emit(result):
+            self.wfile.write(f"data: {json.dumps({'jsonrpc':'2.0','id':rid,'result':result})}\n\n".encode())
+            self.wfile.flush()
+
+        try:
+            emit({"id": tid, "contextId": ctx, "status": {"state": "submitted"}})
+            deadline, seen = time.time() + 60, set()
+            while time.time() < deadline:
+                replies = conn.execute(
+                    "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id", (sender, mid)
+                ).fetchall()
+                new = [r for r in replies if r["id"] not in seen]
+                for r in new:
+                    seen.add(r["id"])
+                    emit({"taskId": tid, "contextId": ctx, "kind": "artifact-update",
+                          "artifact": {"artifactId": f"reply-{r['id']}",
+                                       "parts": [{"text": r["body"], "mediaType": "text/plain"}]}})
+                if new:
+                    emit({"taskId": tid, "contextId": ctx, "kind": "status-update",
+                          "status": {"state": "completed"}, "final": True})
+                    return
+                time.sleep(0.5)
+            emit({"taskId": tid, "contextId": ctx, "kind": "status-update",
+                  "status": {"state": "working"}, "final": True})
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_POST(self):
         u = urlparse(self.path)
+        if TOKEN and not self._authed():
+            return self._reply({"error": "unauthorized"}, 401)
         d = self._json_body()
         c = R.connect()
         if u.path == "/a2a":
+            if d.get("method") == "message/stream":
+                return self._a2a_stream(c, d)
             return self._reply(a2a_rpc(c, d))
         if u.path == "/send":
             mid = R.send(c, d["sender"], d["recipient"], d["body"], d.get("topic"))
@@ -191,13 +258,21 @@ def main():
                     help="how peers reach this sidecar (goes in the A2A Agent Card)")
     ap.add_argument("--default-node", default="mailroom",
                     help="A2A message recipient when none is given in metadata.recipient")
+    ap.add_argument("--token", default=os.environ.get("ROOKERY_TOKEN"),
+                    help="require Authorization: Bearer <token> on non-public endpoints "
+                         "(default $ROOKERY_TOKEN). /health + agent-card stay public.")
     a = ap.parse_args()
-    global PUBLIC_URL, DEFAULT_NODE
+    global PUBLIC_URL, DEFAULT_NODE, TOKEN
     PUBLIC_URL = a.public_url or f"http://{a.host}:{a.port}"
     DEFAULT_NODE = a.default_node
+    TOKEN = a.token or None
     R.connect()  # ensure DB + schema exist
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
-    print(f"[mailroom] serving {R.DB_PATH} on http://{a.host}:{a.port}", flush=True)
+    auth = "ON (Bearer)" if TOKEN else "OFF (open)"
+    print(f"[mailroom] serving {R.DB_PATH} on http://{a.host}:{a.port}  auth={auth}", flush=True)
+    if TOKEN and a.host == "0.0.0.0":
+        print("[mailroom] NOTE: the token authenticates but does NOT encrypt. Over the internet, "
+              "put this behind TLS or a tunnel (Tailscale/SSH/Cloudflare).", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
