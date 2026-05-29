@@ -173,7 +173,8 @@ def main():
     ap.add_argument("--nodes", required=True,
                     help="roster, comma-separated. Per-node engine with "
                          "name=engine, e.g. architect=claude,reviewer=codex")
-    ap.add_argument("--engine", choices=["mock", "claude", "codex", "claude-sdk"], default="mock",
+    ap.add_argument("--engine", choices=["mock", "claude", "codex", "gemini", "claude-sdk"],
+                    default="mock",
                     help="default engine for roster entries with no =engine "
                          "(claude-sdk = warm long-lived session, no cold start)")
     ap.add_argument("--persistent", default="",

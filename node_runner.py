@@ -164,7 +164,24 @@ def codex_engine(node_id, new_msgs, history=None, **kw):
             pass
 
 
-ENGINES = {"mock": mock_engine, "claude": claude_engine, "codex": codex_engine}
+def gemini_engine(node_id, new_msgs, history=None, model=None, **kw):
+    """Real Google Gemini — non-interactive `gemini --skip-trust -p`. Same mesh
+    protocol. (--skip-trust is required for headless/automated use.)"""
+    if shutil.which("gemini") is None:
+        log(node_id, "ERROR: `gemini` not on PATH. Use --engine mock/claude/codex.")
+        sys.exit(127)
+    cmd = ["gemini", "--skip-trust"]
+    if model:
+        cmd += ["-m", model]
+    cmd += ["-p", _mesh_prompt(node_id, new_msgs, history)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    if proc.returncode != 0:
+        log(node_id, f"gemini exited {proc.returncode}: {proc.stderr.strip()[:200]}")
+    return proc.stdout
+
+
+ENGINES = {"mock": mock_engine, "claude": claude_engine, "codex": codex_engine,
+           "gemini": gemini_engine}
 
 
 # --- the phone-home pause --------------------------------------------------

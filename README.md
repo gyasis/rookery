@@ -117,6 +117,7 @@ cd ~/Documents/code/rookery
 ./demo_real_research.sh   # Claude researcher fires the DeepLake MCP tool → Codex writer → human
 ./demo_real_sdk.sh        # warm SDK node: 3 sequential turns, ~7s then ~2s (vs ~115s each)
 ./demo_real_sdk_research.sh # warm SDK + DeepLake MCP tool → Codex writer → human
+./demo_real_team.sh       # 2×Claude + Codex + Gemini: architect fans out to all 3 IN PARALLEL
 ```
 
 > **Warm SDK + tools:** a `claude-sdk` node attaches MCP servers explicitly via
@@ -272,7 +273,7 @@ seam for the full hardened security layer.
 |---|---|
 | `schema.sql` | the mailroom tables (single source of truth) |
 | `rookery.py` | shared lib: connect/init, nodes, mail, credentials |
-| `node_runner.py` | the own-loop node (mock / `claude -p` / `codex exec`; `--lifecycle`, `--allowed-tools`) |
+| `node_runner.py` | the own-loop node (engines: mock / `claude -p` / `codex exec` / `gemini -p`; `--lifecycle`, `--allowed-tools`) |
 | `sdk_node.py` | warm long-lived Claude session (Agent SDK) — `engine=claude-sdk`, kills cold start |
 | `postmaster.py` | mode B: central watcher; per-node engines (incl. `claude-sdk`), `--persistent`, `--max-warm` |
 | `send_mail.py` | drop a message into the mailroom |
