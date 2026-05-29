@@ -9,31 +9,8 @@ No args  -> list pending credential requests.
 --id N --deny     -> deny request N.
 """
 import argparse
-import os
-import re
-import shutil
-import subprocess
 import rookery as R
-
-
-def mint_pointer(resource):
-    """Pick a real, verified pointer to the secret for <resource> — never the
-    secret itself. Prefers the OS keychain (secret-tool), falls back to an env
-    var. Returns (token_ref, status)."""
-    env_var = "ROOKERY_SECRET_" + re.sub(r"[^A-Za-z0-9]", "_", resource).upper()
-    if shutil.which("secret-tool"):
-        try:
-            r = subprocess.run(
-                ["secret-tool", "lookup", "service", "rookery", "account", resource],
-                capture_output=True, text=True, timeout=10,
-            )
-            if r.returncode == 0 and r.stdout:
-                return f"keychain://rookery/{resource}", "keychain (verified present)"
-        except Exception:
-            pass
-    if os.environ.get(env_var):
-        return f"env://{env_var}", "env (verified set)"
-    return f"env://{env_var}", f"NOT FOUND — store it first: export {env_var}=…  (or: secret-tool store --label rookery service rookery account {resource})"
+import security  # credential minting lives in the swappable policy
 
 
 def list_pending(conn):
@@ -75,7 +52,7 @@ def main():
     if a.token_ref:
         token_ref, status = a.token_ref, "explicit"
     else:
-        token_ref, status = mint_pointer(row["resource"])
+        token_ref, status = security.get_policy().mint_pointer(row["resource"])
     R.approve_credential(conn, a.req_id, token_ref)
     print(f"approved #{a.req_id} for node '{row['node_id']}' -> token_ref={token_ref}  [{status}]")
     print("(pointer only — the agent calls rookery.resolve_secret(token_ref) at use time; "

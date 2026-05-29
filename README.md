@@ -180,6 +180,35 @@ can discover and task Rookery:
 Run `./a2a_demo.sh` (open) or `./demo_a2a_secure.sh` (auth + streaming) for the
 round-trip. (Push notifications are not implemented yet.)
 
+## Security is a swappable module
+
+All security decisions route through a single `SecurityPolicy` (`security.py`), so
+a **hardened layer can be dropped in later** without touching the sidecar, nodes,
+or CLIs. Decision points: `authenticate` (transport auth) · `is_public_path` ·
+`security_schemes` (what the agent card advertises) · `authorize(principal,
+action, target)` · `inspect_inbound(sender, recipient, body)` (the
+prompt-injection / content seam) · `mint_pointer` / `resolve_secret` (credentials).
+
+The default (`DefaultPolicy`) is exactly today's behavior (optional bearer token,
+allow-all authz, pass-through inspection, env/keychain creds). To harden, subclass
+and install it:
+
+```python
+# mypolicy.py
+import security
+class Hardened(security.SecurityPolicy):
+    def authenticate(self, headers): ...        # per-node identity / mTLS / OAuth
+    def authorize(self, principal, action, target): ...   # per-skill access control
+    def inspect_inbound(self, sender, recipient, body): ...  # scan for injection
+```
+```bash
+ROOKERY_SECURITY="mypolicy:Hardened" python3 mailroom_server.py --host 0.0.0.0
+```
+
+The A2A message path already calls `authorize` + `inspect_inbound`; internal
+node→node mail does not yet (a future hook). This module is the seam for the
+hardened security layer.
+
 ## Files
 
 | File | Role |
@@ -191,6 +220,7 @@ round-trip. (Push notifications are not implemented yet.)
 | `postmaster.py` | mode B: central watcher; per-node engines (incl. `claude-sdk`), `--persistent`, `--max-warm` |
 | `send_mail.py` | drop a message into the mailroom |
 | `mesh_approve.py` | human side of the CIBA credential gate |
+| `security.py` | **swappable** SecurityPolicy: auth · authz · credential mint/resolve · inbound message inspection |
 | `monitor.sh` | live DB view (the Monitor node) |
 | `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** card / JSON-RPC (`message/send`, `tasks/get`, `message/stream` SSE) + bearer auth |
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |

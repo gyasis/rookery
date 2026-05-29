@@ -9,7 +9,6 @@ mailctl.py (or any HTTP client). NEVER put the SQLite file on a network share â€
 locking is broken; peers talk to THIS service over TCP instead.
 """
 import argparse
-import hmac
 import json
 import os
 import time
@@ -17,16 +16,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import rookery as R
+import security  # swappable auth/authz/credential/inspection policy
 
 # Set from CLI in main(). PUBLIC_URL is what goes in the Agent Card (how peers
-# reach us); DEFAULT_NODE routes A2A messages with no explicit recipient;
-# TOKEN (if set) is the required Bearer credential for non-public endpoints.
+# reach us); DEFAULT_NODE routes A2A messages with no explicit recipient.
+# ALL security decisions go through security.get_policy().
 PUBLIC_URL = "http://localhost:8765"
 DEFAULT_NODE = "mailroom"
-TOKEN = None
-
-# Public (no auth): discovery + liveness. Everything else needs the token.
-OPEN_PATHS = {"/health", "/.well-known/agent-card.json", "/.well-known/agent.json"}
 
 
 def _rows(rs):
@@ -77,9 +73,9 @@ def agent_card(conn):
         "defaultOutputModes": ["text/plain"],
         "skills": skills,
     }
-    if TOKEN:
-        card["securitySchemes"] = {"bearerAuth": {"type": "http", "scheme": "bearer"}}
-        card["security"] = [{"bearerAuth": []}]
+    schemes = security.get_policy().security_schemes()
+    if schemes:
+        card.update(schemes)
     return card
 
 
@@ -106,6 +102,12 @@ def a2a_rpc(conn, rpc):
         # "a2a:client" sender would mis-route the reply.
         sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
         text = _a2a_text(msg.get("parts"))
+        pol = security.get_policy()
+        if not pol.authorize("a2a", "task", recipient):
+            return err(-32003, f"not authorized to task '{recipient}'")
+        chk = pol.inspect_inbound(sender, recipient, text)
+        if not chk:
+            return err(-32004, f"message rejected: {chk.reason}")
         mid = R.send(conn, sender, recipient, text)
         return ok({
             "id": f"a2a-{mid}",
@@ -154,13 +156,10 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}")
 
-    def _authed(self):
-        h = self.headers.get("Authorization", "")
-        return h.startswith("Bearer ") and hmac.compare_digest(h[7:].strip(), TOKEN)
-
     def do_GET(self):
         u = urlparse(self.path)
-        if TOKEN and u.path not in OPEN_PATHS and not self._authed():
+        pol = security.get_policy()
+        if not pol.is_public_path(u.path) and pol.authenticate(self.headers) is None:
             return self._reply({"error": "unauthorized"}, 401)
         q = parse_qs(u.query)
         c = R.connect()
@@ -184,6 +183,14 @@ class Handler(BaseHTTPRequestHandler):
         recipient = meta.get("recipient") or DEFAULT_NODE
         sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
         text = _a2a_text(msg.get("parts"))
+        pol = security.get_policy()
+        if not pol.authorize("a2a", "task", recipient):
+            return self._reply({"jsonrpc": "2.0", "id": rid,
+                                "error": {"code": -32003, "message": f"not authorized to task '{recipient}'"}})
+        chk = pol.inspect_inbound(sender, recipient, text)
+        if not chk:
+            return self._reply({"jsonrpc": "2.0", "id": rid,
+                                "error": {"code": -32004, "message": f"message rejected: {chk.reason}"}})
         mid = R.send(conn, sender, recipient, text)
         tid, ctx = f"a2a-{mid}", (msg.get("contextId") or f"ctx-{mid}")
 
@@ -221,7 +228,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
-        if TOKEN and not self._authed():
+        pol = security.get_policy()
+        if not pol.is_public_path(u.path) and pol.authenticate(self.headers) is None:
             return self._reply({"error": "unauthorized"}, 401)
         d = self._json_body()
         c = R.connect()
@@ -262,15 +270,16 @@ def main():
                     help="require Authorization: Bearer <token> on non-public endpoints "
                          "(default $ROOKERY_TOKEN). /health + agent-card stay public.")
     a = ap.parse_args()
-    global PUBLIC_URL, DEFAULT_NODE, TOKEN
+    global PUBLIC_URL, DEFAULT_NODE
     PUBLIC_URL = a.public_url or f"http://{a.host}:{a.port}"
     DEFAULT_NODE = a.default_node
-    TOKEN = a.token or None
+    policy = security.get_policy(token=a.token)  # seed the swappable security policy
     R.connect()  # ensure DB + schema exist
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
-    auth = "ON (Bearer)" if TOKEN else "OFF (open)"
-    print(f"[mailroom] serving {R.DB_PATH} on http://{a.host}:{a.port}  auth={auth}", flush=True)
-    if TOKEN and a.host == "0.0.0.0":
+    auth_on = policy.security_schemes() is not None
+    print(f"[mailroom] serving {R.DB_PATH} on http://{a.host}:{a.port}  "
+          f"auth={'ON' if auth_on else 'OFF'}  policy={type(policy).__name__}", flush=True)
+    if auth_on and a.host == "0.0.0.0":
         print("[mailroom] NOTE: the token authenticates but does NOT encrypt. Over the internet, "
               "put this behind TLS or a tunnel (Tailscale/SSH/Cloudflare).", flush=True)
     try:
