@@ -181,6 +181,28 @@ can discover and task Rookery:
 Run `./a2a_demo.sh` (open) or `./demo_a2a_secure.sh` (auth + streaming) for the
 round-trip. (Push notifications are not implemented yet.)
 
+## Use it from Claude Code (MCP + CLI)
+
+Two ways for a Claude Code session (and its subagents) to join the mesh:
+
+**MCP tools** — add `rookery_mcp.py` to `~/.claude.json` `mcpServers`:
+```json
+"rookery": {
+  "command": "python3",
+  "args": ["/home/gyasis/Documents/code/rookery/rookery_mcp.py"],
+  "env": {"ROOKERY_NODE": "claude-main",
+          "ROOKERY_DB": "/home/gyasis/Documents/code/rookery/rookery.db"}
+}
+```
+Tools: `send(to, body)` · `check_inbox()` · `await_message(timeout)` · `roster()`.
+For a **remote** mailroom set `ROOKERY_URL` (+ `ROOKERY_TOKEN`) instead of `ROOKERY_DB`.
+
+**CLI / scripting** — `send_mail.py`, `mailctl.py` (remote), `mesh_approve.py`;
+agents drive these from Bash. Same mailroom underneath either way.
+
+A **background subagent** + these tools = it talks to other agents
+asynchronously while you keep working in the main context.
+
 ## Security is a swappable module
 
 All security decisions route through a single `SecurityPolicy` (`security.py`), so
@@ -230,6 +252,7 @@ seam for the full hardened security layer.
 | `monitor.sh` | live DB view (the Monitor node) |
 | `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** card / JSON-RPC (`message/send`, `tasks/get`, `message/stream` SSE) + bearer auth |
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |
+| `rookery_mcp.py` | MCP server — `send` / `check_inbox` / `await_message` / `roster` tools for a Claude Code session + subagents |
 | `pause.sh` / `resume.sh` | OS freeze/continue a node (the "video button") |
 | `demo.sh` | mode A proof (self-polling nodes) |
 | `demo_postmaster.sh` | mode B proof (agents asleep, postmaster wakes them) |
