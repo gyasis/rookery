@@ -1,0 +1,658 @@
+{
+  "execution_plan": {
+    "phase_id": "default",
+    "waves": [
+      {
+        "wave_id": 1,
+        "strategy": "PARALLEL_SWARM",
+        "rationale": "Wave 1: 5 independent task(s) with no file conflicts",
+        "tasks": [
+          {
+            "task_id": "T001",
+            "agent_role": "Developer",
+            "instruction": "T001: Scaffold the `rookery_cli.py` stdlib argparse entrypoint with three subcommands `serve` / `up` / `approve` (stubs that print their name + parsed args; importable; placeholders for the flags each will need)",
+            "file_locks": [
+              "rookery_cli.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": true,
+              "has_upstream_deps": false,
+              "upstream_dep_ids": [],
+              "wave_position": 1,
+              "can_test_now": true,
+              "test_hint": "isolated-unit"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T001: Scaffold the `rookery_cli.py` stdlib argparse entrypoint with three subcommands `serve` / `up` / `approve` (stubs that print their name + parsed args; importable; placeholders for the flags each will need)' to [x]",
+            "dependencies": []
+          },
+          {
+            "task_id": "T002",
+            "agent_role": "Developer",
+            "instruction": "T002: Per-node Ed25519 identity in `identity.py` \u2014 `load_or_create()` (creates `~/.rookery/id_ed25519` PEM mode 600, idempotent), `sign(bytes) -> bytes`, `pubkey_b64() -> str`",
+            "file_locks": [
+              "identity.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": true,
+              "has_upstream_deps": false,
+              "upstream_dep_ids": [],
+              "wave_position": 1,
+              "can_test_now": true,
+              "test_hint": "isolated-unit"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T002: Per-node Ed25519 identity in `identity.py` \u2014 `load_or_create()` (creates `~/.rookery/id_ed25519` PEM mode 600, idempotent), `sign(bytes) -> bytes`, `pubkey_b64() -> str`' to [x]",
+            "dependencies": []
+          },
+          {
+            "task_id": "T003",
+            "agent_role": "Developer",
+            "instruction": "T003: SSH-style known_hosts store in `known_hosts.py` (`~/.rookery/known_hosts` \u2014 `<host> <pubkey_b64> <label>  # added <iso8601>`): `load()`, `add(host, pubkey, label)`, `check(host, pubkey) -> 'ok'|'changed'|'unknown'`, atomic write with `.bak`, file mode 0600",
+            "file_locks": [
+              "known_hosts.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": true,
+              "has_upstream_deps": false,
+              "upstream_dep_ids": [],
+              "wave_position": 1,
+              "can_test_now": true,
+              "test_hint": "isolated-unit"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T003: SSH-style known_hosts store in `known_hosts.py` (`~/.rookery/known_hosts` \u2014 `<host> <pubkey_b64> <label>  # added <iso8601>`): `load()`, `add(host, pubkey, label)`, `check(host, pubkey) -> 'ok'|'changed'|'unknown'`, atomic write with `.bak`, file mode 0600' to [x]",
+            "dependencies": []
+          },
+          {
+            "task_id": "T004",
+            "agent_role": "Developer",
+            "instruction": "T004: mDNS / DNS-SD discovery in `discovery.py` \u2014 `discover_mailrooms(timeout=2.0) -> list[{name, host, port}]` via shell-out to `avahi-browse -trp _rookery._tcp` (Linux) or `dns-sd -B _rookery._tcp` (macOS); returns `[]` if neither binary present (NOT an error)",
+            "file_locks": [
+              "discovery.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": true,
+              "has_upstream_deps": false,
+              "upstream_dep_ids": [],
+              "wave_position": 1,
+              "can_test_now": true,
+              "test_hint": "isolated-unit"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T004: mDNS / DNS-SD discovery in `discovery.py` \u2014 `discover_mailrooms(timeout=2.0) -> list[{name, host, port}]` via shell-out to `avahi-browse -trp _rookery._tcp` (Linux) or `dns-sd -B _rookery._tcp` (macOS); returns `[]` if neither binary present (NOT an error)' to [x]",
+            "dependencies": []
+          },
+          {
+            "task_id": "T005",
+            "agent_role": "Developer",
+            "instruction": "T005: Idempotent `~/.claude.json` merger in `config_manager.py` \u2014 `merge_mcp_entry(name, command, args, env)` reads/creates the JSON, ensures `mcpServers`, sets `mcpServers[name]` (replacing if exists), writes atomically via `~/.claude.json.tmp.<pid>` + rename, backs up to `~/.claude.json.bak.<epoch>` only on actual change; rejects corrupt JSON",
+            "file_locks": [
+              "claude.json",
+              "claude.json.bak",
+              "claude.json.tmp",
+              "config_manager.py",
+              "~/.claude.json"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": true,
+              "has_upstream_deps": false,
+              "upstream_dep_ids": [],
+              "wave_position": 1,
+              "can_test_now": true,
+              "test_hint": "isolated-unit"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T005: Idempotent `~/.claude.json` merger in `config_manager.py` \u2014 `merge_mcp_entry(name, command, args, env)` reads/creates the JSON, ensures `mcpServers`, sets `mcpServers[name]` (replacing if exists), writes atomically via `~/.claude.json.tmp.<pid>` + rename, backs up to `~/.claude.json.bak.<epoch>` only on actual change; rejects corrupt JSON' to [x]",
+            "dependencies": []
+          }
+        ],
+        "checkpoint_after": {
+          "enabled": true,
+          "verification_criteria": "Verify all Wave 1 tasks are marked [x] in tasks.md",
+          "git_agent": "git-version-manager",
+          "memory_bank_agent": "project-bank-keeper"
+        }
+      },
+      {
+        "wave_id": 2,
+        "strategy": "PARALLEL_SWARM",
+        "rationale": "Wave 2: 2 independent task(s) with no file conflicts",
+        "tasks": [
+          {
+            "task_id": "T006",
+            "agent_role": "Developer",
+            "instruction": "T006: UDP-broadcast discovery fallback in `discovery.py` \u2014 `announce_loop(port=8765, name='mailroom')` broadcasts JSON `{\"name\", \"port\", \"pubkey_b64\"}` to `<broadcast>:8888` every 5s; `listen(timeout=2.0) -> list[{name, host, port, pubkey_b64}]` (depends on T004)",
+            "file_locks": [
+              "discovery.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T003",
+                "T002",
+                "T001",
+                "T005"
+              ],
+              "wave_position": 2,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T006: UDP-broadcast discovery fallback in `discovery.py` \u2014 `announce_loop(port=8765, name='mailroom')` broadcasts JSON `{\"name\", \"port\", \"pubkey_b64\"}` to `<broadcast>:8888` every 5s; `listen(timeout=2.0) -> list[{name, host, port, pubkey_b64}]` (depends on T004)' to [x]",
+            "dependencies": [
+              "T004",
+              "T003",
+              "T002",
+              "T001",
+              "T005"
+            ]
+          },
+          {
+            "task_id": "T007",
+            "agent_role": "Developer",
+            "instruction": "T007: New `handshake.py` plus `POST /join` route in `mailroom_server.py` \u2014 public endpoint, body `{node_id, pubkey_b64, slug}`, stores `{request_id, node_id, pubkey, slug, requested_at}` in `handshake.PENDING`, returns `{request_id, status: \"pending\"}` (depends on T002)",
+            "file_locks": [
+              "mailroom_server.py",
+              "handshake.PENDING",
+              "handshake.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T003",
+                "T002",
+                "T001",
+                "T005"
+              ],
+              "wave_position": 2,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T007: New `handshake.py` plus `POST /join` route in `mailroom_server.py` \u2014 public endpoint, body `{node_id, pubkey_b64, slug}`, stores `{request_id, node_id, pubkey, slug, requested_at}` in `handshake.PENDING`, returns `{request_id, status: \"pending\"}` (depends on T002)' to [x]",
+            "dependencies": [
+              "T004",
+              "T003",
+              "T002",
+              "T001",
+              "T005"
+            ]
+          }
+        ],
+        "checkpoint_after": {
+          "enabled": true,
+          "verification_criteria": "Verify all Wave 2 tasks are marked [x] in tasks.md",
+          "git_agent": "git-version-manager",
+          "memory_bank_agent": "project-bank-keeper"
+        }
+      },
+      {
+        "wave_id": 3,
+        "strategy": "SEQUENTIAL_MERGE",
+        "rationale": "Wave 3: 1 independent task(s) with no file conflicts",
+        "tasks": [
+          {
+            "task_id": "T008",
+            "agent_role": "Developer",
+            "instruction": "T008: Approval queue endpoints in `handshake.py` and `mailroom_server.py` \u2014 `GET /pending` (auth) lists; `POST /approve` (auth) `{request_id, decision}` calls existing `pol.mint_invite()` on approve and attaches `{token, expires_at}` to the queue entry; `GET /join/<request_id>` (public, unguessable id) long-polls ~30s for `{status, token, card_pubkey}` (depends on T007)",
+            "file_locks": [
+              "mailroom_server.py",
+              "handshake.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T003",
+                "T002",
+                "T006",
+                "T001",
+                "T007",
+                "T005"
+              ],
+              "wave_position": 3,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T008: Approval queue endpoints in `handshake.py` and `mailroom_server.py` \u2014 `GET /pending` (auth) lists; `POST /approve` (auth) `{request_id, decision}` calls existing `pol.mint_invite()` on approve and attaches `{token, expires_at}` to the queue entry; `GET /join/<request_id>` (public, unguessable id) long-polls ~30s for `{status, token, card_pubkey}` (depends on T007)' to [x]",
+            "dependencies": [
+              "T004",
+              "T003",
+              "T002",
+              "T006",
+              "T001",
+              "T007",
+              "T005"
+            ]
+          }
+        ],
+        "checkpoint_after": {
+          "enabled": true,
+          "verification_criteria": "Verify all Wave 3 tasks are marked [x] in tasks.md",
+          "git_agent": "git-version-manager",
+          "memory_bank_agent": "project-bank-keeper"
+        }
+      },
+      {
+        "wave_id": 4,
+        "strategy": "SEQUENTIAL_MERGE",
+        "rationale": "Wave 4: 1 independent task(s) with no file conflicts",
+        "tasks": [
+          {
+            "task_id": "T009",
+            "agent_role": "Developer",
+            "instruction": "T009: Extend the `serve` subcommand in `rookery_cli.py` \u2014 spawn `mailroom_server.py`, start `discovery.announce_loop`, and run a background thread that polls `handshake.PENDING` and flashes the approve prompt to the terminal (`Peer \"X\" wants to join. Does the joining machine show this code? -> <slug> Approve? [y/N]`); interactive `y/n` calls local `POST /approve` (depends on T001, T006, T008)",
+            "file_locks": [
+              "mailroom_server.py",
+              "handshake.PENDING",
+              "rookery_cli.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T003",
+                "T002",
+                "T006",
+                "T001",
+                "T005",
+                "T007",
+                "T008"
+              ],
+              "wave_position": 4,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T009: Extend the `serve` subcommand in `rookery_cli.py` \u2014 spawn `mailroom_server.py`, start `discovery.announce_loop`, and run a background thread that polls `handshake.PENDING` and flashes the approve prompt to the terminal (`Peer \"X\" wants to join. Does the joining machine show this code? -> <slug> Approve? [y/N]`); interactive `y/n` calls local `POST /approve` (depends on T001, T006, T008)' to [x]",
+            "dependencies": [
+              "T004",
+              "T003",
+              "T002",
+              "T006",
+              "T001",
+              "T005",
+              "T007",
+              "T008"
+            ]
+          }
+        ],
+        "checkpoint_after": {
+          "enabled": true,
+          "verification_criteria": "Verify all Wave 4 tasks are marked [x] in tasks.md",
+          "git_agent": "git-version-manager",
+          "memory_bank_agent": "project-bank-keeper"
+        }
+      },
+      {
+        "wave_id": 5,
+        "strategy": "SEQUENTIAL_MERGE",
+        "rationale": "Wave 5: 1 independent task(s) with no file conflicts",
+        "tasks": [
+          {
+            "task_id": "T010",
+            "agent_role": "Developer",
+            "instruction": "T010: Implement the headless `approve` subcommand in `rookery_cli.py` \u2014 lists pending requests from `GET /pending` with their slug + pubkey + age, prompts per-entry (depends on T001, T008)",
+            "file_locks": [
+              "rookery_cli.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T003",
+                "T008",
+                "T002",
+                "T006",
+                "T001",
+                "T009",
+                "T007",
+                "T005"
+              ],
+              "wave_position": 5,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T010: Implement the headless `approve` subcommand in `rookery_cli.py` \u2014 lists pending requests from `GET /pending` with their slug + pubkey + age, prompts per-entry (depends on T001, T008)' to [x]",
+            "dependencies": [
+              "T004",
+              "T003",
+              "T008",
+              "T002",
+              "T006",
+              "T001",
+              "T009",
+              "T007",
+              "T005"
+            ]
+          }
+        ],
+        "checkpoint_after": {
+          "enabled": true,
+          "verification_criteria": "Verify all Wave 5 tasks are marked [x] in tasks.md",
+          "git_agent": "git-version-manager",
+          "memory_bank_agent": "project-bank-keeper"
+        }
+      },
+      {
+        "wave_id": 6,
+        "strategy": "SEQUENTIAL_MERGE",
+        "rationale": "Wave 6: 1 independent task(s) with no file conflicts",
+        "tasks": [
+          {
+            "task_id": "T011",
+            "agent_role": "Developer",
+            "instruction": "T011: Implement the `up` subcommand in `rookery_cli.py` \u2014 discover (URL arg OR `discovery.discover_mailrooms` + `discovery.listen` merged), pick (1=auto, many=prompt, 0=error), generate 3-word slug, `identity.load_or_create()`, `POST /join`, print `Waiting for approval. Your code: <slug>`, long-poll `GET /join/<id>` up to 5 min, TOFU-check + `known_hosts.add` the served `card_pubkey`, call `config_manager.merge_mcp_entry(\"rookery\", \"python3\", [\"rookery_mcp.py\"], {ROOKERY_NODE, ROOKERY_URL, ROOKERY_TOKEN})`, print success + wake-loop first-message (depends on T002, T003, T004, T005, T006, T007, T008)",
+            "file_locks": [
+              "known_hosts.add",
+              "rookery_mcp.py",
+              "rookery_cli.py",
+              "discovery.listen"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T003",
+                "T008",
+                "T002",
+                "T006",
+                "T001",
+                "T010",
+                "T009",
+                "T007",
+                "T005"
+              ],
+              "wave_position": 6,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T011: Implement the `up` subcommand in `rookery_cli.py` \u2014 discover (URL arg OR `discovery.discover_mailrooms` + `discovery.listen` merged), pick (1=auto, many=prompt, 0=error), generate 3-word slug, `identity.load_or_create()`, `POST /join`, print `Waiting for approval. Your code: <slug>`, long-poll `GET /join/<id>` up to 5 min, TOFU-check + `known_hosts.add` the served `card_pubkey`, call `config_manager.merge_mcp_entry(\"rookery\", \"python3\", [\"rookery_mcp.py\"], {ROOKERY_NODE, ROOKERY_URL, ROOKERY_TOKEN})`, print success + wake-loop first-message (depends on T002, T003, T004, T005, T006, T007, T008)' to [x]",
+            "dependencies": [
+              "T004",
+              "T003",
+              "T008",
+              "T002",
+              "T006",
+              "T001",
+              "T010",
+              "T009",
+              "T007",
+              "T005"
+            ]
+          }
+        ],
+        "checkpoint_after": {
+          "enabled": true,
+          "verification_criteria": "Verify all Wave 6 tasks are marked [x] in tasks.md",
+          "git_agent": "git-version-manager",
+          "memory_bank_agent": "project-bank-keeper"
+        }
+      },
+      {
+        "wave_id": 7,
+        "strategy": "SEQUENTIAL_MERGE",
+        "rationale": "Wave 7: 1 independent task(s) with no file conflicts",
+        "tasks": [
+          {
+            "task_id": "T012",
+            "agent_role": "Developer",
+            "instruction": "T012: Sidecar-served zipapp installer \u2014 new `bootstrap.py` packaging `rookery_cli.py` + `identity.py` + `known_hosts.py` + `discovery.py` + `config_manager.py` + `mailctl.py` + `rookery_mcp.py` + `rookery.py` + `schema.sql` + `security.py` into a single `.pyz`, and `GET /bootstrap` in `mailroom_server.py` serving a one-line installer that writes `~/.local/bin/rookery` mode 755 (`curl -sSL http://A:8765/bootstrap | python3 -`) (depends on T001)",
+            "file_locks": [
+              "bootstrap.py",
+              "rookery_mcp.py",
+              "schema.sql",
+              "config_manager.py",
+              "mailroom_server.py",
+              "rookery.py",
+              "mailctl.py",
+              "known_hosts.py",
+              "security.py",
+              "identity.py",
+              "rookery_cli.py",
+              "discovery.py"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T011",
+                "T003",
+                "T008",
+                "T002",
+                "T006",
+                "T001",
+                "T010",
+                "T009",
+                "T007",
+                "T005"
+              ],
+              "wave_position": 7,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T012: Sidecar-served zipapp installer \u2014 new `bootstrap.py` packaging `rookery_cli.py` + `identity.py` + `known_hosts.py` + `discovery.py` + `config_manager.py` + `mailctl.py` + `rookery_mcp.py` + `rookery.py` + `schema.sql` + `security.py` into a single `.pyz`, and `GET /bootstrap` in `mailroom_server.py` serving a one-line installer that writes `~/.local/bin/rookery` mode 755 (`curl -sSL http://A:8765/bootstrap | python3 -`) (depends on T001)' to [x]",
+            "dependencies": [
+              "T004",
+              "T011",
+              "T003",
+              "T008",
+              "T002",
+              "T006",
+              "T001",
+              "T010",
+              "T009",
+              "T007",
+              "T005"
+            ]
+          }
+        ],
+        "checkpoint_after": {
+          "enabled": true,
+          "verification_criteria": "Verify all Wave 7 tasks are marked [x] in tasks.md",
+          "git_agent": "git-version-manager",
+          "memory_bank_agent": "project-bank-keeper"
+        }
+      },
+      {
+        "wave_id": 8,
+        "strategy": "SEQUENTIAL_MERGE",
+        "rationale": "Wave 8: 1 independent task(s) with no file conflicts",
+        "tasks": [
+          {
+            "task_id": "T013",
+            "agent_role": "Developer",
+            "instruction": "T013: Write `demo_up.sh` proving the full LAN flow on one machine \u2014 reset DB, start `rookery serve` with `--card-key`, sanity-check `discovery.discover_mailrooms()`, run `rookery up http://127.0.0.1:8765` with the TEST-ONLY `ROOKERY_TEST_AUTOAPPROVE=$ADMIN_TOK` env auto-approving via `/approve` after a delay, assert `~/.claude.json` has the `rookery` MCP entry with the right env, send a piece of mail admin\u2192claude-on-B and assert the inbox row, clean up (depends on T011, T012)",
+            "file_locks": [
+              "demo_up.sh",
+              "~/.claude.json",
+              "claude.json"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T011",
+                "T003",
+                "T012",
+                "T008",
+                "T002",
+                "T006",
+                "T001",
+                "T010",
+                "T009",
+                "T007",
+                "T005"
+              ],
+              "wave_position": 8,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T013: Write `demo_up.sh` proving the full LAN flow on one machine \u2014 reset DB, start `rookery serve` with `--card-key`, sanity-check `discovery.discover_mailrooms()`, run `rookery up http://127.0.0.1:8765` with the TEST-ONLY `ROOKERY_TEST_AUTOAPPROVE=$ADMIN_TOK` env auto-approving via `/approve` after a delay, assert `~/.claude.json` has the `rookery` MCP entry with the right env, send a piece of mail admin\u2192claude-on-B and assert the inbox row, clean up (depends on T011, T012)' to [x]",
+            "dependencies": [
+              "T004",
+              "T011",
+              "T003",
+              "T012",
+              "T008",
+              "T002",
+              "T006",
+              "T001",
+              "T010",
+              "T009",
+              "T007",
+              "T005"
+            ]
+          }
+        ],
+        "checkpoint_after": {
+          "enabled": true,
+          "verification_criteria": "Verify all Wave 8 tasks are marked [x] in tasks.md",
+          "git_agent": "git-version-manager",
+          "memory_bank_agent": "project-bank-keeper"
+        }
+      },
+      {
+        "wave_id": 9,
+        "strategy": "PARALLEL_SWARM",
+        "rationale": "Wave 9: 2 independent task(s) with no file conflicts",
+        "tasks": [
+          {
+            "task_id": "T014",
+            "agent_role": "Developer",
+            "instruction": "T014: Update `README.md` files table + security/handshake section, and rewrite Scenario 4 of `docs/QUICKSTART.md` to lead with the new one-command flow (`rookery serve` on A; `curl http://<A>:8765/bootstrap | python3 -` then `rookery up` on B); remove the dangling 7-step manual instructions (depends on T013)",
+            "file_locks": [
+              "docs/QUICKSTART.md",
+              "README.md"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T011",
+                "T003",
+                "T012",
+                "T008",
+                "T002",
+                "T006",
+                "T001",
+                "T010",
+                "T009",
+                "T007",
+                "T013",
+                "T005"
+              ],
+              "wave_position": 9,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T014: Update `README.md` files table + security/handshake section, and rewrite Scenario 4 of `docs/QUICKSTART.md` to lead with the new one-command flow (`rookery serve` on A; `curl http://<A>:8765/bootstrap | python3 -` then `rookery up` on B); remove the dangling 7-step manual instructions (depends on T013)' to [x]",
+            "dependencies": [
+              "T004",
+              "T011",
+              "T003",
+              "T012",
+              "T008",
+              "T002",
+              "T006",
+              "T001",
+              "T010",
+              "T009",
+              "T007",
+              "T013",
+              "T005"
+            ]
+          },
+          {
+            "task_id": "T015",
+            "agent_role": "Developer",
+            "instruction": "T015: Add `demo_up.sh` to the FREE array in `run_all_demos.sh` (alphabetical near `demo_invite.sh`); confirm the suite passes (depends on T013)",
+            "file_locks": [
+              "demo_up.sh",
+              "run_all_demos.sh",
+              "demo_invite.sh"
+            ],
+            "sentinel_point": false,
+            "constitution_rules": [],
+            "testability": {
+              "isolated": false,
+              "has_upstream_deps": true,
+              "upstream_dep_ids": [
+                "T004",
+                "T011",
+                "T003",
+                "T012",
+                "T008",
+                "T002",
+                "T006",
+                "T001",
+                "T010",
+                "T009",
+                "T007",
+                "T013",
+                "T005"
+              ],
+              "wave_position": 9,
+              "can_test_now": true,
+              "test_hint": "integration-post-deps"
+            },
+            "completion_handshake": "Upon success, update tasks.md line containing 'T015: Add `demo_up.sh` to the FREE array in `run_all_demos.sh` (alphabetical near `demo_invite.sh`); confirm the suite passes (depends on T013)' to [x]",
+            "dependencies": [
+              "T004",
+              "T011",
+              "T003",
+              "T012",
+              "T008",
+              "T002",
+              "T006",
+              "T001",
+              "T010",
+              "T009",
+              "T007",
+              "T013",
+              "T005"
+            ]
+          }
+        ],
+        "checkpoint_after": {
+          "enabled": true,
+          "verification_criteria": "Verify all Wave 9 tasks are marked [x] in tasks.md",
+          "git_agent": "git-version-manager",
+          "memory_bank_agent": "project-bank-keeper"
+        }
+      }
+    ]
+  }
+}
