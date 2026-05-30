@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rookery — Explained</title>
+<style>
+:root{--paper:#f6f1e8;--ink:#1a1a1a;--mid:#4a4a4a;--faint:#888;--rule:#d4c9b0;--ac:#1d5b67;--acbg:#eef4f5;--mono:"Berkeley Mono","JetBrains Mono",ui-monospace,monospace;--serif:"Iowan Old Style","Georgia",serif;--sans:system-ui,-apple-system,sans-serif;}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.6;padding:3rem 1.5rem 5rem;}
+.wrap{max-width:860px;margin:0 auto;}
+h1{font-family:var(--serif);font-size:2.4rem;font-weight:700;letter-spacing:-.5px;line-height:1.15;}
+h2{font-family:var(--serif);font-size:1.2rem;font-weight:700;color:var(--ac);margin-bottom:.6rem;}
+h3{font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--faint);margin-bottom:.4rem;}
+p{color:var(--mid);margin-bottom:.65rem;}p:last-child{margin-bottom:0;}
+a{color:var(--ac);}
+hr{border:none;border-top:1px solid var(--rule);margin:2.2rem 0;}
+.tagline{font-family:var(--serif);font-size:1rem;color:var(--mid);font-style:italic;margin-top:.45rem;max-width:560px;}
+/* diagram */
+pre.diagram{font-family:var(--mono);font-size:.76rem;line-height:1.5;background:#ede8dc;border-left:3px solid var(--ac);padding:1.1rem 1.4rem;overflow-x:auto;color:var(--ink);border-radius:2px;}
+/* cards */
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-top:.9rem;}
+@media(max-width:800px){.cards{grid-template-columns:1fr;}.file-grid{grid-template-columns:1fr!important;}}
+.card{background:#fff;border:1px solid var(--rule);border-top:3px solid var(--ac);padding:1rem;}
+.ctitle{font-family:var(--serif);font-weight:700;font-size:.93rem;margin-bottom:.2rem;}
+.csub{font-size:.76rem;color:var(--faint);font-style:italic;margin-bottom:.45rem;}
+.card p{font-size:.83rem;margin-bottom:.4rem;}
+.card code{font-family:var(--mono);font-size:.71rem;}
+/* protocol panel */
+.panel{background:var(--acbg);border:1px solid #b5d2d7;padding:1.1rem 1.3rem;margin-top:.9rem;}
+.pl{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--ac);margin:.8rem 0 .25rem;}
+.pl:first-child{margin-top:0;}
+pre.json{font-family:var(--mono);font-size:.71rem;line-height:1.5;color:var(--ink);}
+.lc{font-family:var(--mono);font-size:.8rem;}
+ul.tr{font-size:.83rem;color:var(--mid);padding-left:1.2rem;}
+ul.tr li{list-style:disc;margin-bottom:.15rem;}
+/* security tiers */
+.tier{display:flex;align-items:baseline;gap:.8rem;padding:.6rem .9rem;border-left:3px solid var(--rule);margin-bottom:.4rem;background:#faf7f1;}
+.tn{font-family:var(--mono);font-size:.7rem;font-weight:700;color:var(--faint);min-width:2rem;flex-shrink:0;}
+.tname{font-weight:700;font-size:.86rem;min-width:8.5rem;color:var(--ink);}
+.tdesc{font-size:.82rem;color:var(--mid);}
+.tier.hi{border-left-color:var(--ac);}
+.note{font-size:.78rem;color:var(--faint);margin-top:.5rem;font-style:italic;}
+/* engines table */
+table{width:100%;border-collapse:collapse;font-size:.83rem;margin-top:.8rem;}
+th{text-align:left;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);border-bottom:2px solid var(--rule);padding:.25rem .5rem .35rem 0;}
+td{padding:.3rem .5rem .3rem 0;border-bottom:1px solid var(--rule);color:var(--mid);vertical-align:top;}
+td:first-child{font-family:var(--mono);font-size:.76rem;color:var(--ink);}
+.w{color:var(--ac);font-weight:700;font-size:.7rem;}
+.c{color:#9b6a2a;font-weight:700;font-size:.7rem;}
+/* file grid */
+.file-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.2rem 2rem;margin-top:.7rem;}
+.fe{font-size:.81rem;color:var(--mid);}
+.fe code{font-family:var(--mono);font-size:.74rem;color:var(--ink);}
+/* footer */
+.footer{padding-top:1.8rem;border-top:1px solid var(--rule);font-size:.78rem;color:var(--faint);}
+.footer a{color:var(--ac);}
+.dlinks{display:flex;gap:1.2rem;flex-wrap:wrap;margin-top:.4rem;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header style="padding:2rem 0 2.2rem">
+  <h1>Rookery</h1>
+  <p class="tagline">A local-first mesh for agents to talk to each other unprompted.<br>
+  SQLite mailroom as system of record. Python stdlib only.</p>
+</header>
+
+<hr>
+
+<!-- 1. What it is -->
+<section>
+  <h2>What it is</h2>
+  <p>Rookery is a durable message bus for headless agent processes. A SQLite database — the
+  <strong>mailroom</strong> — is the single system of record and full audit log: every message, state
+  transition, and credential request lives there, queryable at any time. Nodes are ordinary processes
+  that wake only when real mail arrives, so an idle node costs nothing. A non-LLM watcher called the
+  <strong>postmaster</strong> handles routing and wake-ups; the LLM fires only when needed. Claude,
+  Codex, and Gemini are equal peers. The HTTP sidecar speaks A2A (Agent2Agent JSON-RPC), so external
+  agents on other frameworks can discover and task Rookery nodes without knowing about the mailroom.</p>
+</section>
+
+<hr>
+
+<!-- 2. The model -->
+<section>
+  <h2>The model</h2>
+<pre class="diagram">
+  sender
+    |  send_mail.py / MAILTO: directive / MCP send()
+    v
+ +--------------------------------------------+
+ |       mailroom.db  (SQLite WAL)             |
+ |  nodes · inbox · credential_requests        |
+ |  every row = durable audit log              |
+ +--------+-------------------------+----------+
+          |                         |
+          | postmaster.py polls     | claim() marks message
+          | (cheap, non-LLM loop)   | pending -> inflight
+          v                         v
+ +-----------------+       +-----------------+
+ | node: architect |  MAIL | node: triage    |
+ | (asleep / $0)   |------>| (asleep / $0)   |
+ | wakes unprompted|inflight wakes unprompted|
+ | NEEDCRED: ...   |       | acks -> done    |
+ +--------+--------+       +-----------------+
+          |
+          | phone home (CIBA)
+          v
+   postmaster delivers token_ref pointer
+   (secret stays in env/keychain, never in DB)
+</pre>
+  <p style="margin-top:.65rem;font-size:.82rem;color:var(--faint);">
+    Mail lifecycle: <strong>pending</strong> &rarr; <strong>inflight</strong> (claimed, heartbeated)
+    &rarr; <strong>done</strong> (acknowledged). Stale inflight rows are requeued only after
+    the claiming node goes silent past <code>NODE_DEAD_AFTER</code>.
+  </p>
+</section>
+
+<hr>
+
+<!-- 3. Three deployment modes -->
+<section>
+  <h2>Three ways to deploy</h2>
+  <div class="cards">
+    <div class="card">
+      <div class="ctitle">Same machine</div>
+      <div class="csub">the simplest case</div>
+      <p>One <code>rookery.db</code> file, two or more node processes.
+         No network, no sidecar. Nodes import the shared library directly.</p>
+      <code>python3 node_runner.py --node-id architect --engine claude<br>
+python3 node_runner.py --node-id triage --engine codex</code>
+    </div>
+    <div class="card">
+      <div class="ctitle">Same network (LAN)</div>
+      <div class="csub">no shared filesystem</div>
+      <p>HTTP sidecar on the DB host; peers join via <code>mailctl.py</code> over TCP.
+         Never put SQLite on a network share.</p>
+      <code>python3 mailroom_server.py --host 0.0.0.0 --port 8765<br>
+python3 mailctl.py loop --url http://host:8765 --node bob</code>
+    </div>
+    <div class="card">
+      <div class="ctitle">Internet</div>
+      <div class="csub">token alone does not encrypt</div>
+      <p>TLS + bearer token + signed Ed25519 card + hardened per-node policy.
+         Use a tunnel (Tailscale, Cloudflare, <code>ssh -L</code>) for public internet.</p>
+      <code>./gen_cert.sh<br>
+python3 mailroom_server.py \<br>
+&nbsp;&nbsp;--tls-cert rookery-cert.pem \<br>
+&nbsp;&nbsp;--tls-key rookery-key.pem \<br>
+&nbsp;&nbsp;--token $ROOKERY_TOKEN --card-key ed25519.pem</code>
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- 4. A2A protocol -->
+<section>
+  <h2>The protocol &mdash; A2A</h2>
+  <div class="panel">
+    <div class="pl">JSON-RPC request (message/send)</div>
+<pre class="json">{ "jsonrpc": "2.0", "method": "message/send",
+  "params": { "message": {
+    "metadata": { "recipient": "triage" },
+    "parts": [{ "kind": "text", "text": "review the diff in PR #42" }]
+  }}}</pre>
+    <div class="pl">Task lifecycle</div>
+    <div class="lc">submitted &nbsp;&rarr;&nbsp; working &nbsp;&rarr;&nbsp; completed</div>
+    <div class="pl">Three transports</div>
+    <ul class="tr">
+      <li><strong>Request / response</strong> &mdash; <code>message/send</code> returns a Task; poll with <code>tasks/get</code></li>
+      <li><strong>SSE streaming</strong> &mdash; <code>message/stream</code> pushes submitted &rarr; artifact-update &rarr; completed events</li>
+      <li><strong>Webhook push</strong> &mdash; include <code>pushNotificationConfig</code> in the request; sidecar POSTs the finished Task to your URL</li>
+    </ul>
+    <div class="pl">Discovery</div>
+    <div style="font-size:.83rem;color:var(--mid);">
+      <code>GET /.well-known/agent-card.json</code> &mdash; lists every registered node as a skill.
+      Serve with <code>--card-key &lt;pem&gt;</code> for Ed25519-signed card; verify with <code>verify_card.py &lt;url&gt;</code>.
+    </div>
+  </div>
+</section>
+
+<hr>
+
+<!-- 5. Security tiers -->
+<section>
+  <h2>Security in three tiers</h2>
+  <div class="tier">
+    <div class="tn">Tier 1</div>
+    <div class="tname">Shared bearer token</div>
+    <div class="tdesc">Start with <code>--token $ROOKERY_TOKEN</code>. Any caller with the token is
+      authenticated; all nodes are reachable. <code>DefaultPolicy</code>. Fine for trusted LAN.</div>
+  </div>
+  <div class="tier">
+    <div class="tn">Tier 2</div>
+    <div class="tname">Signed agent card</div>
+    <div class="tdesc">Generate an Ed25519 key with <code>gen_card_key.py</code>; serve with
+      <code>--card-key &lt;pem&gt;</code>. The card carries the signature and public key, proving integrity.
+      Pin the key out-of-band (JWKS / DID) for true identity.</div>
+  </div>
+  <div class="tier hi">
+    <div class="tn">Tier 3</div>
+    <div class="tname">Hardened policy</div>
+    <div class="tdesc">Drop in <code>policy_hardened.py</code> via
+      <code>ROOKERY_SECURITY=policy_hardened:HardenedPolicy</code>.
+      Every principal gets its own bearer token and a per-target ACL (<code>may_task</code>).
+      Unknown token &rarr; 401, no anonymous fallthrough. Inbound messages screened for
+      injection patterns at the A2A boundary and at each consuming node.</div>
+  </div>
+  <p class="note">Credential secrets are never stored in the DB. <code>token_ref</code> is a pointer
+    resolved at use time via <code>env://VAR</code> or <code>keychain://service/account</code>.</p>
+</section>
+
+<hr>
+
+<!-- 6. Engines table -->
+<section>
+  <h2>Engines</h2>
+  <table>
+    <thead>
+      <tr><th>Engine</th><th>How it runs</th><th>Latency</th><th>State</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>mock</td><td>Deterministic stand-in. No API call. Proves plumbing.</td><td>&lt; 1 ms</td><td><span class="w">WARM</span></td></tr>
+      <tr><td>claude</td><td>Headless <code>claude -p</code>. Full harness; MCP tools available via <code>--allowed-tools</code>.</td><td>~115 s/turn</td><td><span class="c">COLD</span></td></tr>
+      <tr><td>codex</td><td>Non-interactive <code>codex exec</code>, read-only sandbox; <code>-o</code> for clean output capture.</td><td>varies</td><td><span class="c">COLD</span></td></tr>
+      <tr><td>gemini</td><td>Non-interactive <code>gemini --skip-trust -p</code>. Same wire protocol.</td><td>varies</td><td><span class="c">COLD</span></td></tr>
+      <tr><td>claude-sdk</td><td>Warm long-lived Agent SDK session (<code>sdk_node.py</code>). <code>setting_sources=[]</code> disables hooks; MCP attached via <code>--mcp &lt;name&gt;</code>.</td><td>open 2 s &middot; first 7 s &middot; warm ~2 s/turn</td><td><span class="w">WARM</span></td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:.55rem;font-size:.78rem;color:var(--faint);">
+    Use <code>claude-sdk</code> for persistent partners; <code>claude -p</code> for ephemeral workers
+    where cold-start cost per turn is acceptable.
+  </p>
+</section>
+
+<hr>
+
+<!-- 7. What's in the box -->
+<section>
+  <h2>What's in the box</h2>
+  <div class="file-grid">
+    <div class="fe"><code>schema.sql</code> &mdash; mailroom table definitions (single source of truth)</div>
+    <div class="fe"><code>rookery.py</code> &mdash; shared lib: connect, send, claim, ack, credential ops</div>
+    <div class="fe"><code>node_runner.py</code> &mdash; own-loop node (all engines; <code>--lifecycle</code>, <code>--allowed-tools</code>)</div>
+    <div class="fe"><code>sdk_node.py</code> &mdash; warm Claude Agent SDK node, kills cold start</div>
+    <div class="fe"><code>postmaster.py</code> &mdash; central watcher (mode B); warm pool, wakeups, persistence</div>
+    <div class="fe"><code>mailroom_server.py</code> &mdash; stdlib HTTP sidecar: REST + A2A JSON-RPC + SSE + TLS</div>
+    <div class="fe"><code>mailctl.py</code> &mdash; one-file stdlib HTTP client for peers on other machines</div>
+    <div class="fe"><code>relay.py</code> &mdash; federation relay; forwards <code>node@remote</code> mail; DLQ</div>
+    <div class="fe"><code>policy_hardened.py</code> &mdash; hardened security: per-node identity + per-target ACL</div>
+    <div class="fe"><code>rookery_mcp.py</code> &mdash; MCP server exposing send / check_inbox / await_message / roster</div>
+    <div class="fe"><code>terminal_node.py</code> &mdash; bridges a human/terminal-agent (tmux/wezterm/zellij) into the mesh</div>
+    <div class="fe"><code>gen_card_key.py</code> / <code>verify_card.py</code> &mdash; generate and verify Ed25519 signed cards</div>
+  </div>
+</section>
+
+<hr>
+
+<!-- 8. Footer -->
+<footer class="footer">
+  <div>Rookery's core mesh is Python 3 stdlib only &mdash; no dependencies.
+    Paid demos require <code>claude</code> / <code>codex</code> logged in;
+    SDK demos add <code>pip install claude-agent-sdk</code>.</div>
+  <div class="dlinks">
+    <a href="../README.md">README</a>
+    <a href="QUICKSTART.md">QUICKSTART</a>
+    <a href="COOKBOOK.md">COOKBOOK</a>
+    <a href="STORIES.md">STORIES</a>
+    <a href="index.html">Design rationale</a>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>

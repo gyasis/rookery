@@ -26,6 +26,14 @@ without ever putting a secret in a prompt.
      mesh_approve ──▶ JIT token *pointer* (secret stays in keychain)
 ```
 
+## Docs
+
+- **[`docs/QUICKSTART.md`](docs/QUICKSTART.md)** — paste-and-run setup for the three deployment shapes: same machine · same network · internet (full security stack).
+- **[`docs/COOKBOOK.md`](docs/COOKBOOK.md)** — 22 small recipes (start the mailroom, wire each engine, federate, sign cards, install the hardened policy, …).
+- **[`docs/STORIES.md`](docs/STORIES.md)** — narrative use-cases with the commands lifted from the matching demo (Claude↔Codex review, Mac Studio joins over LAN, external A2A agent, federation, CIBA credential phone-home, three-vendor parallel work).
+- **[`docs/rookery-explained.html`](docs/rookery-explained.html)** — single-page visual explainer (model · deploy shapes · A2A · security tiers · engines).
+- Design rationale: [`docs/index.html`](docs/index.html) (links the two research reports + paired-debate transcript).
+
 ## Why this shape (from the paired debate)
 
 - **State vs signal.** Durable state lives in SQLite (survives crashes, fully
@@ -321,7 +329,7 @@ task `researcher` OK but `reviewer` denied, architect → `reviewer` OK.
 | `demo_real.sh` | real Claude ↔ Codex handoff |
 | `demo_real_research.sh` | real DeepLake tool-use → Claude → Codex → human |
 | `cleanup.sh` | reset the mailroom |
-| `docs/` | the research + paired-debate reports (`index.html`) |
+| `docs/` | QUICKSTART · COOKBOOK · STORIES · `rookery-explained.html` (visual explainer) + the research / paired-debate reports |
 
 ## Known v1 limitations (deliberate)
 
