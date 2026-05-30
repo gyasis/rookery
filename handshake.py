@@ -49,3 +49,38 @@ def get(request_id: str) -> dict | None:
     """Return a deep copy of the entry for request_id, or None if not found."""
     entry = PENDING.get(request_id)
     return copy.deepcopy(entry) if entry is not None else None
+
+
+def approve(request_id: str, mint_invite_fn) -> dict | None:
+    """Approve a pending join request, minting an invite token.
+
+    Args:
+        request_id:     The request to approve.
+        mint_invite_fn: Callable matching pol.mint_invite(node_id, may_task, ttl_minutes).
+
+    Returns:
+        Deep copy of the updated entry, or None if not found / already decided.
+    """
+    entry = PENDING.get(request_id)
+    if entry is None or entry["status"] != "pending":
+        return None
+    info = mint_invite_fn(entry["node_id"], may_task=["*"], ttl_minutes=60)
+    entry["status"] = "approved"
+    entry["decision_at"] = time.time()
+    entry["token"] = info["token"]
+    entry["expires_at"] = info.get("expires_at")
+    return copy.deepcopy(entry)
+
+
+def deny(request_id: str) -> dict | None:
+    """Deny a pending join request.
+
+    Returns:
+        Deep copy of the updated entry, or None if not found / already decided.
+    """
+    entry = PENDING.get(request_id)
+    if entry is None or entry["status"] != "pending":
+        return None
+    entry["status"] = "denied"
+    entry["decision_at"] = time.time()
+    return copy.deepcopy(entry)

@@ -240,7 +240,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         pol = security.get_policy()
-        if not pol.is_public_path(u.path) and pol.authenticate(self.headers) is None:
+        path_public = pol.is_public_path(u.path) or u.path.startswith("/join/")
+        if not path_public and pol.authenticate(self.headers) is None:
             return self._reply({"error": "unauthorized"}, 401)
         q = parse_qs(u.query)
         c = R.connect()
@@ -252,6 +253,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply({"messages": _rows(R.fetch_undelivered(c, q["node"][0]))})
         if u.path == "/thread":
             return self._reply({"messages": _rows(R.fetch_thread(c, q["node"][0]))})
+        if u.path == "/pending":
+            return self._reply({"pending": handshake.list_pending()})
+        if u.path.startswith("/join/"):
+            request_id = u.path[len("/join/"):]
+            if not request_id:
+                return self._reply({"error": "not found"}, 404)
+            if handshake.get(request_id) is None:
+                return self._reply({"error": "unknown request_id"}, 404)
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                entry = handshake.get(request_id)
+                if entry is None:
+                    return self._reply({"error": "unknown request_id"}, 404)
+                if entry["status"] == "approved":
+                    return self._reply({"status": "approved", "token": entry["token"],
+                                        "card_pubkey": _card_pubkey(),
+                                        "expires_at": entry["expires_at"]})
+                if entry["status"] == "denied":
+                    return self._reply({"status": "denied"})
+                time.sleep(0.5)
+            return self._reply({"status": "pending"})
         self._reply({"error": "not found"}, 404)
 
     def _a2a_stream(self, conn, rpc, principal="a2a"):
@@ -339,6 +361,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply({"id": rid})
         if u.path == "/invite":
             return self._reply(mint_invite_response(pol, d or {}))
+        if u.path == "/approve":
+            request_id = (d or {}).get("request_id")
+            decision = (d or {}).get("decision")
+            if decision == "approve":
+                result = handshake.approve(request_id, pol.mint_invite)
+            else:
+                result = handshake.deny(request_id)
+            if result is None:
+                return self._reply({"error": "unknown request_id"}, 404)
+            return self._reply({"ok": True, "status": result["status"],
+                                "token": result.get("token"),
+                                "expires_at": result.get("expires_at")})
         if u.path == "/join":
             try:
                 node_id = d.get("node_id"); pubkey_b64 = d.get("pubkey_b64"); slug = d.get("slug")
