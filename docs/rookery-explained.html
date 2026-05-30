@@ -19,10 +19,44 @@ hr{border:none;border-top:1px solid var(--rule);margin:2.2rem 0;}
 .tagline{font-family:var(--serif);font-size:1rem;color:var(--mid);font-style:italic;margin-top:.45rem;max-width:560px;}
 /* deploy diagram stack */
 .deploy{margin-top:1.4rem;}
-.deploy-row{margin-top:1.2rem;}
-.deploy-row:first-child{margin-top:0;}
-.deploy-row h3{color:var(--ac);margin-bottom:.4rem;}
-.deploy-row pre.diagram{font-size:.72rem;}
+.deploy-row{margin-top:1.4rem;}
+.deploy-row:first-child{margin-top:.4rem;}
+.deploy-row h3{color:var(--ac);margin-bottom:.55rem;}
+/* topology pill-boxes */
+.topo{display:flex;flex-wrap:wrap;gap:.8rem;align-items:stretch;margin:.3rem 0 .3rem;}
+.topo > .box{flex:1 1 16rem;}
+.topo > .link{display:flex;flex-direction:column;justify-content:center;align-items:center;font-family:var(--mono);font-size:.72rem;color:var(--ink);padding:.5rem .4rem;min-width:5.5rem;text-align:center;flex:0 0 auto;line-height:1.5;}
+.topo > .link strong{color:var(--ac);display:block;margin-bottom:.2rem;letter-spacing:.06em;font-size:.75rem;}
+.topo > .link::after{content:"\25C0\3000\2550\2550\2550\2550\2550\2550\2550\3000\25B6";display:block;color:var(--ac);opacity:.55;font-size:.6rem;letter-spacing:.04em;margin-top:.3rem;}
+/* Pill boxes: colored title bar + white body. Earthy palette per box type. */
+.box{background:#fff;border:1px solid var(--rule);border-radius:10px;overflow:hidden;box-shadow:0 1px 0 rgba(0,0,0,.05);display:flex;flex-direction:column;min-width:0;color:var(--ink);}
+.box .title{background:var(--ac);color:#f6f1e8;font-family:var(--mono);font-size:.76rem;font-weight:700;padding:.5rem .85rem;letter-spacing:.05em;display:flex;justify-content:space-between;align-items:baseline;gap:.6rem;}
+.box .title .tag{font-size:.62rem;font-weight:400;opacity:.85;letter-spacing:.07em;text-transform:uppercase;color:inherit;white-space:nowrap;}
+.box .body{padding:.6rem .85rem .75rem;font-family:var(--mono);font-size:.75rem;color:var(--ink);line-height:1.6;flex:1;background:#fff;}
+.box .body ul{list-style:none;padding:0;margin:0;}
+.box .body li{margin-bottom:.08rem;}
+.box .body li.muted{color:var(--mid);font-size:.7rem;font-style:italic;}
+.box .body li.kv{display:flex;gap:.5rem;align-items:baseline;}
+.box .body li.kv .k{color:var(--faint);min-width:5.4rem;font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;flex-shrink:0;}
+.box .body code{font-family:inherit;background:#f3ecdb;padding:.04rem .35rem;border-radius:3px;color:var(--ink);}
+.box .body em{color:var(--mid);}
+/* earthy color variants — each box type gets a distinct title bar */
+.box.teal   .title{background:#1d5b67;}   /* default — mailroom / neutral */
+.box.brick  .title{background:#a8503a;}   /* red — security / warning */
+.box.ochre  .title{background:#b8862c;}   /* yellow — node / handoff */
+.box.indigo .title{background:#2c5f7c;}   /* blue — primary host */
+.box.moss   .title{background:#5a7340;}   /* green — peer / outbound */
+.box.bronze .title,.box.alt .title{background:#9b6a2a;}  /* bronze — CIBA / credentials */
+.caption{font-family:var(--sans);font-size:.78rem;color:var(--faint);font-style:italic;margin:.25rem 0 .2rem;}
+@media(max-width:780px){.topo > .link::after{content:"\2B07\3000\2B07";}.topo > .link{padding:.3rem 0;min-width:0;width:100%;}}
+/* vertical flow (the model diagram) */
+.flow{display:flex;flex-direction:column;gap:.55rem;align-items:stretch;margin:1rem 0 .4rem;}
+.flow > .row{display:flex;justify-content:center;}
+.flow > .row > .box{flex:0 1 auto;min-width:18rem;max-width:38rem;}
+.flow > .topo{margin:0;}
+.flow .v-arrow{display:flex;flex-direction:column;align-items:center;font-family:var(--mono);font-size:.72rem;color:var(--mid);padding:.1rem 0 .15rem;text-align:center;line-height:1.45;}
+.flow .v-arrow strong{color:var(--ac);}
+.flow .v-arrow::before{content:"\25BC";display:block;color:#b7a987;font-size:.85rem;line-height:1;margin-bottom:.2rem;}
 /* diagram */
 pre.diagram{font-family:var(--mono);font-size:.76rem;line-height:1.5;background:#ede8dc;border-left:3px solid var(--ac);padding:1.1rem 1.4rem;overflow-x:auto;color:var(--ink);border-radius:2px;}
 /* cards */
@@ -93,36 +127,77 @@ td:first-child{font-family:var(--mono);font-size:.76rem;color:var(--ink);}
 <!-- 2. The model -->
 <section>
   <h2>The model</h2>
-<pre class="diagram">
-  sender
-    |  send_mail.py / MAILTO: directive / MCP send()
-    v
- +--------------------------------------------+
- |       mailroom.db  (SQLite WAL)             |
- |  nodes · inbox · credential_requests        |
- |  every row = durable audit log              |
- +--------+-------------------------+----------+
-          |                         |
-          | postmaster.py polls     | claim() marks message
-          | (cheap, non-LLM loop)   | pending -> inflight
-          v                         v
- +-----------------+       +-----------------+
- | node: architect |  MAIL | node: triage    |
- | (asleep / $0)   |------>| (asleep / $0)   |
- | wakes unprompted|inflight wakes unprompted|
- | NEEDCRED: ...   |       | acks -> done    |
- +--------+--------+       +-----------------+
-          |
-          | phone home (CIBA)
-          v
-   postmaster delivers token_ref pointer
-   (secret stays in env/keychain, never in DB)
-</pre>
-  <p style="margin-top:.65rem;font-size:.82rem;color:var(--faint);">
-    Mail lifecycle: <strong>pending</strong> &rarr; <strong>inflight</strong> (claimed, heartbeated)
-    &rarr; <strong>done</strong> (acknowledged). Stale inflight rows are requeued only after
-    the claiming node goes silent past <code>NODE_DEAD_AFTER</code>.
-  </p>
+  <div class="flow">
+
+    <div class="row">
+      <div class="box moss">
+        <div class="title">sender<span class="tag">any entry point</span></div>
+        <div class="body">
+          <ul>
+            <li><code>send_mail.py</code> &middot; the scripting path</li>
+            <li><code>MAILTO:&lt;node&gt;:</code> directive in an agent reply</li>
+            <li><code>rookery_mcp.send()</code> from a Claude Code session</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="v-arrow">writes a row</div>
+
+    <div class="row">
+      <div class="box indigo" style="flex:1;max-width:none;width:100%;">
+        <div class="title">mailroom.db<span class="tag">sqlite &middot; wal &middot; audit log</span></div>
+        <div class="body">
+          <ul>
+            <li><code>nodes</code> &middot; <code>inbox</code> &middot; <code>credential_requests</code></li>
+            <li class="muted">every row is durable &mdash; the audit log IS the database</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="v-arrow"><strong>postmaster.py</strong> polls (cheap, non-LLM) &middot;
+      <code>claim()</code> marks <code>pending &rarr; inflight</code></div>
+
+    <div class="topo">
+      <div class="box brick">
+        <div class="title">node: architect<span class="tag">asleep / $0</span></div>
+        <div class="body">
+          <ul>
+            <li>wakes only on its own mail</li>
+            <li>may emit <code>NEEDCRED:&lt;resource&gt;</code></li>
+          </ul>
+        </div>
+      </div>
+      <div class="link"><strong>MAIL</strong>inflight handoff</div>
+      <div class="box ochre">
+        <div class="title">node: triage<span class="tag">asleep / $0</span></div>
+        <div class="body">
+          <ul>
+            <li>wakes only on its own mail</li>
+            <li>acks &middot; status &rarr; <code>done</code></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="v-arrow">phone home (CIBA) &middot; out-of-band approval</div>
+
+    <div class="row">
+      <div class="box alt">
+        <div class="title">token_ref pointer (JIT)<span class="tag">never the secret</span></div>
+        <div class="body">
+          postmaster delivers a pointer &mdash; <code>env://VAR</code> or
+          <code>keychain://service/account</code>. The secret stays in env / keychain,
+          never the DB and never a prompt.
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <p class="caption">Mail lifecycle: <strong>pending</strong> &rarr; <strong>inflight</strong>
+    (claimed, heartbeated) &rarr; <strong>done</strong> (acknowledged). Stale inflight rows
+    are requeued only after the claiming node goes silent past <code>NODE_DEAD_AFTER</code>.</p>
 </section>
 
 <hr>
@@ -163,49 +238,157 @@ python3 mailroom_server.py \<br>
   <div class="deploy">
     <div class="deploy-row">
       <h3>Same machine &mdash; topology</h3>
-<pre class="diagram">
- +-------- host: laptop -----------------+
- |                                       |
- |   node A --+                          |
- |            +--> rookery.db  (WAL)     |
- |   node B --+         ^                |
- |            |         | polls + wakes  |
- |            +---  postmaster.py        |
- |                                       |
- +---------------------------------------+
-        one process per node  ·  no network  ·  no sidecar
-</pre>
+      <div class="topo">
+        <div class="box teal">
+          <div class="title">host: laptop<span class="tag">one process</span></div>
+          <div class="body">
+            <ul>
+              <li><code>node A</code> &nbsp;&rarr;&nbsp; <code>rookery.db</code> (WAL)</li>
+              <li><code>node B</code> &nbsp;&rarr;&nbsp; <code>rookery.db</code></li>
+              <li class="muted">^ both read/write the same file</li>
+              <li><code>postmaster.py</code> polls &amp; wakes nodes</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <p class="caption">one process per node &middot; no network &middot; no sidecar</p>
     </div>
 
     <div class="deploy-row">
       <h3>Same network (LAN) &mdash; topology</h3>
-<pre class="diagram">
- +--- host A -----------+                +--- host B -----------+
- |  mailroom.db          |   LAN (TCP)   |  mailctl.py           |
- |  mailroom_server.py   | &lt;===========&gt; |  loop --node bob      |
- |  postmaster.py        |    /send      |  (one-file client)    |
- |  :8765  (HTTP)        |    /inbox     |                       |
- +-----------------------+    /ack       +-----------------------+
-            sidecar = HTTP face for the SQLite mailroom
-            (never put rookery.db on a network share)
-</pre>
+      <div class="topo">
+        <div class="box indigo">
+          <div class="title">host A<span class="tag">mailroom</span></div>
+          <div class="body">
+            <ul>
+              <li><code>rookery.db</code> (SQLite, WAL)</li>
+              <li><code>mailroom_server.py</code></li>
+              <li><code>postmaster.py</code></li>
+              <li class="muted">listens on <code>:8765</code> (HTTP)</li>
+            </ul>
+          </div>
+        </div>
+        <div class="link"><strong>LAN (TCP)</strong>/send · /inbox · /ack</div>
+        <div class="box moss">
+          <div class="title">host B<span class="tag">peer</span></div>
+          <div class="body">
+            <ul>
+              <li><code>mailctl.py loop</code></li>
+              <li><code>--node bob</code></li>
+              <li class="muted">one stdlib file, scp'd over</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <p class="caption">sidecar = HTTP face for the SQLite mailroom &middot; never put <code>rookery.db</code> on a network share</p>
     </div>
 
     <div class="deploy-row">
       <h3>Internet &mdash; topology</h3>
-<pre class="diagram">
- +--- host A -----------+    ==[ tunnel + TLS ]==     +--- host B -----------+
- |  TLS sidecar :8765    |    Tailscale / Cloudflare /  |  mailctl.py loop      |
- |  --token              |    ssh -L                    |  verify_card.py       |
- |  --card-key &lt;pem&gt;     | &lt;==========================&gt; |  ROOKERY_TOKEN        |
- |  HardenedPolicy +     |    bearer + Ed25519-         |  node@remote          |
- |  per-node identity    |    signed agent card         |                       |
- +-----------------------+                              +-----------------------+
-   token authenticates  ·  TLS encrypts  ·  signed card proves integrity
-   pin the public key out-of-band (JWKS / DID) for true identity
-</pre>
+      <div class="topo">
+        <div class="box brick">
+          <div class="title">host A<span class="tag">hardened mailroom</span></div>
+          <div class="body">
+            <ul>
+              <li class="kv"><span class="k">port</span>:8765 (HTTPS)</li>
+              <li class="kv"><span class="k">tls</span>--tls-cert / --tls-key</li>
+              <li class="kv"><span class="k">auth</span>--token <code>$ROOKERY_TOKEN</code></li>
+              <li class="kv"><span class="k">card</span>--card-key &lt;ed25519.pem&gt;</li>
+              <li class="kv"><span class="k">policy</span>HardenedPolicy + ACL</li>
+            </ul>
+          </div>
+        </div>
+        <div class="link"><strong>tunnel + TLS</strong>Tailscale / Cloudflare / ssh -L<br>bearer + Ed25519 card</div>
+        <div class="box ochre">
+          <div class="title">host B<span class="tag">peer</span></div>
+          <div class="body">
+            <ul>
+              <li><code>mailctl.py loop</code></li>
+              <li><code>verify_card.py</code></li>
+              <li class="kv"><span class="k">env</span><code>ROOKERY_TOKEN</code></li>
+              <li class="kv"><span class="k">node</span><code>node@remote</code></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <p class="caption">token authenticates &middot; TLS encrypts &middot; signed card proves integrity &middot; pin the public key out-of-band (JWKS / DID) for true identity</p>
     </div>
   </div>
+</section>
+
+<hr>
+
+<!-- 3b. Bring a running coding agent into the mesh -->
+<section>
+  <h2>Bring a running coding agent into the mesh</h2>
+  <p>You're sitting in a Claude Code session on one machine; the mailroom lives on
+    another. The wrapper is <code>rookery_mcp.py</code> &mdash; wired into the session's
+    <code>~/.claude.json</code> with <code>ROOKERY_URL</code> pointing at host A's sidecar.
+    The agent gets one tool that <em>waits</em> for mail (<code>await_message</code>,
+    blocking) plus <code>send</code> / <code>roster</code>. <strong>The agent doesn't
+    poll &mdash; the tool blocks until mail arrives, then returns it.</strong> One call
+    at session start, then the mesh wakes the agent for the rest of the session.</p>
+  <div class="topo">
+    <div class="box indigo">
+      <div class="title">host A<span class="tag">always-on</span></div>
+      <div class="body">
+        <ul>
+          <li><code>mailroom.db</code> (SQLite, WAL)</li>
+          <li><code>mailroom_server.py :8765</code></li>
+          <li><code>postmaster.py</code></li>
+          <li class="muted">where mail is sent &amp; routed</li>
+        </ul>
+      </div>
+    </div>
+    <div class="link"><strong>LAN / VPN / TLS</strong>HTTP + bearer token</div>
+    <div class="box moss">
+      <div class="title">host B<span class="tag">your claude box</span></div>
+      <div class="body">
+        <ul>
+          <li>Claude Code session</li>
+          <li><code>rookery</code> MCP server wired in <code>~/.claude.json</code></li>
+          <li class="kv"><span class="k">env</span><code>ROOKERY_URL=https://A:8765</code></li>
+          <li class="kv"><span class="k">env</span><code>ROOKERY_NODE=claude-on-B</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="topo">
+    <div class="box alt" style="flex-basis:100%;">
+      <div class="title">wake loop &mdash; the agent is woken, never polls<span class="tag">one setup message</span></div>
+      <div class="body">
+        <ul>
+          <li>1. You send ONE message at session start:<br>
+            &nbsp;&nbsp;<em>"Loop on <code>rookery.await_message(timeout=300)</code>. Act on what it returns. Then call it again."</em></li>
+          <li>2. Tool call BLOCKS on host B (the tool polls A internally).</li>
+          <li>3. Mail lands on host A &rarr; the tool returns it.</li>
+          <li>4. Agent acts &middot; calls <code>rookery.send(to, body)</code> for replies.</li>
+          <li>5. Goes back to <code>await_message</code> &mdash; sleeps until the next mail.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="tier hi">
+    <div class="tn">Tool</div>
+    <div class="tname">await_message (blocking)</div>
+    <div class="tdesc">The tool itself polls the mailroom on the agent's behalf and
+      returns when mail arrives (or after <code>timeout</code> seconds, default 30).
+      The agent sees this as "the mesh handed me work" &mdash; no polling, no repeated
+      "is there mail?" checks. Same cross-host wire as
+      <code>mailctl.py</code>; <code>ROOKERY_URL</code> + <code>ROOKERY_TOKEN</code>
+      reach the sidecar on host A.</div>
+  </div>
+  <div class="tier">
+    <div class="tn">Tool</div>
+    <div class="tname">send · roster</div>
+    <div class="tdesc">For outbound: <code>send(to, body)</code> &mdash; route to any
+      node (incl. <code>node@mailroom</code> for federated); <code>roster()</code>
+      &mdash; list every registered node so the agent can pick a peer.</div>
+  </div>
+  <p class="note">For a pane the agent can't call MCP from (legacy CLI, no MCP support),
+    <code>terminal_node.py --injector {tmux,wezterm,zellij}</code> is the alternative
+    &mdash; it injects mail as keystrokes. Today it reads a <em>local</em> mailroom; for
+    cross-host pane-injection, federate B&nbsp;&rarr;&nbsp;A with <code>relay.py</code>.</p>
 </section>
 
 <hr>

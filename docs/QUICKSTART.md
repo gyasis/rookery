@@ -171,6 +171,77 @@ To run the full security suite locally:
 
 ---
 
+## Scenario 4 — Bring a Claude Code session into the mesh (cross-host)
+
+You own two machines: a regular box (machine A, always-on) and a dedicated
+"Claude computer" (machine B) where you sit at the keyboard inside a Claude
+Code session. The mailroom lives on A; B's coding agent joins as a node —
+and gets **woken by the mesh** (no polling, no "is there mail?" checks).
+
+**On machine A** — start the sidecar (Scenario 2 LAN-only or Scenario 3 full
+TLS+token; whatever you ran already is fine):
+
+```bash
+python3 mailroom_server.py --host 0.0.0.0 --port 8765 --token "$ROOKERY_TOKEN" &
+```
+
+**On machine B** — wire the MCP bridge (`rookery_mcp.py`) into the Claude Code
+session's config. Three tools land on the agent: `send`, `roster`, and the
+key one — `await_message`, which **blocks** for up to `timeout` seconds and
+returns when mail arrives. The tool polls the sidecar internally; from the
+agent's POV the mesh is handing it work.
+
+```bash
+# minimal files on B — no full repo clone needed:
+scp gyasisutton@<A-host>:~/Documents/code/rookery/{rookery_mcp.py,rookery.py,mailctl.py,schema.sql} \
+    ~/rookery-bridge/
+pip install mcp   # the Anthropic MCP SDK (FastMCP)
+```
+
+```jsonc
+// ~/.claude.json  →  add under "mcpServers"
+"rookery": {
+  "command": "python3",
+  "args": ["/home/<you>/rookery-bridge/rookery_mcp.py"],
+  "env": {
+    "ROOKERY_NODE":  "claude-on-B",              // this session's node id
+    "ROOKERY_URL":   "https://<A-host>:8765",    // A's sidecar
+    "ROOKERY_TOKEN": "<bearer-from-A>",
+    "ROOKERY_INSECURE_TLS": "1"                  // omit for CA-signed certs
+  }
+}
+```
+
+Restart the Claude Code session, then **send ONE setup message** that puts the
+agent into the wake-loop. From here the agent does NOT poll — it sits inside
+`await_message` and only re-enters the loop after acting on returned mail:
+
+```text
+> You are node `claude-on-B` in a Rookery mesh. Use the rookery MCP server.
+> Loop forever: call rookery.await_message(timeout=300). When it returns
+> mail, act on it (use any tool you need) then call await_message again.
+> Use rookery.send(to, body) for replies. Continue until I tell you to stop.
+```
+
+That's it. From this point on, anything you send from machine A:
+
+```bash
+python3 send_mail.py --to claude-on-B --from human --body "summarize repo X"
+```
+
+…lands in the agent's `await_message` return value within ~1 s. The agent
+acts, replies via `rookery.send`, and goes back to blocking. Mesh wakes
+agent — agent never had to ask.
+
+**Alternative — pane keystroke injection.** If you can't run MCP in the
+session (legacy CLI, no MCP support), `terminal_node.py --injector
+{tmux,wezterm,zellij} --target <pane>` types mail into the pane. It currently
+reads a *local* mailroom — for cross-host pane-injection, federate
+B → A with `relay.py` or wrap `mailctl.py loop` with `tmux send-keys`.
+See `COOKBOOK.md` recipes 12 (federate) and 19 (terminal node).
+
+---
+
 ## Where to go next
 
 - `COOKBOOK.md` — copy-paste recipes: research queues, CIBA credential gate,
