@@ -20,6 +20,7 @@ from urllib.parse import urlparse, parse_qs
 
 import rookery as R
 import security  # swappable auth/authz/credential/inspection policy
+import handshake  # in-memory join-request queue (Wave 1 entry point)
 
 # Set from CLI in main(). PUBLIC_URL is what goes in the Agent Card (how peers
 # reach us); DEFAULT_NODE routes A2A messages with no explicit recipient.
@@ -338,6 +339,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply({"id": rid})
         if u.path == "/invite":
             return self._reply(mint_invite_response(pol, d or {}))
+        if u.path == "/join":
+            try:
+                node_id = d.get("node_id"); pubkey_b64 = d.get("pubkey_b64"); slug = d.get("slug")
+                if not (node_id and pubkey_b64 and slug):
+                    return self._reply({"error": "node_id, pubkey_b64, slug required"}, 400)
+                entry = handshake.new_request(node_id, pubkey_b64, slug)
+                return self._reply({"request_id": entry["request_id"], "status": entry["status"]})
+            except Exception as e:
+                return self._reply({"error": str(e)}, 500)
         self._reply({"error": "not found"}, 404)
 
 

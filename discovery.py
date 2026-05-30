@@ -3,10 +3,16 @@
 
 Avoids the `zeroconf` Python package — shells out to avahi-browse (Linux)
 or dns-sd (macOS) instead.  Returns [] gracefully if neither is installed.
+Also provides a UDP-broadcast fallback (announce_loop / listen) for
+environments where mDNS / avahi / dns-sd are unavailable or blocked.
 """
+import json
 import shutil
+import socket
 import subprocess
 import sys
+import threading
+import time
 
 
 def _warn(msg):
@@ -97,6 +103,96 @@ def discover_mailrooms(timeout: float = 2.0) -> list:
             seen.add(key)
             out.append(e)
     return out
+
+
+_BROADCAST_ADDR = "255.255.255.255"
+_BROADCAST_PORT = 8888
+
+
+def announce_loop(
+    port: int = 8765,
+    name: str = "mailroom",
+    pubkey_b64: str | None = None,
+    interval: float = 5.0,
+    stop_event: threading.Event | None = None,
+) -> None:
+    """Broadcast a JSON presence datagram every *interval* seconds.
+
+    Sends ``{"name": name, "port": port, "pubkey_b64": pubkey_b64}`` to
+    ``255.255.255.255:8888`` via UDP broadcast.  Runs until *stop_event*
+    is set (or forever if *stop_event* is None).  Never raises — socket
+    errors are logged to stderr and the loop retries after *interval*.
+    """
+    payload = json.dumps({"name": name, "port": port, "pubkey_b64": pubkey_b64}).encode()
+    while stop_event is None or not stop_event.is_set():
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.sendto(payload, (_BROADCAST_ADDR, _BROADCAST_PORT))
+        except OSError as exc:
+            _warn(f"announce_loop broadcast error: {exc}")
+        finally:
+            if sock is not None:
+                sock.close()
+        # Sleep in short increments so stop_event is noticed promptly.
+        deadline = time.monotonic() + interval
+        while (stop_event is None or not stop_event.is_set()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+
+def listen(timeout: float = 2.0) -> list:
+    """Listen for UDP broadcast announcements for up to *timeout* seconds.
+
+    Binds to ``("", 8888)`` with ``SO_REUSEADDR`` (and ``SO_REUSEPORT``
+    where supported) so announce + listen can coexist on the same host.
+
+    Returns a deduplicated list of dicts::
+
+        [{"name": str, "host": str, "port": int, "pubkey_b64": str|None}]
+
+    Stray (non-JSON or wrong-shape) datagrams are silently skipped.
+    The socket is always closed on exit.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except OSError:
+                pass  # SO_REUSEPORT not supported on this platform
+        sock.bind(("", _BROADCAST_PORT))
+        sock.settimeout(min(timeout, 0.2))  # short reads so we can honour total timeout
+
+        seen: set = set()
+        results: list = []
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            try:
+                data, addr = sock.recvfrom(4096)
+            except socket.timeout:
+                continue
+            try:
+                msg = json.loads(data.decode())
+                entry = {
+                    "name": str(msg["name"]),
+                    "host": addr[0],
+                    "port": int(msg["port"]),
+                    "pubkey_b64": msg.get("pubkey_b64"),
+                }
+            except (KeyError, ValueError, UnicodeDecodeError):
+                continue  # stray datagram — skip silently
+
+            key = (entry["name"], entry["host"], entry["port"])
+            if key not in seen:
+                seen.add(key)
+                results.append(entry)
+
+        return results
+    finally:
+        sock.close()
 
 
 if __name__ == "__main__":
