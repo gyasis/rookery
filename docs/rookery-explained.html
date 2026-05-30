@@ -7,7 +7,8 @@
 <style>
 :root{--paper:#f6f1e8;--ink:#1a1a1a;--mid:#4a4a4a;--faint:#888;--rule:#d4c9b0;--ac:#1d5b67;--acbg:#eef4f5;--mono:"Berkeley Mono","JetBrains Mono",ui-monospace,monospace;--serif:"Iowan Old Style","Georgia",serif;--sans:system-ui,-apple-system,sans-serif;}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.6;padding:3rem 1.5rem 5rem;}
+html{overscroll-behavior-y:contain;}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.6;padding:1.5rem 1.5rem 2rem;}
 .wrap{max-width:860px;margin:0 auto;}
 h1{font-family:var(--serif);font-size:2.4rem;font-weight:700;letter-spacing:-.5px;line-height:1.15;}
 h2{font-family:var(--serif);font-size:1.2rem;font-weight:700;color:var(--ac);margin-bottom:.6rem;}
@@ -16,6 +17,12 @@ p{color:var(--mid);margin-bottom:.65rem;}p:last-child{margin-bottom:0;}
 a{color:var(--ac);}
 hr{border:none;border-top:1px solid var(--rule);margin:2.2rem 0;}
 .tagline{font-family:var(--serif);font-size:1rem;color:var(--mid);font-style:italic;margin-top:.45rem;max-width:560px;}
+/* deploy diagram stack */
+.deploy{margin-top:1.4rem;}
+.deploy-row{margin-top:1.2rem;}
+.deploy-row:first-child{margin-top:0;}
+.deploy-row h3{color:var(--ac);margin-bottom:.4rem;}
+.deploy-row pre.diagram{font-size:.72rem;}
 /* diagram */
 pre.diagram{font-family:var(--mono);font-size:.76rem;line-height:1.5;background:#ede8dc;border-left:3px solid var(--ac);padding:1.1rem 1.4rem;overflow-x:auto;color:var(--ink);border-radius:2px;}
 /* cards */
@@ -150,6 +157,53 @@ python3 mailroom_server.py \<br>
 &nbsp;&nbsp;--tls-cert rookery-cert.pem \<br>
 &nbsp;&nbsp;--tls-key rookery-key.pem \<br>
 &nbsp;&nbsp;--token $ROOKERY_TOKEN --card-key ed25519.pem</code>
+    </div>
+  </div>
+
+  <div class="deploy">
+    <div class="deploy-row">
+      <h3>Same machine &mdash; topology</h3>
+<pre class="diagram">
+ +-------- host: laptop -----------------+
+ |                                       |
+ |   node A --+                          |
+ |            +--> rookery.db  (WAL)     |
+ |   node B --+         ^                |
+ |            |         | polls + wakes  |
+ |            +---  postmaster.py        |
+ |                                       |
+ +---------------------------------------+
+        one process per node  ·  no network  ·  no sidecar
+</pre>
+    </div>
+
+    <div class="deploy-row">
+      <h3>Same network (LAN) &mdash; topology</h3>
+<pre class="diagram">
+ +--- host A -----------+                +--- host B -----------+
+ |  mailroom.db          |   LAN (TCP)   |  mailctl.py           |
+ |  mailroom_server.py   | &lt;===========&gt; |  loop --node bob      |
+ |  postmaster.py        |    /send      |  (one-file client)    |
+ |  :8765  (HTTP)        |    /inbox     |                       |
+ +-----------------------+    /ack       +-----------------------+
+            sidecar = HTTP face for the SQLite mailroom
+            (never put rookery.db on a network share)
+</pre>
+    </div>
+
+    <div class="deploy-row">
+      <h3>Internet &mdash; topology</h3>
+<pre class="diagram">
+ +--- host A -----------+    ==[ tunnel + TLS ]==     +--- host B -----------+
+ |  TLS sidecar :8765    |    Tailscale / Cloudflare /  |  mailctl.py loop      |
+ |  --token              |    ssh -L                    |  verify_card.py       |
+ |  --card-key &lt;pem&gt;     | &lt;==========================&gt; |  ROOKERY_TOKEN        |
+ |  HardenedPolicy +     |    bearer + Ed25519-         |  node@remote          |
+ |  per-node identity    |    signed agent card         |                       |
+ +-----------------------+                              +-----------------------+
+   token authenticates  ·  TLS encrypts  ·  signed card proves integrity
+   pin the public key out-of-band (JWKS / DID) for true identity
+</pre>
     </div>
   </div>
 </section>
