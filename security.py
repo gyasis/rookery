@@ -45,7 +45,7 @@ ALLOW = Decision(True)
 class SecurityPolicy:
     """Base policy — permissive. Subclass and override to harden."""
 
-    PUBLIC_PATHS = {"/health", "/.well-known/agent-card.json", "/.well-known/agent.json", "/join"}
+    PUBLIC_PATHS = {"/health", "/.well-known/agent-card.json", "/.well-known/agent.json", "/join", "/bootstrap"}
 
     # --- transport auth ---------------------------------------------------
     def is_public_path(self, path):

@@ -12,11 +12,14 @@ import argparse
 import json
 import os
 import ssl
+import tempfile
 import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+
+import bootstrap
 
 import rookery as R
 import security  # swappable auth/authz/credential/inspection policy
@@ -28,6 +31,10 @@ import handshake  # in-memory join-request queue (Wave 1 entry point)
 PUBLIC_URL = "http://localhost:8765"
 DEFAULT_NODE = "mailroom"
 CARD_KEY = None  # Ed25519 private-key path -> sign the agent card
+
+# Cache for the built zipapp bytes.  Rebuilt every request in v1 (simple).
+# TODO: invalidate only when source-file mtimes change.
+_CACHED_PYZ = None  # bytes | None
 
 
 def _rows(rs):
@@ -274,6 +281,39 @@ class Handler(BaseHTTPRequestHandler):
                     return self._reply({"status": "denied"})
                 time.sleep(0.5)
             return self._reply({"status": "pending"})
+        if u.path == "/bootstrap":
+            if q.get("pyz"):
+                # Return the zipapp bytes.
+                global _CACHED_PYZ
+                if _CACHED_PYZ is None:
+                    # TODO: invalidate cache when source-file mtimes change.
+                    tmp = tempfile.mktemp(suffix=".pyz")
+                    try:
+                        bootstrap.build_pyz(tmp)
+                        with open(tmp, "rb") as fh:
+                            _CACHED_PYZ = fh.read()
+                    finally:
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+                body = _CACHED_PYZ
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", 'attachment; filename="rookery.pyz"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            else:
+                # Return the Python installer script so `curl ... | python3 -` works.
+                script = bootstrap.installer_script(PUBLIC_URL).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/x-python")
+                self.send_header("Content-Length", str(len(script)))
+                self.end_headers()
+                self.wfile.write(script)
+                return
         self._reply({"error": "not found"}, 404)
 
     def _a2a_stream(self, conn, rpc, principal="a2a"):
