@@ -7,6 +7,7 @@ Two public functions:
   installer_script(public_url) -> str   return a Python installer script (as a
                                         string) suitable for `curl ... | python3 -`
 """
+
 import os
 import shutil
 import stat
@@ -21,6 +22,9 @@ _ROOKERY_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _PY_MODULES = [
     "rookery_cli.py",
+    "cli_serve.py",
+    "cli_up.py",
+    "cli_approve.py",
     "identity.py",
     "known_hosts.py",
     "discovery.py",
@@ -72,8 +76,10 @@ def build_pyz(output_path: str) -> str:
         )
 
         # Make it executable
-        os.chmod(output_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP |
-                 stat.S_IROTH | stat.S_IXOTH)  # 0755
+        os.chmod(
+            output_path,
+            stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH,
+        )  # 0755
 
     finally:
         shutil.rmtree(stage, ignore_errors=True)
