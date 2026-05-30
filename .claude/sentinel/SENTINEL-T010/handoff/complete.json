@@ -1,0 +1,7 @@
+{
+  "task_id": "T010",
+  "succeeded": true,
+  "notes": "Replaced cmd_approve stub with headless approve flow: fetches /pending with bearer auth, lists all entries with age, prompts y/N/s per entry, POSTs /approve with decision, prints token prefix on approval.",
+  "files_modified": [],
+  "completed_at": 1780142897.7688394
+}
