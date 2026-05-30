@@ -284,7 +284,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         pol = security.get_policy()
-        path_public = pol.is_public_path(u.path) or u.path.startswith("/join/")
+        path_public = (
+            pol.is_public_path(u.path)
+            or u.path.startswith("/join/")
+            or u.path == "/approve"
+        )
         if not path_public and pol.authenticate(self.headers) is None:
             return self._reply({"error": "unauthorized"}, 401)
         q = parse_qs(u.query)
@@ -299,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
             )
         if u.path == "/thread":
             return self._reply({"messages": _rows(R.fetch_thread(c, q["node"][0]))})
+        if u.path == "/approve":
+            return mailroom_handshake.handle_approve_form(self, c, None, None)
         if u.path == "/pending":
             return mailroom_handshake.handle_pending(self, c, None, None)
         if u.path.startswith("/join/"):

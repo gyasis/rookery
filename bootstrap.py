@@ -35,6 +35,7 @@ _PY_MODULES = [
     "rookery.py",
     "security.py",
     "handshake.py",
+    "notifier.py",
 ]
 
 _DATA_FILES = [

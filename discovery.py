@@ -6,6 +6,7 @@ or dns-sd (macOS) instead.  Returns [] gracefully if neither is installed.
 Also provides a UDP-broadcast fallback (announce_loop / listen) for
 environments where mDNS / avahi / dns-sd are unavailable or blocked.
 """
+
 import json
 import shutil
 import socket
@@ -50,7 +51,9 @@ def _discover_avahi(timeout):
     try:
         r = subprocess.run(
             ["avahi-browse", "-trp", "_rookery._tcp"],
-            capture_output=True, text=True, timeout=timeout + 2,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 2,
         )
         stdout = r.stdout
     except (subprocess.SubprocessError, FileNotFoundError):
@@ -62,7 +65,8 @@ def _discover_dns_sd(timeout):
     # Step 1: enumerate instance names
     out = _run(["dns-sd", "-B", "_rookery._tcp", "local."], timeout)
     names = [
-        p[-1] for p in (line.split() for line in out.splitlines())
+        p[-1]
+        for p in (line.split() for line in out.splitlines())
         if len(p) >= 7 and p[1] == "Add"
     ]
     # Step 2: resolve each name
@@ -74,7 +78,9 @@ def _discover_dns_sd(timeout):
                 try:
                     hostport = line.split("can be reached at")[1].strip().rstrip(".")
                     host, port_str = hostport.rsplit(":", 1)
-                    entries.append({"name": name, "host": host.rstrip("."), "port": int(port_str)})
+                    entries.append(
+                        {"name": name, "host": host.rstrip("."), "port": int(port_str)}
+                    )
                     break
                 except (ValueError, IndexError):
                     pass
@@ -91,8 +97,15 @@ def discover_mailrooms(timeout: float = 2.0) -> list:
         results = _discover_avahi(timeout)
     elif shutil.which("dns-sd"):
         results = _discover_dns_sd(timeout)
+    elif sys.platform == "win32" and shutil.which("dns-sd.exe"):
+        # Bonjour Print Services on Windows: same protocol as macOS dns-sd.
+        results = _discover_dns_sd(timeout)  # reuse the macOS parser
     else:
-        _warn("neither avahi-browse nor dns-sd found; peer discovery unavailable")
+        _warn(
+            "neither avahi-browse nor dns-sd found; LAN mDNS discovery unavailable. "
+            "Windows: install Bonjour Print Services (apple.com, free) to enable. "
+            "UDP broadcast fallback still works via discovery.listen()."
+        )
         return []
 
     # Deduplicate by (name, host, port)
@@ -123,7 +136,9 @@ def announce_loop(
     is set (or forever if *stop_event* is None).  Never raises — socket
     errors are logged to stderr and the loop retries after *interval*.
     """
-    payload = json.dumps({"name": name, "port": port, "pubkey_b64": pubkey_b64}).encode()
+    payload = json.dumps(
+        {"name": name, "port": port, "pubkey_b64": pubkey_b64}
+    ).encode()
     while stop_event is None or not stop_event.is_set():
         sock = None
         try:
@@ -137,12 +152,16 @@ def announce_loop(
                 sock.close()
         # Sleep in short increments so stop_event is noticed promptly.
         deadline = time.monotonic() + interval
-        while (stop_event is None or not stop_event.is_set()) and time.monotonic() < deadline:
+        while (
+            stop_event is None or not stop_event.is_set()
+        ) and time.monotonic() < deadline:
             time.sleep(0.05)
 
 
 def listen(timeout: float = 2.0) -> list:
     """Listen for UDP broadcast announcements for up to *timeout* seconds.
+
+    Works on Windows (UDP broadcast is platform-portable in stdlib ``socket``).
 
     Binds to ``("", 8888)`` with ``SO_REUSEADDR`` (and ``SO_REUSEPORT``
     where supported) so announce + listen can coexist on the same host.

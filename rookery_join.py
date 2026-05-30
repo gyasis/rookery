@@ -14,6 +14,7 @@ Verification: fetches the served agent card and confirms its embedded public key
 EQUALS the `card_pubkey` pinned in the invite (TOFU). Also runs the signature
 check via security.verify_card() so a tampered card fails.
 """
+
 import argparse
 import json
 import os
@@ -41,7 +42,9 @@ def verify(invite, insecure_tls=False, quiet=False):
     pinned = invite.get("card_pubkey")
     if not pinned:
         if not quiet:
-            print("WARN: invite has no card_pubkey -- TOFU pin skipped (sidecar not signing cards)")
+            print(
+                "WARN: invite has no card_pubkey -- TOFU pin skipped (sidecar not signing cards)"
+            )
         return True
     try:
         card = fetch_card(invite["url"], insecure_tls)
@@ -59,12 +62,15 @@ def verify(invite, insecure_tls=False, quiet=False):
     here = os.path.dirname(os.path.abspath(__file__))
     sys.path.insert(0, here)
     import security  # noqa: E402
+
     ok, info = security.verify_card(card)
     if not ok:
         print(f"FAIL: card signature invalid ({info})")
         return False
     if not quiet:
-        print(f"OK: pinned pubkey matches and card signature is valid ({pinned[:24]}...)")
+        print(
+            f"OK: pinned pubkey matches and card signature is valid ({pinned[:24]}...)"
+        )
     return True
 
 
@@ -72,7 +78,11 @@ def as_mcp(invite):
     snippet = {
         "rookery": {
             "command": "python3",
-            "args": [os.path.join(os.path.dirname(os.path.abspath(__file__)), "rookery_mcp.py")],
+            "args": [
+                os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "rookery_mcp.py"
+                )
+            ],
             "env": {
                 "ROOKERY_NODE": invite["node_id"],
                 "ROOKERY_URL": invite["url"],
@@ -92,18 +102,28 @@ def as_loop(invite, insecure_tls=False):
     if insecure_tls:
         env["ROOKERY_INSECURE_TLS"] = "1"
     here = os.path.dirname(os.path.abspath(__file__))
-    cmd = ["python3", os.path.join(here, "mailctl.py"), "loop",
-           "--url", invite["url"], "--node", invite["node_id"]]
+    cmd = [
+        "python3",
+        os.path.join(here, "mailctl.py"),
+        "loop",
+        "--url",
+        invite["url"],
+        "--node",
+        invite["node_id"],
+    ]
     print(f"$ ROOKERY_TOKEN=*** {' '.join(cmd)}")
     os.execvpe(cmd[0], cmd, env)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Consume a Rookery invite -> join the mesh.")
+    ap = argparse.ArgumentParser(
+        description="Consume a Rookery invite -> join the mesh."
+    )
     ap.add_argument("invite", help="path to invite.json")
     ap.add_argument("--mode", choices=["verify", "mcp", "loop"], default="verify")
-    ap.add_argument("--insecure-tls", action="store_true",
-                    help="accept self-signed certs (lab use)")
+    ap.add_argument(
+        "--insecure-tls", action="store_true", help="accept self-signed certs (lab use)"
+    )
     a = ap.parse_args()
     with open(a.invite) as fh:
         invite = json.load(fh)

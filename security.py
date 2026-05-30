@@ -17,6 +17,7 @@ Decision points (override any in a subclass; base defaults are permissive):
 Swap it: set ROOKERY_SECURITY="my.module:MyPolicy" (a SecurityPolicy subclass),
 or call security.set_policy(obj). Default = DefaultPolicy (current behavior).
 """
+
 import base64
 import hmac
 import importlib
@@ -45,7 +46,13 @@ ALLOW = Decision(True)
 class SecurityPolicy:
     """Base policy — permissive. Subclass and override to harden."""
 
-    PUBLIC_PATHS = {"/health", "/.well-known/agent-card.json", "/.well-known/agent.json", "/join", "/bootstrap"}
+    PUBLIC_PATHS = {
+        "/health",
+        "/.well-known/agent-card.json",
+        "/.well-known/agent.json",
+        "/join",
+        "/bootstrap",
+    }
 
     # --- transport auth ---------------------------------------------------
     def is_public_path(self, path):
@@ -79,8 +86,12 @@ class SecurityPolicy:
         """Return a fresh invite for a new node. Default: re-issue the shared
         token (no per-node identity, no expiry). HardenedPolicy overrides this
         to MINT a per-principal bearer token with TTL."""
-        return {"token": getattr(self, "token", None), "node_id": node_id,
-                "may_task": may_task, "expires_at": None}
+        return {
+            "token": getattr(self, "token", None),
+            "node_id": node_id,
+            "may_task": may_task,
+            "expires_at": None,
+        }
 
 
 class DefaultPolicy(SecurityPolicy):
@@ -93,7 +104,7 @@ class DefaultPolicy(SecurityPolicy):
     def authenticate(self, headers):
         if not self.token:
             return "anon"  # auth disabled
-        h = (headers.get("Authorization", "") if headers else "")
+        h = headers.get("Authorization", "") if headers else ""
         if h.startswith("Bearer ") and hmac.compare_digest(h[7:].strip(), self.token):
             return "bearer"
         return None
@@ -115,7 +126,9 @@ def mint_pointer(resource):
         try:
             r = subprocess.run(
                 ["secret-tool", "lookup", "service", "rookery", "account", resource],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if r.returncode == 0 and r.stdout:
                 return f"keychain://rookery/{resource}", "keychain (verified present)"
@@ -137,10 +150,12 @@ def _canonical(card):
 def sign_card(card, key_pem_path):
     """Attach an Ed25519 signature (+ the public key) to an agent card."""
     from cryptography.hazmat.primitives import serialization
+
     with open(key_pem_path, "rb") as fh:
         priv = serialization.load_pem_private_key(fh.read(), password=None)
-    pub = priv.public_key().public_bytes(serialization.Encoding.Raw,
-                                         serialization.PublicFormat.Raw)
+    pub = priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
     card["signature"] = {
         "alg": "ed25519",
         "publicKey": base64.b64encode(pub).decode(),
@@ -159,6 +174,7 @@ def verify_card(card):
         return False, "no signature"
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
         pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(sig["publicKey"]))
         pub.verify(base64.b64decode(sig["value"]), _canonical(card))
         return True, sig["publicKey"][:16] + "…"

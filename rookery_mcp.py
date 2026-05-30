@@ -17,6 +17,7 @@ Wire into Claude Code via ~/.claude.json mcpServers:
 Env: ROOKERY_NODE (this session's node id, default 'claude-main'),
      ROOKERY_DB (local) or ROOKERY_URL + ROOKERY_TOKEN (remote sidecar).
 """
+
 import os
 import time
 
@@ -25,7 +26,9 @@ from mcp.server.fastmcp import FastMCP
 import rookery as R
 
 NODE = os.environ.get("ROOKERY_NODE", "claude-main")
-URL = os.environ.get("ROOKERY_URL")  # if set, talk to a remote sidecar instead of the local DB
+URL = os.environ.get(
+    "ROOKERY_URL"
+)  # if set, talk to a remote sidecar instead of the local DB
 
 
 # --- backend: local DB or remote sidecar (same surface either way) --------
@@ -33,8 +36,12 @@ if URL:
     import mailctl  # reuses ROOKERY_TOKEN for the Authorization header
 
     def _send(to, body, topic=None):
-        return mailctl.call(URL, "/send", "POST",
-                            {"sender": NODE, "recipient": to, "body": body, "topic": topic})["id"]
+        return mailctl.call(
+            URL,
+            "/send",
+            "POST",
+            {"sender": NODE, "recipient": to, "body": body, "topic": topic},
+        )["id"]
 
     def _pending(node):
         return mailctl.call(URL, "/inbox?node=" + node, "GET")["messages"]
@@ -49,7 +56,9 @@ if URL:
     def _roster():
         card = mailctl.call(URL, "/.well-known/agent-card.json", "GET")
         return [s["id"] for s in card.get("skills", [])]
+
 else:
+
     def _send(to, body, topic=None):
         c = R.connect()
         return R.send(c, NODE, to, body, topic)
@@ -69,7 +78,10 @@ else:
 
     def _roster():
         c = R.connect()
-        return [r["node_id"] for r in c.execute("SELECT node_id FROM nodes ORDER BY node_id")]
+        return [
+            r["node_id"]
+            for r in c.execute("SELECT node_id FROM nodes ORDER BY node_id")
+        ]
 
 
 def _drain():
