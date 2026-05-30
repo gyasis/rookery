@@ -51,16 +51,21 @@ if URL:
         return [s["id"] for s in card.get("skills", [])]
 else:
     def _send(to, body, topic=None):
-        c = R.connect(); return R.send(c, NODE, to, body, topic)
+        c = R.connect()
+        return R.send(c, NODE, to, body, topic)
 
     def _pending(node):
-        c = R.connect(); return [dict(m) for m in R.fetch_undelivered(c, node)]
+        c = R.connect()
+        return [dict(m) for m in R.fetch_undelivered(c, node)]
 
     def _consume(ids):
-        c = R.connect(); R.claim(c, ids); R.ack(c, ids)
+        c = R.connect()
+        R.claim(c, ids)
+        R.ack(c, ids)
 
     def _register():
-        c = R.connect(); R.register_node(c, NODE, kind="mcp")
+        c = R.connect()
+        R.register_node(c, NODE, kind="mcp")
 
     def _roster():
         c = R.connect()

@@ -15,7 +15,6 @@ EQUALS the `card_pubkey` pinned in the invite (TOFU). Also runs the signature
 check via security.verify_card() so a tampered card fails.
 """
 import argparse
-import base64
 import json
 import os
 import ssl
@@ -52,7 +51,7 @@ def verify(invite, insecure_tls=False, quiet=False):
     sig = card.get("signature") or {}
     served = sig.get("publicKey")
     if served != pinned:
-        print(f"FAIL: served card pubkey != invite pin")
+        print("FAIL: served card pubkey != invite pin")
         print(f"  pinned in invite : {(pinned or '')[:32]}...")
         print(f"  served by sidecar: {(served or '')[:32]}...")
         return False

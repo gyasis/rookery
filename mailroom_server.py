@@ -8,22 +8,21 @@ Run it on the box that holds the DB; bind 0.0.0.0 so peers reach it. Peers use
 mailctl.py (or any HTTP client). NEVER put the SQLite file on a network share —
 locking is broken; peers talk to THIS service over TCP instead.
 """
+
 import argparse
 import json
 import os
 import ssl
-import tempfile
 import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-import bootstrap
-
 import rookery as R
 import security  # swappable auth/authz/credential/inspection policy
-import handshake  # in-memory join-request queue (Wave 1 entry point)
+import mailroom_handshake
+import mailroom_bootstrap
 
 # Set from CLI in main(). PUBLIC_URL is what goes in the Agent Card (how peers
 # reach us); DEFAULT_NODE routes A2A messages with no explicit recipient.
@@ -31,10 +30,6 @@ import handshake  # in-memory join-request queue (Wave 1 entry point)
 PUBLIC_URL = "http://localhost:8765"
 DEFAULT_NODE = "mailroom"
 CARD_KEY = None  # Ed25519 private-key path -> sign the agent card
-
-# Cache for the built zipapp bytes.  Rebuilt every request in v1 (simple).
-# TODO: invalidate only when source-file mtimes change.
-_CACHED_PYZ = None  # bytes | None
 
 
 def _rows(rs):
@@ -45,7 +40,9 @@ def _rows(rs):
 def _a2a_text(parts):
     """Pull text out of A2A message parts (v0.3 `{kind:text,text}` and v1.0
     `{text,mediaType}` both carry a `text` field)."""
-    return "\n".join(p["text"] for p in (parts or []) if isinstance(p, dict) and p.get("text"))
+    return "\n".join(
+        p["text"] for p in (parts or []) if isinstance(p, dict) and p.get("text")
+    )
 
 
 def agent_card(conn):
@@ -53,34 +50,47 @@ def agent_card(conn):
     cross-vendor agents can DISCOVER Rookery. Each registered node is a skill;
     route to one with message metadata.recipient=<node>."""
     skills = []
-    for n in conn.execute("SELECT node_id, kind, lifecycle FROM nodes ORDER BY node_id").fetchall():
-        skills.append({
-            "id": n["node_id"],
-            "name": n["node_id"],
-            "description": f"Rookery {n['lifecycle'] or 'node'} ({n['kind'] or 'node'}); "
-                           f"route with metadata.recipient='{n['node_id']}'.",
-            "tags": ["rookery", n["kind"] or "node"],
-            "examples": [f"Send a task to {n['node_id']}"],
-            "inputModes": ["text/plain"],
-            "outputModes": ["text/plain"],
-        })
+    for n in conn.execute(
+        "SELECT node_id, kind, lifecycle FROM nodes ORDER BY node_id"
+    ).fetchall():
+        skills.append(
+            {
+                "id": n["node_id"],
+                "name": n["node_id"],
+                "description": f"Rookery {n['lifecycle'] or 'node'} ({n['kind'] or 'node'}); "
+                f"route with metadata.recipient='{n['node_id']}'.",
+                "tags": ["rookery", n["kind"] or "node"],
+                "examples": [f"Send a task to {n['node_id']}"],
+                "inputModes": ["text/plain"],
+                "outputModes": ["text/plain"],
+            }
+        )
     if not skills:
-        skills.append({
-            "id": "mailroom", "name": "Rookery mailroom",
-            "description": "Send a message into the Rookery mesh (metadata.recipient selects the node).",
-            "tags": ["rookery"], "examples": ["hello"],
-            "inputModes": ["text/plain"], "outputModes": ["text/plain"],
-        })
+        skills.append(
+            {
+                "id": "mailroom",
+                "name": "Rookery mailroom",
+                "description": "Send a message into the Rookery mesh (metadata.recipient selects the node).",
+                "tags": ["rookery"],
+                "examples": ["hello"],
+                "inputModes": ["text/plain"],
+                "outputModes": ["text/plain"],
+            }
+        )
     card = {
         "protocolVersion": "0.3.0",
         "name": "Rookery Mesh",
         "description": "A local-first agent mesh (SQLite mailroom). Send a task via message/send; "
-                       "route to a node with message metadata.recipient.",
+        "route to a node with message metadata.recipient.",
         "url": f"{PUBLIC_URL}/a2a",
         "preferredTransport": "JSONRPC",
         "version": "0.1.0",
         "provider": {"organization": "Rookery", "url": PUBLIC_URL},
-        "capabilities": {"streaming": True, "pushNotifications": True, "stateTransitionHistory": False},
+        "capabilities": {
+            "streaming": True,
+            "pushNotifications": True,
+            "stateTransitionHistory": False,
+        },
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
         "skills": skills,
@@ -103,10 +113,12 @@ def _card_pubkey():
     try:
         import base64
         from cryptography.hazmat.primitives import serialization
+
         with open(CARD_KEY, "rb") as fh:
             priv = serialization.load_pem_private_key(fh.read(), password=None)
-        pub = priv.public_key().public_bytes(serialization.Encoding.Raw,
-                                             serialization.PublicFormat.Raw)
+        pub = priv.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
         return base64.b64encode(pub).decode()
     except Exception:
         return None
@@ -149,10 +161,18 @@ def _push_watch(sender, mid, tid, ctx, url, token, timeout=120):
             "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id", (sender, mid)
         ).fetchall()
         if replies:
-            task = {"id": tid, "contextId": ctx, "status": {"state": "completed"},
-                    "artifacts": [{"artifactId": f"reply-{r['id']}",
-                                   "parts": [{"text": r["body"], "mediaType": "text/plain"}]}
-                                  for r in replies]}
+            task = {
+                "id": tid,
+                "contextId": ctx,
+                "status": {"state": "completed"},
+                "artifacts": [
+                    {
+                        "artifactId": f"reply-{r['id']}",
+                        "parts": [{"text": r["body"], "mediaType": "text/plain"}],
+                    }
+                    for r in replies
+                ],
+            }
             try:
                 _post_webhook(url, task, token)
             except Exception:
@@ -183,26 +203,32 @@ def a2a_rpc(conn, rpc, principal="a2a"):
         text = _a2a_text(msg.get("parts"))
         pol = security.get_policy()
         if not pol.authorize(principal, "task", recipient):
-            return err(-32003, f"principal '{principal}' not authorized to task '{recipient}'")
+            return err(
+                -32003, f"principal '{principal}' not authorized to task '{recipient}'"
+            )
         chk = pol.inspect_inbound(sender, recipient, text)
         if not chk:
             return err(-32004, f"message rejected: {chk.reason}")
         mid = R.send(conn, sender, recipient, text)
         ctx = msg.get("contextId") or f"ctx-{mid}"
         # A2A push notifications: if the client gave a webhook, POST the result later
-        pn = (params.get("configuration") or {}).get("pushNotificationConfig") or meta.get("pushNotification")
+        pn = (params.get("configuration") or {}).get(
+            "pushNotificationConfig"
+        ) or meta.get("pushNotification")
         if isinstance(pn, dict) and pn.get("url"):
             threading.Thread(
                 target=_push_watch,
                 args=(sender, mid, f"a2a-{mid}", ctx, pn["url"], pn.get("token")),
                 daemon=True,
             ).start()
-        return ok({
-            "id": f"a2a-{mid}",
-            "contextId": ctx,
-            "status": {"state": "submitted"},
-            "history": [msg],
-        })
+        return ok(
+            {
+                "id": f"a2a-{mid}",
+                "contextId": ctx,
+                "status": {"state": "submitted"},
+                "history": [msg],
+            }
+        )
 
     if method == "tasks/get":
         tid = str(params.get("id") or "")
@@ -215,15 +241,26 @@ def a2a_rpc(conn, rpc, principal="a2a"):
             return err(-32001, "task not found")
         # replies are mail addressed back to the original A2A sender
         replies = conn.execute(
-            "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id", (row["sender"], mid)
+            "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id",
+            (row["sender"], mid),
         ).fetchall()
         state = "completed" if replies else _A2A_STATE.get(row["status"], "unknown")
-        artifacts = [{
-            "artifactId": f"reply-{r['id']}", "name": "reply",
-            "parts": [{"text": r["body"], "mediaType": "text/plain"}],
-        } for r in replies]
-        return ok({"id": tid, "contextId": row["topic"] or f"ctx-{mid}",
-                   "status": {"state": state}, "artifacts": artifacts})
+        artifacts = [
+            {
+                "artifactId": f"reply-{r['id']}",
+                "name": "reply",
+                "parts": [{"text": r["body"], "mediaType": "text/plain"}],
+            }
+            for r in replies
+        ]
+        return ok(
+            {
+                "id": tid,
+                "contextId": row["topic"] or f"ctx-{mid}",
+                "status": {"state": state},
+                "artifacts": artifacts,
+            }
+        )
 
     return err(-32601, f"method not supported: {method}")
 
@@ -257,63 +294,20 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
             return self._reply(agent_card(c))
         if u.path == "/inbox":
-            return self._reply({"messages": _rows(R.fetch_undelivered(c, q["node"][0]))})
+            return self._reply(
+                {"messages": _rows(R.fetch_undelivered(c, q["node"][0]))}
+            )
         if u.path == "/thread":
             return self._reply({"messages": _rows(R.fetch_thread(c, q["node"][0]))})
         if u.path == "/pending":
-            return self._reply({"pending": handshake.list_pending()})
+            return mailroom_handshake.handle_pending(self, c, None, None)
         if u.path.startswith("/join/"):
-            request_id = u.path[len("/join/"):]
-            if not request_id:
-                return self._reply({"error": "not found"}, 404)
-            if handshake.get(request_id) is None:
-                return self._reply({"error": "unknown request_id"}, 404)
-            deadline = time.time() + 30
-            while time.time() < deadline:
-                entry = handshake.get(request_id)
-                if entry is None:
-                    return self._reply({"error": "unknown request_id"}, 404)
-                if entry["status"] == "approved":
-                    return self._reply({"status": "approved", "token": entry["token"],
-                                        "card_pubkey": _card_pubkey(),
-                                        "expires_at": entry["expires_at"]})
-                if entry["status"] == "denied":
-                    return self._reply({"status": "denied"})
-                time.sleep(0.5)
-            return self._reply({"status": "pending"})
+            request_id = u.path[len("/join/") :]
+            return mailroom_handshake.handle_join_poll(
+                self, c, None, request_id, _card_pubkey
+            )
         if u.path == "/bootstrap":
-            if q.get("pyz"):
-                # Return the zipapp bytes.
-                global _CACHED_PYZ
-                if _CACHED_PYZ is None:
-                    # TODO: invalidate cache when source-file mtimes change.
-                    tmp = tempfile.mktemp(suffix=".pyz")
-                    try:
-                        bootstrap.build_pyz(tmp)
-                        with open(tmp, "rb") as fh:
-                            _CACHED_PYZ = fh.read()
-                    finally:
-                        try:
-                            os.unlink(tmp)
-                        except OSError:
-                            pass
-                body = _CACHED_PYZ
-                self.send_response(200)
-                self.send_header("Content-Type", "application/octet-stream")
-                self.send_header("Content-Disposition", 'attachment; filename="rookery.pyz"')
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            else:
-                # Return the Python installer script so `curl ... | python3 -` works.
-                script = bootstrap.installer_script(PUBLIC_URL).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/x-python")
-                self.send_header("Content-Length", str(len(script)))
-                self.end_headers()
-                self.wfile.write(script)
-                return
+            return mailroom_bootstrap.handle_bootstrap(self, PUBLIC_URL)
         self._reply({"error": "not found"}, 404)
 
     def _a2a_stream(self, conn, rpc, principal="a2a"):
@@ -328,12 +322,28 @@ class Handler(BaseHTTPRequestHandler):
         text = _a2a_text(msg.get("parts"))
         pol = security.get_policy()
         if not pol.authorize(principal, "task", recipient):
-            return self._reply({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32003, "message": f"principal '{principal}' not authorized to task '{recipient}'"}})
+            return self._reply(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "error": {
+                        "code": -32003,
+                        "message": f"principal '{principal}' not authorized to task '{recipient}'",
+                    },
+                }
+            )
         chk = pol.inspect_inbound(sender, recipient, text)
         if not chk:
-            return self._reply({"jsonrpc": "2.0", "id": rid,
-                                "error": {"code": -32004, "message": f"message rejected: {chk.reason}"}})
+            return self._reply(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "error": {
+                        "code": -32004,
+                        "message": f"message rejected: {chk.reason}",
+                    },
+                }
+            )
         mid = R.send(conn, sender, recipient, text)
         tid, ctx = f"a2a-{mid}", (msg.get("contextId") or f"ctx-{mid}")
 
@@ -343,7 +353,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         def emit(result):
-            self.wfile.write(f"data: {json.dumps({'jsonrpc':'2.0','id':rid,'result':result})}\n\n".encode())
+            self.wfile.write(
+                f"data: {json.dumps({'jsonrpc':'2.0','id':rid,'result':result})}\n\n".encode()
+            )
             self.wfile.flush()
 
         try:
@@ -351,21 +363,46 @@ class Handler(BaseHTTPRequestHandler):
             deadline, seen = time.time() + 60, set()
             while time.time() < deadline:
                 replies = conn.execute(
-                    "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id", (sender, mid)
+                    "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id",
+                    (sender, mid),
                 ).fetchall()
                 new = [r for r in replies if r["id"] not in seen]
                 for r in new:
                     seen.add(r["id"])
-                    emit({"taskId": tid, "contextId": ctx, "kind": "artifact-update",
-                          "artifact": {"artifactId": f"reply-{r['id']}",
-                                       "parts": [{"text": r["body"], "mediaType": "text/plain"}]}})
+                    emit(
+                        {
+                            "taskId": tid,
+                            "contextId": ctx,
+                            "kind": "artifact-update",
+                            "artifact": {
+                                "artifactId": f"reply-{r['id']}",
+                                "parts": [
+                                    {"text": r["body"], "mediaType": "text/plain"}
+                                ],
+                            },
+                        }
+                    )
                 if new:
-                    emit({"taskId": tid, "contextId": ctx, "kind": "status-update",
-                          "status": {"state": "completed"}, "final": True})
+                    emit(
+                        {
+                            "taskId": tid,
+                            "contextId": ctx,
+                            "kind": "status-update",
+                            "status": {"state": "completed"},
+                            "final": True,
+                        }
+                    )
                     return
                 time.sleep(0.5)
-            emit({"taskId": tid, "contextId": ctx, "kind": "status-update",
-                  "status": {"state": "working"}, "final": True})
+            emit(
+                {
+                    "taskId": tid,
+                    "contextId": ctx,
+                    "kind": "status-update",
+                    "status": {"state": "working"},
+                    "final": True,
+                }
+            )
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -385,43 +422,35 @@ class Handler(BaseHTTPRequestHandler):
             mid = R.send(c, d["sender"], d["recipient"], d["body"], d.get("topic"))
             return self._reply({"id": mid})
         if u.path == "/claim":
-            R.claim(c, d["ids"]); return self._reply({"ok": True})
+            R.claim(c, d["ids"])
+            return self._reply({"ok": True})
         if u.path == "/ack":
-            R.ack(c, d["ids"]); return self._reply({"ok": True})
+            R.ack(c, d["ids"])
+            return self._reply({"ok": True})
         if u.path == "/register":
-            R.register_node(c, d["node_id"], d.get("kind", "remote"),
-                            d.get("pid"), d.get("lifecycle", "ephemeral"))
+            R.register_node(
+                c,
+                d["node_id"],
+                d.get("kind", "remote"),
+                d.get("pid"),
+                d.get("lifecycle", "ephemeral"),
+            )
             return self._reply({"ok": True})
         if u.path == "/heartbeat":
-            R.heartbeat(c, d["node_id"]); return self._reply({"ok": True})
+            R.heartbeat(c, d["node_id"])
+            return self._reply({"ok": True})
         if u.path == "/status":
-            R.set_status(c, d["node_id"], d["status"]); return self._reply({"ok": True})
+            R.set_status(c, d["node_id"], d["status"])
+            return self._reply({"ok": True})
         if u.path == "/request_credential":
             rid = R.request_credential(c, d["node_id"], d["resource"])
             return self._reply({"id": rid})
         if u.path == "/invite":
             return self._reply(mint_invite_response(pol, d or {}))
         if u.path == "/approve":
-            request_id = (d or {}).get("request_id")
-            decision = (d or {}).get("decision")
-            if decision == "approve":
-                result = handshake.approve(request_id, pol.mint_invite)
-            else:
-                result = handshake.deny(request_id)
-            if result is None:
-                return self._reply({"error": "unknown request_id"}, 404)
-            return self._reply({"ok": True, "status": result["status"],
-                                "token": result.get("token"),
-                                "expires_at": result.get("expires_at")})
+            return mailroom_handshake.handle_approve(self, c, principal, d)
         if u.path == "/join":
-            try:
-                node_id = d.get("node_id"); pubkey_b64 = d.get("pubkey_b64"); slug = d.get("slug")
-                if not (node_id and pubkey_b64 and slug):
-                    return self._reply({"error": "node_id, pubkey_b64, slug required"}, 400)
-                entry = handshake.new_request(node_id, pubkey_b64, slug)
-                return self._reply({"request_id": entry["request_id"], "status": entry["status"]})
-            except Exception as e:
-                return self._reply({"error": str(e)}, 500)
+            return mailroom_handshake.handle_join(self, c, principal, d)
         self._reply({"error": "not found"}, 404)
 
 
@@ -429,16 +458,31 @@ def main():
     ap = argparse.ArgumentParser(description="Rookery mailroom HTTP sidecar.")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--public-url", default=None,
-                    help="how peers reach this sidecar (goes in the A2A Agent Card)")
-    ap.add_argument("--default-node", default="mailroom",
-                    help="A2A message recipient when none is given in metadata.recipient")
-    ap.add_argument("--tls-cert", default=None, help="PEM cert -> serve HTTPS (with --tls-key)")
+    ap.add_argument(
+        "--public-url",
+        default=None,
+        help="how peers reach this sidecar (goes in the A2A Agent Card)",
+    )
+    ap.add_argument(
+        "--default-node",
+        default="mailroom",
+        help="A2A message recipient when none is given in metadata.recipient",
+    )
+    ap.add_argument(
+        "--tls-cert", default=None, help="PEM cert -> serve HTTPS (with --tls-key)"
+    )
     ap.add_argument("--tls-key", default=None, help="PEM private key for --tls-cert")
-    ap.add_argument("--token", default=os.environ.get("ROOKERY_TOKEN"),
-                    help="require Authorization: Bearer <token> on non-public endpoints "
-                         "(default $ROOKERY_TOKEN). /health + agent-card stay public.")
-    ap.add_argument("--card-key", default=None, help="Ed25519 private key (PEM) -> sign the agent card")
+    ap.add_argument(
+        "--token",
+        default=os.environ.get("ROOKERY_TOKEN"),
+        help="require Authorization: Bearer <token> on non-public endpoints "
+        "(default $ROOKERY_TOKEN). /health + agent-card stay public.",
+    )
+    ap.add_argument(
+        "--card-key",
+        default=None,
+        help="Ed25519 private key (PEM) -> sign the agent card",
+    )
     a = ap.parse_args()
     global PUBLIC_URL, DEFAULT_NODE, CARD_KEY
     PUBLIC_URL = a.public_url or f"http://{a.host}:{a.port}"
@@ -454,13 +498,19 @@ def main():
         srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
         scheme = "https"
     auth_on = policy.security_schemes() is not None
-    print(f"[mailroom] serving {R.DB_PATH} on {scheme}://{a.host}:{a.port}  "
-          f"auth={'ON' if auth_on else 'OFF'}  policy={type(policy).__name__}", flush=True)
+    print(
+        f"[mailroom] serving {R.DB_PATH} on {scheme}://{a.host}:{a.port}  "
+        f"auth={'ON' if auth_on else 'OFF'}  policy={type(policy).__name__}",
+        flush=True,
+    )
     if scheme == "https" and auth_on:
         print("[mailroom] TLS + token = auth + encryption (internet-safe).", flush=True)
     elif auth_on and a.host == "0.0.0.0":
-        print("[mailroom] NOTE: the token authenticates but does NOT encrypt. Over the internet, "
-              "add TLS (--tls-cert/--tls-key) or a tunnel (Tailscale/SSH -L/Cloudflare).", flush=True)
+        print(
+            "[mailroom] NOTE: the token authenticates but does NOT encrypt. Over the internet, "
+            "add TLS (--tls-cert/--tls-key) or a tunnel (Tailscale/SSH -L/Cloudflare).",
+            flush=True,
+        )
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

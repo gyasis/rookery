@@ -10,6 +10,7 @@ import argparse
 import os
 
 from cli_approve import cmd_approve
+from cli_known_hosts import cmd_known_hosts_forget, cmd_known_hosts_list
 from cli_serve import cmd_serve
 from cli_up import cmd_up
 
@@ -80,6 +81,23 @@ def build_parser():
         help="Bearer token (default $ROOKERY_TOKEN)",
     )
     p_approve.set_defaults(func=cmd_approve)
+
+    # --- known-hosts ---
+    p_kh = sub.add_parser(
+        "known-hosts", help="Manage trusted peers (~/.rookery/known_hosts)."
+    )
+    kh_sub = p_kh.add_subparsers(dest="kh_command", metavar="<kh_command>")
+    kh_sub.required = True
+
+    p_kh_list = kh_sub.add_parser("list", help="List known hosts.")
+    p_kh_list.set_defaults(func=cmd_known_hosts_list)
+
+    p_kh_forget = kh_sub.add_parser("forget", help="Remove a known host.")
+    p_kh_forget.add_argument("host", help="Host (URL or hostname) to remove.")
+    p_kh_forget.add_argument(
+        "--yes", "-y", action="store_true", help="Skip the confirmation prompt."
+    )
+    p_kh_forget.set_defaults(func=cmd_known_hosts_forget)
 
     return ap
 

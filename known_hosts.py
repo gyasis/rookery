@@ -4,6 +4,7 @@ One line per peer; comment lines start with '#'.
 Line format:
     <host_or_url> <pubkey_b64> <label>  # added <iso8601>
 """
+
 import dataclasses
 import datetime
 import os
@@ -66,6 +67,37 @@ def add(host: str, pubkey: str, label: str) -> Entry:
             tmp.unlink(missing_ok=True)
 
     return entry
+
+
+def remove(host: str) -> bool:
+    """Remove the entry for `host`. Return True if removed, False if not found.
+
+    Atomic write; backs up prior content to ~/.rookery/known_hosts.bak first.
+    Same file-mode + chmod 0600 invariants as add().
+    """
+    entries = load()
+    kept = [e for e in entries if e.host != host]
+    if len(kept) == len(entries):
+        return False
+
+    # Back up before overwriting
+    if _FILE.exists():
+        _BAK.write_bytes(_FILE.read_bytes())
+        os.chmod(_BAK, 0o600)
+
+    tmp = _DIR / f"known_hosts.tmp.{os.getpid()}"
+    try:
+        lines = "".join(
+            f"{e.host} {e.pubkey} {e.label}  # added {e.added}\n" for e in kept
+        )
+        tmp.write_text(lines)
+        os.chmod(tmp, 0o600)
+        os.rename(tmp, _FILE)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+    return True
 
 
 def check(host: str, pubkey: str) -> str:

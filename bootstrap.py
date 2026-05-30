@@ -25,6 +25,7 @@ _PY_MODULES = [
     "cli_serve.py",
     "cli_up.py",
     "cli_approve.py",
+    "cli_known_hosts.py",
     "identity.py",
     "known_hosts.py",
     "discovery.py",

@@ -55,14 +55,14 @@ def _discover_avahi(timeout):
         stdout = r.stdout
     except (subprocess.SubprocessError, FileNotFoundError):
         return []
-    return [e for e in (_parse_avahi_line(l) for l in stdout.splitlines()) if e]
+    return [e for e in (_parse_avahi_line(line) for line in stdout.splitlines()) if e]
 
 
 def _discover_dns_sd(timeout):
     # Step 1: enumerate instance names
     out = _run(["dns-sd", "-B", "_rookery._tcp", "local."], timeout)
     names = [
-        p[-1] for p in (l.split() for l in out.splitlines())
+        p[-1] for p in (line.split() for line in out.splitlines())
         if len(p) >= 7 and p[1] == "Add"
     ]
     # Step 2: resolve each name
