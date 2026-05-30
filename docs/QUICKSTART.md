@@ -185,34 +185,36 @@ TLS+token; whatever you ran already is fine):
 python3 mailroom_server.py --host 0.0.0.0 --port 8765 --token "$ROOKERY_TOKEN" &
 ```
 
-**On machine B** — wire the MCP bridge (`rookery_mcp.py`) into the Claude Code
-session's config. Three tools land on the agent: `send`, `roster`, and the
-key one — `await_message`, which **blocks** for up to `timeout` seconds and
-returns when mail arrives. The tool polls the sidecar internally; from the
-agent's POV the mesh is handing it work.
+**On machine A** — mint an **invite** for B (one-shot handshake, no hand-editing
+of any config). The invite is a JSON file carrying the URL, a freshly minted
+per-node token (with TTL), and the sidecar's pinned Ed25519 card pubkey:
 
 ```bash
-# minimal files on B — no full repo clone needed:
-scp gyasisutton@<A-host>:~/Documents/code/rookery/{rookery_mcp.py,rookery.py,mailctl.py,schema.sql} \
+curl -s -X POST "https://<A-host>:8765/invite" \
+  -H "Authorization: Bearer $ROOKERY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"node_id":"claude-on-B","may_task":["*"],"ttl_minutes":30}' \
+  > invite.json   # transfer this file to machine B (scp / paste / QR — your call)
+```
+
+**On machine B** — fetch the bridge files once, then consume the invite:
+
+```bash
+scp gyasisutton@<A-host>:~/Documents/code/rookery/{rookery_mcp.py,rookery_join.py,rookery.py,mailctl.py,schema.sql,security.py} \
     ~/rookery-bridge/
-pip install mcp   # the Anthropic MCP SDK (FastMCP)
+pip install mcp cryptography                          # MCP SDK + Ed25519 verify
+
+python3 ~/rookery-bridge/rookery_join.py invite.json --mode verify   # pins card pubkey
+python3 ~/rookery-bridge/rookery_join.py invite.json --mode mcp      # prints the ~/.claude.json snippet to paste
+# OR, for a non-Claude-Code peer that should just be a remote loop:
+python3 ~/rookery-bridge/rookery_join.py invite.json --mode loop     # starts mailctl.py loop right now
 ```
 
-```jsonc
-// ~/.claude.json  →  add under "mcpServers"
-"rookery": {
-  "command": "python3",
-  "args": ["/home/<you>/rookery-bridge/rookery_mcp.py"],
-  "env": {
-    "ROOKERY_NODE":  "claude-on-B",              // this session's node id
-    "ROOKERY_URL":   "https://<A-host>:8765",    // A's sidecar
-    "ROOKERY_TOKEN": "<bearer-from-A>",
-    "ROOKERY_INSECURE_TLS": "1"                  // omit for CA-signed certs
-  }
-}
-```
+`--mode verify` **refuses** the invite if the sidecar's served agent-card pubkey
+doesn't match the one pinned in the invite (TOFU). A tampered invite exits 1.
 
-Restart the Claude Code session, then **send ONE setup message** that puts the
+Once the snippet is in `~/.claude.json`, restart the Claude Code session and
+**send ONE setup message** that puts the
 agent into the wake-loop. From here the agent does NOT poll — it sits inside
 `await_message` and only re-enters the loop after acting on returned mail:
 

@@ -29,6 +29,8 @@ import hmac
 import json
 import os
 import re
+import secrets
+import time
 
 import security
 
@@ -58,8 +60,15 @@ class HardenedPolicy(security.SecurityPolicy):
         if not h.startswith("Bearer "):
             return None
         tok = h[7:].strip()
-        for known, principal in self._by_token.items():
+        now = time.time()
+        for known, principal in list(self._by_token.items()):
             if hmac.compare_digest(tok, known):
+                exp = (self.principals.get(principal) or {}).get("expires_at")
+                if exp and now > exp:
+                    # ephemeral invite token has aged out -> evict + reject
+                    self._by_token.pop(known, None)
+                    self.principals.pop(principal, None)
+                    return None
                 return principal
         return None  # unknown token -> reject (no anonymous fallthrough)
 
@@ -81,3 +90,19 @@ class HardenedPolicy(security.SecurityPolicy):
         if body and _BLOCKED.search(body):
             return security.Decision(False, "blocked content pattern")
         return security.ALLOW
+
+    # --- mint a fresh per-principal invite (in-memory; TTL-bound) ------------
+    def mint_invite(self, node_id, may_task=None, ttl_minutes=60):
+        """Mint a per-node bearer token + ACL with an expiry. Lives in memory
+        only — gone on sidecar restart, which is what you want for an invite."""
+        token = "inv-" + secrets.token_urlsafe(24)
+        expires_at = time.time() + max(1, int(ttl_minutes)) * 60
+        self.principals[node_id] = {
+            "token": token,
+            "may_task": list(may_task or []),
+            "expires_at": expires_at,
+        }
+        self._by_token[token] = node_id
+        return {"token": token, "node_id": node_id,
+                "may_task": self.principals[node_id]["may_task"],
+                "expires_at": expires_at}

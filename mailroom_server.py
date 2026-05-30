@@ -88,6 +88,39 @@ def agent_card(conn):
 _A2A_STATE = {"pending": "submitted", "inflight": "working", "done": "completed"}
 
 
+def _card_pubkey():
+    """Return base64 Ed25519 public key of CARD_KEY, or None if no card signing."""
+    if not CARD_KEY:
+        return None
+    try:
+        import base64
+        from cryptography.hazmat.primitives import serialization
+        with open(CARD_KEY, "rb") as fh:
+            priv = serialization.load_pem_private_key(fh.read(), password=None)
+        pub = priv.public_key().public_bytes(serialization.Encoding.Raw,
+                                             serialization.PublicFormat.Raw)
+        return base64.b64encode(pub).decode()
+    except Exception:
+        return None
+
+
+def mint_invite_response(pol, body):
+    """Mint a per-node invite -> {url, node_id, token, card_pubkey, may_task, expires_at}.
+    Auth is enforced upstream (do_POST gate); any authenticated principal may mint."""
+    node_id = body.get("node_id") or f"node-{int(time.time())}"
+    may_task = body.get("may_task") or []
+    ttl = int(body.get("ttl_minutes") or 60)
+    info = pol.mint_invite(node_id, may_task=may_task, ttl_minutes=ttl)
+    return {
+        "url": PUBLIC_URL,
+        "node_id": info["node_id"],
+        "token": info["token"],
+        "may_task": info.get("may_task"),
+        "expires_at": info.get("expires_at"),
+        "card_pubkey": _card_pubkey(),
+    }
+
+
 def _post_webhook(url, payload, token=None):
     data = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
@@ -303,6 +336,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/request_credential":
             rid = R.request_credential(c, d["node_id"], d["resource"])
             return self._reply({"id": rid})
+        if u.path == "/invite":
+            return self._reply(mint_invite_response(pol, d or {}))
         self._reply({"error": "not found"}, 404)
 
 

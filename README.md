@@ -29,7 +29,7 @@ without ever putting a secret in a prompt.
 ## Docs
 
 - **[`docs/QUICKSTART.md`](docs/QUICKSTART.md)** — paste-and-run setup for the three deployment shapes: same machine · same network · internet (full security stack).
-- **[`docs/COOKBOOK.md`](docs/COOKBOOK.md)** — 22 small recipes (start the mailroom, wire each engine, federate, sign cards, install the hardened policy, …).
+- **[`docs/COOKBOOK.md`](docs/COOKBOOK.md)** — 22 small recipes (start the mailroom, wire each engine, federate, sign cards, install the hardened policy, mint invites, …).
 - **[`docs/STORIES.md`](docs/STORIES.md)** — narrative use-cases with the commands lifted from the matching demo (Claude↔Codex review, Mac Studio joins over LAN, external A2A agent, federation, CIBA credential phone-home, three-vendor parallel work).
 - **[`docs/rookery-explained.html`](docs/rookery-explained.html)** — single-page visual explainer (model · deploy shapes · A2A · security tiers · engines).
 - Design rationale: [`docs/index.html`](docs/index.html) (links the two research reports + paired-debate transcript).
@@ -122,6 +122,7 @@ cd ~/Documents/code/rookery
 ./demo_a2a_push.sh        # A2A push: sidecar POSTs the completed task to your webhook
 ./demo_signed_card.sh     # A2A signed agent card (Ed25519): valid verifies, tampered fails
 ./demo_hardened.sh        # hardened policy: per-node identity + per-target ACL (guest denied reviewer)
+./demo_invite.sh          # invite/handshake: A mints per-node token; B verifies pin + joins (no hand-edits)
 ./demo_tls.sh             # HTTPS sidecar (self-signed cert) + token = auth + encryption
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
@@ -297,6 +298,15 @@ of git). The authenticated principal is threaded into `authorize`, so authz is
 per-caller, not global. `./demo_hardened.sh` proves it: no token → 401, guest →
 task `researcher` OK but `reviewer` denied, architect → `reviewer` OK.
 
+**Invite / handshake.** With HardenedPolicy installed, the sidecar exposes
+`POST /invite` — any authenticated principal can mint a fresh per-node bearer
+token (with TTL) for a new peer. The response includes the URL, the new
+`node_id`, the token, and the sidecar's pinned Ed25519 **card pubkey**.
+`rookery_join.py invite.json --mode {verify,mcp,loop}` consumes it on the
+peer: TOFU pin-check against the served card, then either print the
+`~/.claude.json` snippet or start `mailctl loop` directly. `./demo_invite.sh`
+proves the round-trip — including refusing a tampered invite (pubkey flipped).
+
 ## Files
 
 | File | Role |
@@ -313,6 +323,7 @@ task `researcher` OK but `reviewer` denied, architect → `reviewer` OK.
 | `policy_hardened.py` | **hardened** SecurityPolicy — per-node identity (per-principal bearer token) + per-target ACL; `ROOKERY_SECURITY=policy_hardened:HardenedPolicy` |
 | `node_identity.example.json` | template for the per-node token + `may_task` ACL registry (copy to `node_identity.json`) |
 | `gen_card_key.py` / `verify_card.py` | generate the Ed25519 card key / verify a served card's signature |
+| `rookery_join.py` | consume an invite (`/invite`) — pin-check the card, then print the `~/.claude.json` snippet or start `mailctl loop` directly |
 | `monitor.sh` | live DB view (the Monitor node) |
 | `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** card / JSON-RPC (`message/send`, `tasks/get`, `message/stream` SSE) + bearer auth |
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |

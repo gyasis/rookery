@@ -7,7 +7,7 @@ set -uo pipefail   # NOT -e: keep going past a failing demo
 cd "$(dirname "$0")"
 
 FREE=(demo.sh demo_postmaster.sh demo_research.sh demo_multihost.sh demo_security.sh \
-      demo_federation.sh demo_dlq.sh demo_terminal.sh a2a_demo.sh demo_a2a_secure.sh demo_a2a_push.sh demo_signed_card.sh demo_hardened.sh demo_tls.sh)
+      demo_federation.sh demo_dlq.sh demo_terminal.sh a2a_demo.sh demo_a2a_secure.sh demo_a2a_push.sh demo_signed_card.sh demo_hardened.sh demo_invite.sh demo_tls.sh)
 PAID=(demo_real.sh demo_real_research.sh demo_real_sdk.sh demo_real_sdk_research.sh demo_real_team.sh)
 RUN=("${FREE[@]}")
 [ "${1:-}" = "--all" ] && RUN+=("${PAID[@]}")

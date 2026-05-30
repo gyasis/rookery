@@ -74,6 +74,14 @@ class SecurityPolicy:
     def resolve_secret(self, token_ref):
         return R.resolve_secret(token_ref)
 
+    # --- invite / handshake ----------------------------------------------
+    def mint_invite(self, node_id, may_task=None, ttl_minutes=60):
+        """Return a fresh invite for a new node. Default: re-issue the shared
+        token (no per-node identity, no expiry). HardenedPolicy overrides this
+        to MINT a per-principal bearer token with TTL."""
+        return {"token": getattr(self, "token", None), "node_id": node_id,
+                "may_task": may_task, "expires_at": None}
+
 
 class DefaultPolicy(SecurityPolicy):
     """Today's behavior: optional bearer-token transport auth, allow-all authz,
