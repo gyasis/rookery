@@ -123,6 +123,7 @@ cd ~/Documents/code/rookery
 ./demo_signed_card.sh     # A2A signed agent card (Ed25519): valid verifies, tampered fails
 ./demo_hardened.sh        # hardened policy: per-node identity + per-target ACL (guest denied reviewer)
 ./demo_invite.sh          # invite/handshake: A mints per-node token; B verifies pin + joins (no hand-edits)
+./demo_up.sh              # one-command join: `rookery up` (bootstrap installer + handshake + TOFU pin + auto-config)
 ./demo_tls.sh             # HTTPS sidecar (self-signed cert) + token = auth + encryption
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
@@ -307,6 +308,19 @@ peer: TOFU pin-check against the served card, then either print the
 `~/.claude.json` snippet or start `mailctl loop` directly. `./demo_invite.sh`
 proves the round-trip — including refusing a tampered invite (pubkey flipped).
 
+**One-command join (`rookery up`).** The frictionless wrapper around the
+invite + MCP wiring. On A: `rookery serve` starts the sidecar AND an
+interactive approval watcher AND announces presence via mDNS / UDP. On
+the peer B: one bootstrap (`curl -sSL http://A:8765/bootstrap | python3 -`)
+installs `~/.local/bin/rookery`, then `rookery up` (no args) discovers A
+on the LAN, generates a 3-word slug, knocks on A's `/join`, waits for A's
+"approve? [y/N]" prompt (the slug is the visual check — does the joining
+machine show this same code?), TOFU-pins A's Ed25519 card pubkey to
+`~/.rookery/known_hosts`, and auto-merges the `rookery` MCP server entry
+into `~/.claude.json` (with `.bak`). A pubkey change later fires an
+SSH-style `REMOTE HOST IDENTIFICATION HAS CHANGED` warning and refuses
+to update the config. `./demo_up.sh` proves the round-trip end-to-end.
+
 ## Files
 
 | File | Role |
@@ -324,6 +338,13 @@ proves the round-trip — including refusing a tampered invite (pubkey flipped).
 | `node_identity.example.json` | template for the per-node token + `may_task` ACL registry (copy to `node_identity.json`) |
 | `gen_card_key.py` / `verify_card.py` | generate the Ed25519 card key / verify a served card's signature |
 | `rookery_join.py` | consume an invite (`/invite`) — pin-check the card, then print the `~/.claude.json` snippet or start `mailctl loop` directly |
+| `rookery_cli.py` | unified CLI — `rookery serve`, `rookery up`, `rookery approve` |
+| `identity.py` | per-node Ed25519 keypair at `~/.rookery/id_ed25519` |
+| `known_hosts.py` | SSH-style TOFU pin store at `~/.rookery/known_hosts` (`ok` / `changed` / `unknown`) |
+| `discovery.py` | LAN discovery — mDNS shell-out (`avahi-browse` / `dns-sd`) + UDP-broadcast fallback |
+| `handshake.py` | in-memory join-request queue (`/join` -> approval -> minted token) |
+| `config_manager.py` | idempotent `~/.claude.json` merge with `.bak.<epoch>` |
+| `bootstrap.py` | builds the peer zipapp; `/bootstrap` endpoint serves the installer |
 | `monitor.sh` | live DB view (the Monitor node) |
 | `mailroom_server.py` | stdlib HTTP sidecar: mailroom API + **A2A** card / JSON-RPC (`message/send`, `tasks/get`, `message/stream` SSE) + bearer auth |
 | `mailctl.py` | one-file stdlib HTTP client for a peer (copy to the Mac; `send` / `inbox` / `loop`) |

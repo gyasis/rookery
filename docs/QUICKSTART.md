@@ -171,76 +171,82 @@ To run the full security suite locally:
 
 ---
 
-## Scenario 4 — Bring a Claude Code session into the mesh (cross-host)
+## Scenario 4 — Bring a Claude Code session into the mesh (one command)
 
 You own two machines: a regular box (machine A, always-on) and a dedicated
 "Claude computer" (machine B) where you sit at the keyboard inside a Claude
 Code session. The mailroom lives on A; B's coding agent joins as a node —
-and gets **woken by the mesh** (no polling, no "is there mail?" checks).
+**woken by the mesh** (no polling) and configured by a single command.
 
-**On machine A** — start the sidecar (Scenario 2 LAN-only or Scenario 3 full
-TLS+token; whatever you ran already is fine):
-
-```bash
-python3 mailroom_server.py --host 0.0.0.0 --port 8765 --token "$ROOKERY_TOKEN" &
-```
-
-**On machine A** — mint an **invite** for B (one-shot handshake, no hand-editing
-of any config). The invite is a JSON file carrying the URL, a freshly minted
-per-node token (with TTL), and the sidecar's pinned Ed25519 card pubkey:
+**On machine A — `rookery serve`.** Starts the sidecar with the interactive
+approval prompt and announces presence on the LAN:
 
 ```bash
-curl -s -X POST "https://<A-host>:8765/invite" \
-  -H "Authorization: Bearer $ROOKERY_ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"node_id":"claude-on-B","may_task":["*"],"ttl_minutes":30}' \
-  > invite.json   # transfer this file to machine B (scp / paste / QR — your call)
+cd ~/Documents/code/rookery
+python3 rookery_cli.py serve --host 0.0.0.0 --port 8765 \
+  --token "$ROOKERY_TOKEN" --card-key rookery-card-key.pem
+# (the Ed25519 card key is created once via `python3 gen_card_key.py`)
 ```
 
-**On machine B** — fetch the bridge files once, then consume the invite:
+**On machine B — install once, then `rookery up`.** One curl pipes the
+installer that drops `~/.local/bin/rookery`; one command joins the mesh:
 
 ```bash
-scp gyasisutton@<A-host>:~/Documents/code/rookery/{rookery_mcp.py,rookery_join.py,rookery.py,mailctl.py,schema.sql,security.py} \
-    ~/rookery-bridge/
-pip install mcp cryptography                          # MCP SDK + Ed25519 verify
-
-python3 ~/rookery-bridge/rookery_join.py invite.json --mode verify   # pins card pubkey
-python3 ~/rookery-bridge/rookery_join.py invite.json --mode mcp      # prints the ~/.claude.json snippet to paste
-# OR, for a non-Claude-Code peer that should just be a remote loop:
-python3 ~/rookery-bridge/rookery_join.py invite.json --mode loop     # starts mailctl.py loop right now
+curl -sSL http://<A-host>:8765/bootstrap | python3 -
+rookery up                      # auto-discovers A on the LAN
+# or, on the open internet / when discovery isn't available:
+rookery up https://<A-host>:8765
 ```
 
-`--mode verify` **refuses** the invite if the sidecar's served agent-card pubkey
-doesn't match the one pinned in the invite (TOFU). A tampered invite exits 1.
+What you'll see on B:
 
-Once the snippet is in `~/.claude.json`, restart the Claude Code session and
-**send ONE setup message** that puts the
-agent into the wake-loop. From here the agent does NOT poll — it sits inside
-`await_message` and only re-enters the loop after acting on returned mail:
+```
+Discovered mailroom at http://192.168.0.146:8765
+Waiting for approval on the mailroom. Your code:
+  → plum-basil-plum
+```
+
+What A's terminal flashes:
+
+```
+[ROOKERY] Peer wants to join the mesh.
+          node id : peer-blade-15
+          pubkey  : E0lfBFvAegB3tm33jcKG...
+          slug    : plum-basil-plum
+  Does the joining machine show this code? Approve? [y/N]
+```
+
+You hit `y` on A; B receives the minted per-node bearer + A's card pubkey,
+**TOFU-pins** it to `~/.rookery/known_hosts`, and merges the `rookery` MCP
+server entry into `~/.claude.json` (with a `.bak.<epoch>`). B then prints
+the wake-loop instruction.
+
+Restart Claude Code on B and send ONE setup message that puts the agent into
+the wake-loop:
 
 ```text
-> You are node `claude-on-B` in a Rookery mesh. Use the rookery MCP server.
-> Loop forever: call rookery.await_message(timeout=300). When it returns
-> mail, act on it (use any tool you need) then call await_message again.
-> Use rookery.send(to, body) for replies. Continue until I tell you to stop.
+> You are node `peer-blade-15` in a Rookery mesh. Use the rookery MCP
+> server. Loop: call rookery.await_message(timeout=300). When it
+> returns mail, act on it and call await_message again. Use
+> rookery.send(to, body) for replies.
 ```
 
-That's it. From this point on, anything you send from machine A:
+That's the whole flow: one install + one `rookery up`. Mesh wakes the agent
+from here on; no polling, no hand-edits.
 
-```bash
-python3 send_mail.py --to claude-on-B --from human --body "summarize repo X"
-```
+**Trust model.** The slug is the human-verifiable handshake — if A's prompt
+shows a different slug than B's, deny. After approval the served card pubkey
+is TOFU-pinned; a later pubkey change fires an SSH-style `REMOTE HOST
+IDENTIFICATION HAS CHANGED` warning and `rookery up` refuses to touch
+`~/.claude.json`.
 
-…lands in the agent's `await_message` return value within ~1 s. The agent
-acts, replies via `rookery.send`, and goes back to blocking. Mesh wakes
-agent — agent never had to ask.
+**Headless A.** If A's sidecar is running in a detached tmux / systemd unit
+(no interactive terminal), SSH in and run `rookery approve` to clear the
+pending queue from the command line.
 
-**Alternative — pane keystroke injection.** If you can't run MCP in the
-session (legacy CLI, no MCP support), `terminal_node.py --injector
-{tmux,wezterm,zellij} --target <pane>` types mail into the pane. It currently
-reads a *local* mailroom — for cross-host pane-injection, federate
-B → A with `relay.py` or wrap `mailctl.py loop` with `tmux send-keys`.
-See `COOKBOOK.md` recipes 12 (federate) and 19 (terminal node).
+**The old manual flow** (`rookery_join.py --mode mcp`, hand-paste the
+JSON snippet) is still supported — see the `rookery_join.py` section of the
+README — but it's no longer the recommended path.
 
 ---
 
