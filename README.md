@@ -310,16 +310,29 @@ proves the round-trip — including refusing a tampered invite (pubkey flipped).
 
 **One-command join (`rookery up`).** The frictionless wrapper around the
 invite + MCP wiring. On A: `rookery serve` starts the sidecar AND an
-interactive approval watcher AND announces presence via mDNS / UDP. On
-the peer B: one bootstrap (`curl -sSL http://A:8765/bootstrap | python3 -`)
-installs `~/.local/bin/rookery`, then `rookery up` (no args) discovers A
-on the LAN, generates a 3-word slug, knocks on A's `/join`, waits for A's
-"approve? [y/N]" prompt (the slug is the visual check — does the joining
-machine show this same code?), TOFU-pins A's Ed25519 card pubkey to
+interactive approval watcher AND announces presence via **mDNS** (Linux:
+`avahi-browse`, macOS: `dns-sd`, Windows: `dns-sd.exe`/Bonjour) **with a
+UDP-broadcast fallback** when no DNS-SD browser is installed. On the peer
+B: one bootstrap (`curl -sSL http://A:8765/bootstrap | python3 -`) installs
+`~/.local/bin/rookery`, then `rookery up` (no args) discovers A on the LAN,
+generates a 3-word slug, knocks on A's `/join`, waits for A's "approve?
+[y/N]" prompt (the slug is the visual check — does the joining machine show
+this same code?), TOFU-pins A's Ed25519 card pubkey to
 `~/.rookery/known_hosts`, and auto-merges the `rookery` MCP server entry
 into `~/.claude.json` (with `.bak`). A pubkey change later fires an
 SSH-style `REMOTE HOST IDENTIFICATION HAS CHANGED` warning and refuses
 to update the config. `./demo_up.sh` proves the round-trip end-to-end.
+
+**Out-of-band approval notifications.** With `rookery serve` running, set
+`ROOKERY_NOTIFY_METHOD` to `ntfy`, `pushover`, or `webhook` (default `none` =
+silent) and the mailroom fires a push to your phone whenever a peer requests
+to join — so you can approve from anywhere. The notification carries the 3-word
+slug and a clickable link to a mobile-friendly approval form at
+`GET /approve?request_id=<rid>` (the GET form is public; the POST that actually
+mints the token stays bearer-auth-gated). Env knobs: `ROOKERY_NTFY_TOPIC` /
+`ROOKERY_PUSHOVER_TOKEN` + `ROOKERY_PUSHOVER_USER` / `ROOKERY_NOTIFY_WEBHOOK_URL` +
+`ROOKERY_NOTIFY_WEBHOOK_TOKEN`. Notifier failures never block a join. `notifier.py`
+is the dispatcher; see QUICKSTART Scenario 4 for the wiring.
 
 ## Files
 
@@ -343,6 +356,12 @@ to update the config. `./demo_up.sh` proves the round-trip end-to-end.
 | `known_hosts.py` | SSH-style TOFU pin store at `~/.rookery/known_hosts` (`ok` / `changed` / `unknown`) |
 | `discovery.py` | LAN discovery — mDNS shell-out (`avahi-browse` / `dns-sd`) + UDP-broadcast fallback |
 | `handshake.py` | in-memory join-request queue (`/join` -> approval -> minted token) |
+| `mailroom_handshake.py` | HTTP route handlers for `/join`, `/approve`, `GET /approve` form, `/pending` |
+| `notifier.py` | out-of-band approval notifications (ntfy / Pushover / webhook). Silent no-op when `ROOKERY_NOTIFY_METHOD` is unset or `none` |
+| `cli_serve.py` | `rookery serve` subcommand handler |
+| `cli_up.py` | `rookery up` subcommand handler |
+| `cli_approve.py` | `rookery approve` subcommand handler |
+| `cli_known_hosts.py` | `rookery known-hosts list` / `forget <host> [--yes]` for managing TOFU pins |
 | `config_manager.py` | idempotent `~/.claude.json` merge with `.bak.<epoch>` |
 | `bootstrap.py` | builds the peer zipapp; `/bootstrap` endpoint serves the installer |
 | `monitor.sh` | live DB view (the Monitor node) |

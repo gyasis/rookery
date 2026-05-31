@@ -393,6 +393,66 @@ python3 mailroom_server.py \<br>
 
 <hr>
 
+<!-- 3c. The rookery CLI -->
+<section>
+  <h2>The rookery CLI</h2>
+  <p>Four subcommands cover the full lifecycle: run the sidecar on host A, join as a peer from host B,
+    approve join requests when A is headless, and manage TOFU pins.</p>
+  <div class="topo">
+
+    <div class="box indigo">
+      <div class="title">rookery serve<span class="tag">always-on a</span></div>
+      <div class="body">
+        <ul>
+          <li><code>--host 0.0.0.0 --port 8765</code></li>
+          <li><code>--token $ROOKERY_TOKEN</code></li>
+          <li><code>--card-key &lt;pem&gt;</code> (Ed25519 sign)</li>
+          <li class="muted">Starts sidecar + announces on the LAN + flashes the slug-approval prompt.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="box moss">
+      <div class="title">rookery up<span class="tag">peer b, one command</span></div>
+      <div class="body">
+        <ul>
+          <li><code>rookery up</code> (auto-discover)</li>
+          <li><code>rookery up &lt;url&gt;</code> (explicit)</li>
+          <li><code>--node-id &lt;name&gt;</code> <code>--insecure-tls</code></li>
+          <li class="muted">Discovers, knocks with slug, TOFU-pins A's card, merges <code>~/.claude.json</code>.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="box brick">
+      <div class="title">rookery approve<span class="tag">headless a</span></div>
+      <div class="body">
+        <ul>
+          <li><code>--url http://A:8765 --token &lt;tok&gt;</code></li>
+          <li>Lists pending requests with their slug.</li>
+          <li>Prompts y/N/skip per entry.</li>
+          <li class="muted">For unattended sidecars (systemd / tmux detached).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="box ochre">
+      <div class="title">rookery known-hosts list|forget<span class="tag">manage tofu pins</span></div>
+      <div class="body">
+        <ul>
+          <li><code>rookery known-hosts list</code> (shows all pinned peers)</li>
+          <li><code>rookery known-hosts forget &lt;host&gt; [--yes]</code> (revoke)</li>
+          <li class="muted">Backed by <code>~/.rookery/known_hosts</code> (SSH-style)</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+  <p class="note">Install once on B (<code>curl -sSL http://A:8765/bootstrap | python3 -</code>); then <code>rookery up</code> is the daily UX.</p>
+</section>
+
+<hr>
+
 <!-- 4. A2A protocol -->
 <section>
   <h2>The protocol &mdash; A2A</h2>
@@ -491,6 +551,18 @@ python3 mailroom_server.py \<br>
     <div class="fe"><code>rookery_mcp.py</code> &mdash; MCP server exposing send / check_inbox / await_message / roster</div>
     <div class="fe"><code>terminal_node.py</code> &mdash; bridges a human/terminal-agent (tmux/wezterm/zellij) into the mesh</div>
     <div class="fe"><code>gen_card_key.py</code> / <code>verify_card.py</code> &mdash; generate and verify Ed25519 signed cards</div>
+    <div class="fe"><code>rookery_cli.py</code> &mdash; unified CLI entrypoint (4 subcommands: serve, up, approve, known-hosts)</div>
+    <div class="fe"><code>cli_serve.py</code> / <code>cli_up.py</code> / <code>cli_approve.py</code> &mdash; subcommand handlers (lazy-imported per command)</div>
+    <div class="fe"><code>cli_known_hosts.py</code> &mdash; <code>rookery known-hosts list/forget</code> for managing TOFU pins</div>
+    <div class="fe"><code>identity.py</code> &mdash; this node's Ed25519 keypair at <code>~/.rookery/id_ed25519</code></div>
+    <div class="fe"><code>known_hosts.py</code> &mdash; SSH-style TOFU pin store at <code>~/.rookery/known_hosts</code></div>
+    <div class="fe"><code>discovery.py</code> &mdash; mDNS (avahi/dns-sd) + UDP-broadcast fallback for LAN peer discovery</div>
+    <div class="fe"><code>config_manager.py</code> &mdash; idempotent <code>~/.claude.json</code> merge (writes <code>.bak.&lt;epoch&gt;</code>)</div>
+    <div class="fe"><code>handshake.py</code> &mdash; in-memory join-request queue (slug + pubkey + ttl-bound minted token)</div>
+    <div class="fe"><code>mailroom_handshake.py</code> &mdash; <code>/join</code> &middot; <code>/pending</code> &middot; <code>/approve</code> (JSON + HTML form) &middot; <code>/join/&lt;id&gt;</code> long-poll</div>
+    <div class="fe"><code>mailroom_bootstrap.py</code> &mdash; <code>/bootstrap</code> zipapp installer endpoint</div>
+    <div class="fe"><code>bootstrap.py</code> &mdash; builds the single-file <code>~/.local/bin/rookery</code> zipapp on demand</div>
+    <div class="fe"><code>notifier.py</code> &mdash; out-of-band approval push (ntfy / Pushover / webhook) when admin isn't at A's terminal</div>
   </div>
 </section>
 

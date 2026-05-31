@@ -193,10 +193,15 @@ installer that drops `~/.local/bin/rookery`; one command joins the mesh:
 
 ```bash
 curl -sSL http://<A-host>:8765/bootstrap | python3 -
-rookery up                      # auto-discovers A on the LAN
+rookery up                      # auto-discovers A on the LAN via mDNS or UDP broadcast
 # or, on the open internet / when discovery isn't available:
 rookery up https://<A-host>:8765
 ```
+
+`rookery up` (no args) discovers A on the LAN via **mDNS** (Linux:
+`avahi-browse`, macOS: `dns-sd`, Windows: `dns-sd.exe` if you have Apple's
+free Bonjour Print Services installed). When mDNS is unavailable or blocked,
+it falls back to **UDP broadcast** on port 8888.
 
 What you'll see on B:
 
@@ -239,6 +244,56 @@ shows a different slug than B's, deny. After approval the served card pubkey
 is TOFU-pinned; a later pubkey change fires an SSH-style `REMOTE HOST
 IDENTIFICATION HAS CHANGED` warning and `rookery up` refuses to touch
 `~/.claude.json`.
+
+**Approve from your phone (out-of-band notifications).** If you're not at
+A's terminal when B knocks, you can receive a push notification to your
+phone or desktop so you can approve from anywhere. Set
+`ROOKERY_NOTIFY_METHOD` to one of: `none` (default — silent), `ntfy`,
+`pushover`, or `webhook`. For ntfy: also set `ROOKERY_NTFY_TOPIC=<your-topic>`
+(uses ntfy.sh — free, no signup required). For Pushover: set both
+`ROOKERY_PUSHOVER_TOKEN=<app-token>` and `ROOKERY_PUSHOVER_USER=<user-key>`.
+For a generic webhook: set `ROOKERY_NOTIFY_WEBHOOK_URL=<your-url>` plus the
+optional `ROOKERY_NOTIFY_WEBHOOK_TOKEN=<bearer>` for authenticated endpoints.
+The notification carries the 3-word slug and a clickable link to the
+in-browser approval form. Notifier failures **never** block the join — they
+log to stderr and are silently dropped.
+
+```bash
+export ROOKERY_NOTIFY_METHOD=ntfy
+export ROOKERY_NTFY_TOPIC=my-rookery-12fa9c   # pick something hard to guess
+python3 rookery_cli.py serve --host 0.0.0.0 --port 8765 \
+  --token "$ROOKERY_TOKEN" --card-key rookery-card-key.pem
+# now subscribe on your phone: open https://ntfy.sh/my-rookery-12fa9c in the ntfy app
+```
+
+**Mobile-friendly approval form (`GET /approve`).** The link in the ntfy or
+Pushover notification opens `https://<A>:8765/approve?request_id=<rid>` in
+a browser. That page is a self-contained HTML form showing the join request
+(node id, slug, pubkey fingerprint, request age) with **Approve** and
+**Deny** buttons and a bearer-token input field. The form's POST goes back
+to `/approve` (the JSON endpoint), which is auth-gated — only an admin with
+the correct bearer token can actually approve or deny. The `GET` form itself
+is intentionally public: the `request_id` is a random UUID, treat it like a
+TOTP. If you are not the admin, the form will show the request details but
+your POST will be rejected without the token.
+
+**Managing trusted peers (`rookery known-hosts`).** After B joins, A's
+Ed25519 card pubkey is TOFU-pinned on B at `~/.rookery/known_hosts`. You
+can inspect and clean up that pin store at any time:
+
+```bash
+rookery known-hosts list
+# http://192.168.0.146:8765  E0lfBFvAegB3tm33...  (mailroom-home, added 2026-05-30)
+
+rookery known-hosts forget http://192.168.0.146:8765
+# Remove 'http://192.168.0.146:8765' (pubkey E0lfBFvA..., added 2026-05-30)? [y/N]: y
+# Removed 'http://192.168.0.146:8765'.
+```
+
+`rookery known-hosts forget <host>` prompts for confirmation; pass `--yes`
+to skip the prompt. Removing a stale or compromised entry means the next
+`rookery up` to that URL will TOFU-pin the fresh key instead of comparing
+against the old one.
 
 **Headless A.** If A's sidecar is running in a detached tmux / systemd unit
 (no interactive terminal), SSH in and run `rookery approve` to clear the
