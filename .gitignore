@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 *.pem
 node_identity.json
+
+# machine-local secrets pointer (symlink to ~/dev/.env) — never track
+.env
