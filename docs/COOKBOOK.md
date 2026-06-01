@@ -176,7 +176,7 @@ python3 mailroom_server.py --host 0.0.0.0 --port 8765 --token "$ROOKERY_TOKEN"
 
 # On the peer (e.g. Mac Studio — copy mailctl.py there):
 ROOKERY_TOKEN=<same-token> \
-python3 mailctl.py loop --url http://192.168.0.146:8765 --node macbot
+python3 mailctl.py loop --url http://<linux-host>:8765 --node macbot
 ```
 
 Never put the SQLite file on a network share — peers talk to the sidecar over TCP.

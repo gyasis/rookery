@@ -57,23 +57,24 @@ For real models, swap `--engine mock` → `--nodes architect=claude,reviewer=cod
 
 ## Scenario 2 — Same network: two machines on the LAN
 
-Mailroom sidecar on the Linux box (192.168.0.146); Mac Studio
-(192.168.0.159, user `gyasisutton`) joins as a remote node. SQLite stays on
-one host — peers talk to the sidecar over TCP, never via a network share.
+Mailroom sidecar on a Linux box (`<linux-host>`); a Mac Studio (`<mac-host>`,
+user `<mac-user>`) joins as a remote node. SQLite stays on one host — peers
+talk to the sidecar over TCP, never via a network share. Replace
+`<linux-host>` / `<mac-host>` / `<mac-user>` with your own LAN values.
 
-**On 192.168.0.146:**
+**On `<linux-host>`:**
 
 ```bash
 cd ~/Documents/code/rookery && ./cleanup.sh
 python3 mailroom_server.py --host 0.0.0.0 --port 8765 &
-curl -s http://192.168.0.146:8765/health
+curl -s http://<linux-host>:8765/health
 ```
 
-**On 192.168.0.159 (Mac Studio):**
+**On `<mac-host>` (Mac Studio):**
 
 ```bash
-scp gyasisutton@192.168.0.146:~/Documents/code/rookery/mailctl.py .
-python3 mailctl.py loop --url http://192.168.0.146:8765 --node macbot --poll 1
+scp <mac-user>@<linux-host>:~/Documents/code/rookery/mailctl.py .
+python3 mailctl.py loop --url http://<linux-host>:8765 --node macbot --poll 1
 ```
 
 **Back on the Linux box — send mail, then check the DB:**
@@ -84,7 +85,7 @@ sqlite3 -header -column ~/Documents/code/rookery/rookery.db \
   "SELECT id,sender,recipient,substr(body,1,50) body,status FROM inbox ORDER BY id;"
 ```
 
-The Mac node replies with `mailctl.py send --url http://192.168.0.146:8765 --to human --from macbot --body "..."`.
+The Mac node replies with `mailctl.py send --url http://<linux-host>:8765 --to human --from macbot --body "..."`.
 
 A bearer token (`--token`) authenticates but does NOT encrypt. On a trusted
 LAN that is acceptable; for an untrusted segment use the TLS sidecar below.
@@ -206,7 +207,7 @@ it falls back to **UDP broadcast** on port 8888.
 What you'll see on B:
 
 ```
-Discovered mailroom at http://192.168.0.146:8765
+Discovered mailroom at http://<linux-host>:8765
 Waiting for approval on the mailroom. Your code:
   → plum-basil-plum
 ```
@@ -283,11 +284,11 @@ can inspect and clean up that pin store at any time:
 
 ```bash
 rookery known-hosts list
-# http://192.168.0.146:8765  E0lfBFvAegB3tm33...  (mailroom-home, added 2026-05-30)
+# http://<linux-host>:8765  E0lfBFvAegB3tm33...  (mailroom-home, added 2026-05-30)
 
-rookery known-hosts forget http://192.168.0.146:8765
-# Remove 'http://192.168.0.146:8765' (pubkey E0lfBFvA..., added 2026-05-30)? [y/N]: y
-# Removed 'http://192.168.0.146:8765'.
+rookery known-hosts forget http://<linux-host>:8765
+# Remove 'http://<linux-host>:8765' (pubkey E0lfBFvA..., added 2026-05-30)? [y/N]: y
+# Removed 'http://<linux-host>:8765'.
 ```
 
 `rookery known-hosts forget <host>` prompts for confirmation; pass `--yes`

@@ -6,8 +6,8 @@ addressed to `node@<remote>` and forwards it to that remote mailroom's sidecar
 `/send`, rewriting the sender to `<orig>@<self>` so replies route back. Mailroom
 ids resolve via a directory (JSON), e.g.:
 
-    { "home": {"url": "http://192.168.0.146:8765", "token": "..."},
-      "mac":  {"url": "http://192.168.0.159:8765", "token": "..."} }
+    { "home": {"url": "http://<host-a>:8765", "token": "..."},
+      "mac":  {"url": "http://<host-b>:8765", "token": "..."} }
 
 Address format: `node@mailroom` ('@' is reserved as the separator; bare `node`
 = local). Multi-hop is bounded by a hop count carried in `topic` (relay/<n>).

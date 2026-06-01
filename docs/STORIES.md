@@ -57,11 +57,11 @@ the entire cross-vendor wire protocol — no SDK dependency on either side.
 
 ## Story 2 — My Mac Studio runs the heavy job while I am on the laptop
 
-**The scene.** The Linux laptop at `192.168.0.146` is the primary machine; the
-Mac Studio at `192.168.0.159` (user `gyasisutton`) has the GPU budget and the
-large models. You want a node called `macbot` to run on the Mac and receive
-tasks from your laptop's mailroom over the LAN. There is no shared filesystem —
-the Mac cannot mount the laptop's SQLite file, and you do not want it to. The
+**The scene.** A Linux laptop (`<linux-host>`) is the primary machine; a Mac
+Studio (`<mac-host>`, user `<mac-user>`) has the GPU budget and the large
+models. You want a node called `macbot` to run on the Mac and receive tasks
+from the laptop's mailroom over the LAN. There is no shared filesystem — the
+Mac cannot mount the laptop's SQLite file, and you do not want it to. The
 obstacle is transport: the Mac needs to read and acknowledge mail without
 touching the DB directly.
 
@@ -76,18 +76,18 @@ written by the Mac appears in the laptop's DB as a `done` row.
 
 **Run it yourself.**
 ```bash
-# On the laptop (192.168.0.146):
+# On the laptop (<linux-host>):
 cd ~/Documents/code/rookery
 python3 mailroom_server.py --host 0.0.0.0 --port 8765
 
-# On the Mac Studio (192.168.0.159), copy mailctl.py then:
-python3 mailctl.py loop --url http://192.168.0.146:8765 --node macbot
+# On the Mac Studio (<mac-host>), copy mailctl.py then:
+python3 mailctl.py loop --url http://<linux-host>:8765 --node macbot
 
 # From the laptop, send a task:
 python3 send_mail.py --to macbot --from human --body "run the heavy inference job"
 
 # Inspect from either side:
-python3 mailctl.py inbox --url http://192.168.0.146:8765 --node macbot
+python3 mailctl.py inbox --url http://<linux-host>:8765 --node macbot
 ```
 
 **Why this works.** The sidecar is the only process that touches SQLite; every

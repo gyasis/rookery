@@ -1,5 +1,5 @@
 {
   "self": "home",
-  "home": { "url": "http://192.168.0.146:8765", "token": "OPTIONAL_BEARER_TOKEN" },
-  "mac":  { "url": "http://192.168.0.159:8765", "token": "OPTIONAL_BEARER_TOKEN" }
+  "home": { "url": "http://<host-a>:8765", "token": "OPTIONAL_BEARER_TOKEN" },
+  "mac":  { "url": "http://<host-b>:8765", "token": "OPTIONAL_BEARER_TOKEN" }
 }

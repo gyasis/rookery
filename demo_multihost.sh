@@ -37,6 +37,6 @@ echo "## remote node log (it only ever spoke HTTP):"
 cat /tmp/rk_remote.log
 echo
 echo "demo_multihost (loopback) complete."
-echo "## For the real Mac Studio: copy mailctl.py there and run:"
-echo "   python3 mailctl.py loop --url http://192.168.0.146:$PORT --node macbot"
-echo "   (this box's sidecar must bind --host 0.0.0.0)"
+echo "## For a real LAN run: copy mailctl.py to the peer and run:"
+echo "   python3 mailctl.py loop --url http://<linux-host>:$PORT --node macbot"
+echo "   (replace <linux-host> with the DB host's LAN IP; sidecar must bind --host 0.0.0.0)"

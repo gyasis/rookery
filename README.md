@@ -241,8 +241,8 @@ to `<orig>@<self>` so replies route home. Mailrooms resolve via a directory
 (see `mailrooms.example.json`):
 
 ```json
-{ "home": {"url": "http://192.168.0.146:8765", "token": "..."},
-  "mac":  {"url": "http://192.168.0.159:8765", "token": "..."} }
+{ "home": {"url": "http://<host-a>:8765", "token": "..."},
+  "mac":  {"url": "http://<host-b>:8765", "token": "..."} }
 ```
 Set `ROOKERY_MAILROOMS` (directory path) and `ROOKERY_MAILROOM` (this box's id).
 `./demo_federation.sh` runs two mailrooms on localhost: `alice@home → bob@mac`
