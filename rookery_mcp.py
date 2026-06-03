@@ -19,13 +19,17 @@ Env: ROOKERY_NODE (this session's node id, default 'claude-main'),
 """
 
 import os
+import socket
 import time
 
 from mcp.server.fastmcp import FastMCP
 
 import rookery as R
 
-NODE = os.environ.get("ROOKERY_NODE", "claude-main")
+# Node identity: an explicit ROOKERY_NODE always wins. Otherwise fall back to a
+# unique-per-process id so two MCP sessions on one host never silently collide
+# (the old default pinned every session to "claude-main").
+NODE = os.environ.get("ROOKERY_NODE") or f"claude-{socket.gethostname().split('.')[0]}-{os.getpid()}"
 URL = os.environ.get(
     "ROOKERY_URL"
 )  # if set, talk to a remote sidecar instead of the local DB
