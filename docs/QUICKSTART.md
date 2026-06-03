@@ -11,6 +11,55 @@ logged in only for paid demos. All three scenarios below run free by default.
 
 ---
 
+## Installation
+
+Rookery installs as **one self-contained binary** — the same `rookery` command
+**hosts** the mailroom (`rookery serve`) *or* **joins** one (`rookery up`). There
+is no separate "server build" vs "client build": pick the role per machine at
+run time, not at install time.
+
+### Option A — from GitHub (any machine)
+
+```bash
+git clone https://github.com/gyasis/rookery.git ~/Documents/code/rookery
+cd ~/Documents/code/rookery
+# build the self-contained zipapp onto your PATH (XDG: ~/.local/bin):
+python3 -c "import bootstrap; bootstrap.build_pyz('$HOME/.local/bin/rookery')"
+rookery --help          # serve · up · approve · known-hosts
+```
+
+`build_pyz` bundles every module needed for **both** roles (mailroom server +
+peer client) and reads its SQL schema from inside the archive, so a machine
+installed this way can host a mesh with nothing but the single file on PATH.
+
+### Option B — one-liner from a running host (zero git)
+
+If a host is already serving, a fresh machine installs straight from it — the
+`/bootstrap` endpoint streams the same zipapp installer:
+
+```bash
+curl -sSL http://<host>:<port>/bootstrap | python3 -   # drops ~/.local/bin/rookery
+rookery up http://<host>:<port>                        # then join
+```
+
+### Dependencies
+
+- **Core:** Python 3 standard library only — nothing to `pip install`.
+- **Security tier (Scenario 3 — TLS, signed cards, hardened policy):**
+  `pip install cryptography` (the one non-stdlib dependency).
+
+### The two roles at a glance
+
+| Role  | Command            | Owns the SQLite mailroom? | How many per mesh |
+|-------|--------------------|---------------------------|-------------------|
+| Host  | `rookery serve`    | **yes** (the audit log)   | exactly **1**     |
+| Peer  | `rookery up <url>` | no — talks to the host    | many              |
+
+Peers never share the DB file; they reach the host's HTTP sidecar over TCP.
+Pick **one** machine to `serve`; every other machine runs `up`.
+
+---
+
 ## Scenario 1 — Same machine: two agents on one box
 
 The postmaster (mode B) manages both nodes. Agents are fully asleep between

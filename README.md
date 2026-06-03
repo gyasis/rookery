@@ -26,6 +26,25 @@ without ever putting a secret in a prompt.
      mesh_approve ──▶ JIT token *pointer* (secret stays in keychain)
 ```
 
+## Install
+
+One self-contained binary — the **same** `rookery` command hosts a mailroom
+(`rookery serve`) *or* joins one (`rookery up`). Role is chosen per machine at
+run time, not at install time.
+
+```bash
+git clone https://github.com/gyasis/rookery.git ~/Documents/code/rookery
+cd ~/Documents/code/rookery
+python3 -c "import bootstrap; bootstrap.build_pyz('$HOME/.local/bin/rookery')"
+rookery --help          # serve · up · approve · known-hosts
+```
+
+Or, from an already-running host (no git): `curl -sSL http://<host>:<port>/bootstrap | python3 -`.
+
+Core is Python-3 **stdlib only**; `pip install cryptography` is needed only for
+the TLS / signed-card / hardened-policy security tier. Full matrix and the
+host-vs-peer model: **[`docs/QUICKSTART.md` → Installation](docs/QUICKSTART.md#installation)**.
+
 ## Docs
 
 - **[`docs/QUICKSTART.md`](docs/QUICKSTART.md)** — paste-and-run setup for the three deployment shapes: same machine · same network · internet (full security stack).
