@@ -36,6 +36,13 @@ _PY_MODULES = [
     "security.py",
     "handshake.py",
     "notifier.py",
+    # host-side modules — so the SAME installed app can `serve`, not just join.
+    "mailroom_server.py",
+    "mailroom_handshake.py",
+    "mailroom_bootstrap.py",
+    "bootstrap.py",
+    "policy_hardened.py",
+    "policy_example.py",
 ]
 
 _DATA_FILES = [

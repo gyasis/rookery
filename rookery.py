@@ -30,9 +30,21 @@ def connect(db_path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _load_schema() -> str:
+    """Read schema.sql from disk (repo) or, when running inside a zipapp where
+    open() can't reach a path inside the archive, via the module loader."""
+    try:
+        with open(_SCHEMA_PATH) as fh:
+            return fh.read()
+    except OSError:
+        loader = globals().get("__loader__")
+        if loader is not None and hasattr(loader, "get_data"):
+            return loader.get_data(_SCHEMA_PATH).decode("utf-8")
+        raise
+
+
 def init_db(conn: sqlite3.Connection) -> None:
-    with open(_SCHEMA_PATH) as fh:
-        conn.executescript(fh.read())
+    conn.executescript(_load_schema())
     conn.commit()
 
 
