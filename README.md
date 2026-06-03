@@ -49,6 +49,7 @@ host-vs-peer model: **[`docs/QUICKSTART.md` → Installation](docs/QUICKSTART.md
 
 - **[`docs/QUICKSTART.md`](docs/QUICKSTART.md)** — paste-and-run setup for the three deployment shapes: same machine · same network · internet (full security stack).
 - **[`docs/COOKBOOK.md`](docs/COOKBOOK.md)** — 22 small recipes (start the mailroom, wire each engine, federate, sign cards, install the hardened policy, mint invites, …).
+- **[`docs/NODE_BRIEFING.md`](docs/NODE_BRIEFING.md)** — the instruction block you hand each agent so it knows its name, its siblings, and how to message them (CLI + MCP variants, with a filled `architect ↔ triage` example).
 - **[`docs/STORIES.md`](docs/STORIES.md)** — narrative use-cases with the commands lifted from the matching demo (Claude↔Codex review, Mac Studio joins over LAN, external A2A agent, federation, CIBA credential phone-home, three-vendor parallel work).
 - **[`docs/rookery-explained.html`](docs/rookery-explained.html)** — single-page visual explainer (model · deploy shapes · A2A · security tiers · engines).
 - Design rationale: [`docs/index.html`](docs/index.html) (links the two research reports + paired-debate transcript).
