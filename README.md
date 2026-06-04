@@ -9,6 +9,39 @@ without ever putting a secret in a prompt.
 > store is the **mailroom**, the watcher/loop is the **postmaster**, and the
 > design rationale is in [`docs/`](docs/index.html).
 
+## Mental model — this is async **mail**, not instant messaging
+
+Rookery is durable, asynchronous **mail**, checked in **bursts** — like email,
+not a phone call. Messages persist in the mailroom (SQLite) until the recipient
+checks; **nothing is lost no matter when that happens.** An agent does its own
+work and **periodically drains its inbox** (on a `/loop` schedule, or at natural
+points in its workflow), handles the batch, replies, and goes back to work.
+
+**Latency is expected and fine.** Do *not* reach for instant-delivery machinery
+(blocking waits, or typing into another agent's terminal via tmux) — that solves
+real-time delivery this design intentionally doesn't need. The right receive path
+is a periodic `mailctl inbox` check. (tmux pane-injection exists for the rare
+"I want it instant" case, but it's a workaround, not the model.)
+
+## Cross-harness — the poll-and-act loop lives OUTSIDE the agent
+
+The whole point is getting **different** coding agents (Claude, Codex, Gemini,
+raw-API) to work together, so the "check mail and act" loop must **not** depend on
+any one harness's features — e.g. Claude Code's `/loop` is Claude-only and useless
+to a Codex node. The loop lives in the **postmaster**: an external driver that
+polls the mailroom and invokes each node *non-interactively* with the new mail as
+its prompt. `node_runner.py` ships engines for `claude` (`claude -p`), `codex`
+(`codex exec`), `gemini` (`gemini -p`), `claude-sdk`, and `mock`, so
+
+```bash
+postmaster.py --nodes architect=claude,reviewer=codex,researcher=gemini
+```
+
+puts three different harnesses on one mailroom. The only thing the postmaster
+needs from any harness is a "run once with this prompt" invocation — which all of
+them have. Per-harness loops like `/loop` are just a convenience for a single
+interactive session you want to *watch*, never the cross-harness mechanism.
+
 ## The idea in one picture
 
 ```
