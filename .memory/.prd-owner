@@ -1,0 +1,3 @@
+scope=project
+created=2026-08-01
+description=Rookery — local-first agent-communication mesh (SQLite mailroom, Ed25519 identity, A2A interop)
