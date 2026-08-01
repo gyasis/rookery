@@ -63,8 +63,23 @@ def _load_schema() -> str:
         raise
 
 
+# Read the schema ONCE, at import. Under a zipapp _load_schema() reaches into
+# the archive via the module loader, so a lazy per-connection read means a
+# long-lived process (notably `rookery serve`) dies with
+# "ZipImportError: bad local file header" the moment the installed pyz is
+# rebuilt underneath it. Reading at startup makes an upgrade cost the running
+# server nothing.
+try:
+    _SCHEMA_SQL = _load_schema()
+except Exception:                      # tolerate an odd import context
+    _SCHEMA_SQL = None
+
+
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript(_load_schema())
+    global _SCHEMA_SQL
+    if _SCHEMA_SQL is None:
+        _SCHEMA_SQL = _load_schema()
+    conn.executescript(_SCHEMA_SQL)
     conn.commit()
 
 
