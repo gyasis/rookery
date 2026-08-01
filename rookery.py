@@ -13,8 +13,28 @@ import subprocess
 import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("ROOKERY_DB", os.path.join(_HERE, "rookery.db"))
 _SCHEMA_PATH = os.path.join(_HERE, "schema.sql")
+_USER_DB = os.path.join(os.path.expanduser("~"), ".rookery", "rookery.db")
+
+
+def _default_db_path() -> str:
+    """Where the mailroom lives when ROOKERY_DB is unset.
+
+    A source checkout keeps the DB beside the code (unchanged behaviour). A
+    zipapp install cannot: _HERE points *inside* the archive, so sqlite3 fails
+    with "unable to open database file". Fall back to ~/.rookery/rookery.db
+    whenever _HERE is not a writable directory.
+    """
+    local = os.path.join(_HERE, "rookery.db")
+    if os.path.exists(local):
+        return local                      # existing checkout — never relocate it
+    if os.path.isdir(_HERE) and os.access(_HERE, os.W_OK):
+        return local
+    os.makedirs(os.path.dirname(_USER_DB), exist_ok=True)
+    return _USER_DB
+
+
+DB_PATH = os.environ.get("ROOKERY_DB") or _default_db_path()
 
 
 def now() -> int:

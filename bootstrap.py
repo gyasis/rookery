@@ -50,6 +50,66 @@ _DATA_FILES = [
 ]
 
 _MAIN_PY = """\
+# NOTE: this file must stay parseable by Python 3.6+. The interpreter check
+# below runs BEFORE importing any rookery module, because those modules use
+# 3.10+ syntax (e.g. `str | None`) and would raise TypeError/SyntaxError at
+# import time on an older interpreter. The shebang is `/usr/bin/env python3`
+# for portability, but on many machines that is an older system/conda Python,
+# so re-exec under a newer one when we find it.
+import os
+import sys
+
+_MIN = (3, 10)
+
+if sys.version_info < _MIN and not os.environ.get("ROOKERY_NO_REEXEC"):
+    import shutil
+    import subprocess
+
+    _archive = os.path.dirname(os.path.abspath(__file__))
+    # Probe: version AND whether `cryptography` (identity.py's only non-stdlib
+    # dependency) is importable. A 3.10+ interpreter without it gets us past the
+    # syntax barrier only to fail on `import identity`, so prefer one with both
+    # and fall back to bare-version only if nothing else is available.
+    # Single line on purpose: this source is itself embedded in a Python string
+    # literal by bootstrap.py, so any backslash escape here needs double-escaping.
+    _probe = ("import sys, importlib.util as u; "
+              "print(sys.version_info[0], sys.version_info[1], "
+              "1 if u.find_spec('cryptography') else 0)")
+    _with_crypto = []
+    _fallback = []
+    # A rookery-managed venv, if one exists, wins over anything on PATH: it is
+    # the only interpreter we can guarantee has cryptography, since PEP 668
+    # blocks `pip install --user` against most system Pythons.
+    _venv = os.path.expanduser("~/.local/share/rookery-venv/bin/python")
+    for _cand in (_venv, "python3.14", "python3.13", "python3.12", "python3.11",
+                  "python3.10", "python3"):
+        _exe = _cand if os.path.isabs(_cand) else shutil.which(_cand)
+        if not _exe or not os.path.exists(_exe):
+            continue
+        try:
+            _out = subprocess.run(
+                [_exe, "-c", _probe], capture_output=True, text=True, timeout=15,
+            ).stdout.split()
+            _major, _minor, _crypto = int(_out[0]), int(_out[1]), int(_out[2])
+        except Exception:
+            continue
+        if (_major, _minor) < _MIN:
+            continue
+        (_with_crypto if _crypto else _fallback).append(_exe)
+
+    for _exe in _with_crypto + _fallback:
+        os.environ["ROOKERY_NO_REEXEC"] = "1"       # belt and braces against a loop
+        os.execv(_exe, [_exe, _archive] + sys.argv[1:])
+
+    sys.exit(
+        "rookery needs Python %d.%d+, but this is %d.%d and no newer "
+        "interpreter was found on PATH.\\n"
+        "Create a managed environment (picked up automatically next run):\\n"
+        "  python3.12 -m venv ~/.local/share/rookery-venv\\n"
+        "  ~/.local/share/rookery-venv/bin/pip install cryptography\\n"
+        % (_MIN[0], _MIN[1], sys.version_info[0], sys.version_info[1])
+    )
+
 import rookery_cli
 rookery_cli.main()
 """
