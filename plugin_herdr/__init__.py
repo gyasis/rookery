@@ -31,7 +31,7 @@ _SOUNDS = {"needcred": "request"}
 
 
 def _send(target: str, text: str) -> bool:
-    """Submit to a recognised agent — no separate Enter keystroke."""
+    """Deliver to a recognised agent (bridge.prompt confirms submission)."""
     return H.prompt(target, text)
 
 

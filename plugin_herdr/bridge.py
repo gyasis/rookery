@@ -189,14 +189,29 @@ def notify(
     return _run(args) is not None
 
 
-def prompt(target: str, text: str, timeout: float = 15.0) -> bool:
+def prompt(target: str, text: str, submit: bool = True,
+           timeout: float = 15.0) -> bool:
     """Submit TEXT to the recognised agent in pane TARGET.
 
-    Unlike tmux/wezterm/zellij send-keys this addresses an AGENT rather than a
-    terminal, and submits — so there is no separate Enter keystroke to send.
-    Reserved for human->agent steering and the terminal-node watcher.
+    `herdr agent prompt` addresses an AGENT rather than a terminal, which is
+    what makes it worth preferring over send-keys. It does NOT reliably submit
+    though: against Claude Code (v2.1.220, herdr 0.7.5) it fills the input box,
+    returns rc=0, and leaves the agent `idle` with the text unsent. Verified by
+    hand on two panes — so we follow with an explicit Enter.
+
+    That failure mode is the dangerous one for a mail watcher: the CLI reports
+    success while nothing is delivered, and terminal_node acks the message on
+    the strength of it. Silently-lost mail is unrecoverable, so submission is
+    confirmed rather than assumed.
+
+    submit=False types without sending, for composing a prompt a human will
+    review before hitting Enter themselves.
     """
-    return _run(["agent", "prompt", target, text], timeout=timeout) is not None
+    if _run(["agent", "prompt", target, text], timeout=timeout) is None:
+        return False
+    if not submit:
+        return True
+    return _run(["agent", "send-keys", target, "enter"], timeout=timeout) is not None
 
 
 def read(target: str, lines: int = 40, source: str = "recent") -> str | None:

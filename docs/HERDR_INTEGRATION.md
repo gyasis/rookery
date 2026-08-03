@@ -57,8 +57,9 @@ and zellij. herdr could be a fourth entry and stop there — but it would waste 
 one thing herdr has that the others do not: **agent state**.
 
 The other three multiplexers know they own a pane. herdr knows the pane contains
-a *coding agent* and what that agent is doing. That maps directly onto mesh
-state Rookery already tracks:
+a *coding agent* and what that agent is doing — the state, not the submission
+mechanics, is the reason to prefer it (delivery still needs an explicit Enter;
+see work item 1). That agent state maps directly onto what Rookery tracks:
 
 | Rookery state | herdr surface |
 |---|---|
@@ -147,11 +148,19 @@ herdr and a silent no-op would be a lie.
 1. **`--injector herdr`.** ✅ `terminal_node.py` keeps its three built-ins and
    looks anything else up in the registry, so the choices list grows only when
    a plugin is attached. Delivery is `herdr agent prompt <target> <text>`, and
-   `--target` accepts a pane id *or* an agent name.
-   Unlike the other three injectors it submits a *prompt* to a recognized
-   agent, so there is no separate Enter keystroke. Because this is an explicit
+   `--target` accepts a pane id *or* an agent name. Because this is an explicit
    opt-in, it calls `require()` and fails loudly rather than no-opping — mail
    is acked either way, and silently-undelivered mail is unrecoverable.
+
+   **Corrected by the live test.** This note originally claimed `herdr agent
+   prompt` submits, so no Enter keystroke is needed. It does not — against
+   Claude Code (v2.1.220 / herdr 0.7.5) it fills the input box, returns rc=0,
+   and leaves the agent `idle` with the text unsent. Reproduced with the raw
+   herdr CLI on two panes, so it is not a Rookery bug; `bridge.prompt()` now
+   follows with an explicit `agent send-keys <target> enter`. This was the
+   worst-shaped failure available to a mail watcher — the tool reports success
+   while nothing is delivered, and `terminal_node` acks the message on the
+   strength of that report.
 
 2. **Notification bridge.** ✅ `postmaster.py --notify {needcred,all,none}`.
    Core calls `plugins.notify("needcred", …)` and counts how many sinks fired;
