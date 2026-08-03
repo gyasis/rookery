@@ -1,6 +1,9 @@
 # Rookery × herdr — the console over the mesh
 
-Status: **design note**, nothing implemented yet. Written 2026-08-01.
+Status: **shipped as an optional plugin**. Written as a design note 2026-08-01;
+the five work items below landed 2026-08-03 as `plugin_herdr/` plus a core
+plugin registry (`plugins.py`) and `demo_herdr.sh`. Core has no herdr
+dependency in either direction.
 
 [herdr](https://herdr.dev) is a terminal workspace manager for coding agents — a
 mouse-first multiplexer whose distinguishing feature is that it *recognizes*
@@ -97,33 +100,101 @@ Allocation rule: **ephemeral nodes get no pane** — they are headless invocatio
 that exit, and giving them panes fights the $0-when-idle model. Panes are for the
 postmaster, persistent partners, and anything a human wants to watch or join.
 
-## Work items
+## Shape: a plugin, not an integration
 
-Roughly ordered by value-to-effort.
+Rookery is a **standalone messenger**. It has to build, run and pass its suite
+with no console attached and no knowledge of what a console does — so the
+dependency points one way only:
 
-1. **`--injector herdr` in `terminal_node.py`.** The smallest useful change: one
-   branch in `inject()` and one entry in the `--injector` choices. Delivery is
-   `herdr agent prompt <target> <text>` for an agent-occupied pane. Note this
-   differs from the other three injectors — herdr submits a *prompt* to a
-   recognized agent rather than typing raw characters, so it does not need a
-   separate Enter keystroke.
+```
+    core  <--imports--  plugin_herdr/        (never the reverse)
+```
 
-2. **Notification bridge.** Postmaster calls `herdr notification show` on new
-   mail and on `NEEDCRED`. This is the highest-value item: it turns the approval
-   queue from something you poll into something that finds you. Must degrade
-   silently when herdr is absent — the bridge is optional, never a dependency.
+Core exposes three extension points in **`plugins.py`** and nothing herdr-shaped:
 
-3. **Pane ↔ node binding.** `herdr agent list` returns JSON; use it to enroll
-   panes as mesh nodes, so a node's identity and its pane are the same thing.
-   Enables `herdr agent focus <node>` to jump to whichever agent is blocked.
+| Extension point | Contract | Used by |
+|---|---|---|
+| `injector(name, send, check)` | `send(target, text) -> bool` | `terminal_node.py --injector` |
+| `sink(fn)` | `fn(event, title, body, **meta) -> bool` | `postmaster.py --notify` |
+| `command(fn)` | `fn(subparsers)` | `rookery <subcommand>` |
 
-4. **Approval surface.** With 2 and 3, `NEEDCRED` becomes: notification fires →
-   sidebar shows `blocked` → focus the pane → `rookery approve`. Worth a demo
-   script (`demo_herdr.sh`) in the style of the existing ones.
+Plugins are **discovered, not named**: `plugins.load()` imports any `plugin_*`
+module or package sitting beside it. Grep core for "herdr" and you get nothing.
+`ROOKERY_PLUGINS=a,b` pins an explicit list, `ROOKERY_PLUGINS=` disables all,
+`ROOKERY_PLUGINS_DEBUG=1` explains why one did not attach.
 
-5. **`HERDR_ENV` gating.** herdr sets `HERDR_ENV=1` inside its panes and blocks
-   nested launches. Any herdr-aware code must check it and no-op outside, the way
-   herdr's own skill file requires.
+The whole herdr surface is three files in one directory:
+
+```
+plugin_herdr/__init__.py   attachment points, nothing else
+plugin_herdr/bridge.py     the herdr CLI wrapper (every subprocess call)
+plugin_herdr/cli.py        the `rookery herdr ...` subcommands
+```
+
+**Delete that directory and Rookery is unchanged** — suite green, `rookery
+--help` no longer mentions herdr, `--injector` back to `{tmux,wezterm,zellij}`.
+Verified by doing exactly that, not by inspection.
+
+`register()` self-gates on the herdr binary: an install that ships the plugin
+without herdr present is indistinguishable from one that never had it.
+Everything in `bridge.py` degrades silently besides — no binary, no server, or
+running outside a pane makes every call a no-op returning `None`/`False`/`[]`.
+The single exception is `require()`, used where the operator explicitly named
+herdr and a silent no-op would be a lie.
+
+## Work items — all shipped 2026-08-03
+
+1. **`--injector herdr`.** ✅ `terminal_node.py` keeps its three built-ins and
+   looks anything else up in the registry, so the choices list grows only when
+   a plugin is attached. Delivery is `herdr agent prompt <target> <text>`, and
+   `--target` accepts a pane id *or* an agent name.
+   Unlike the other three injectors it submits a *prompt* to a recognized
+   agent, so there is no separate Enter keystroke. Because this is an explicit
+   opt-in, it calls `require()` and fails loudly rather than no-opping — mail
+   is acked either way, and silently-undelivered mail is unrecoverable.
+
+2. **Notification bridge.** ✅ `postmaster.py --notify {needcred,all,none}`.
+   Core calls `plugins.notify("needcred", …)` and counts how many sinks fired;
+   it never mentions herdr, and zero sinks is the normal standalone case rather
+   than a degraded one. Default is `needcred`, **not** "every new mail": under
+   a fan-out the postmaster wakes a node per message, so `all` is one alert per wake. The
+   `NEEDCRED` half is the value — it turns the approval queue from something
+   you poll into something that finds you. The toast carries the resource, the
+   node's pane if it has one, and the exact approve command.
+
+3. **Pane ↔ node binding.** ✅ `rookery herdr bind [--sync-status]` reads
+   `herdr agent list` and enrolls **named** panes (`herdr agent rename <pane>
+   <node-id>`) as mesh nodes, writing the pane into `nodes.address`. Only named
+   panes bind — guessing an identity from a terminal title would bind the wrong
+   agent. `--sync-status` mirrors herdr's lifecycle onto `nodes.status`
+   (`blocked` → `waiting`); `unknown` never overwrites, since herdr's own docs
+   warn it does not mean done.
+
+4. **Approval surface.** ✅ `rookery herdr status` puts the console and the
+   mailroom side by side — pane, herdr state, node, mesh status, pending mail —
+   then lists every `NEEDCRED` with its pane and the two commands that resolve
+   it (`rookery herdr focus <node>`, `mesh_approve.py --id N --approve`). It
+   also lists mesh nodes with *no* pane, which is the allocation rule made
+   visible rather than a gap. `demo_herdr.sh` runs the whole loop on the mock
+   engine ($0), showing both an ephemeral node (toast only) and an attended one
+   (toast + jump).
+
+5. **`HERDR_ENV` gating.** ✅ `ROOKERY_HERDR=auto|off|force`. `auto` (default)
+   requires both the binary and `HERDR_ENV=1`, i.e. we are inside a herdr pane.
+   `force` is for a mesh process that legitimately lives outside one (launchd,
+   systemd, ssh) but still drives the console. `HERDR_PANE_ID` is exposed as
+   `self_pane()` — a node started in a pane can learn its own address without
+   being told.
+
+### Why binding turned out to be more than convenience
+
+The first dogfood run hit this: restarting a mesh agent **wiped its briefing
+while its mail survived**. It came back not knowing which node it was, reported
+an empty inbox it could no longer read, and mistook another pane for its peer —
+while its actual mail sat unread. An identity that lives in the pane survives a
+restart of whatever is *inside* the pane, which is exactly what item 3 buys.
+The remaining half — making the briefing itself recoverable from the mesh
+rather than from a pane's context — is not solved here.
 
 ### Not proposed
 

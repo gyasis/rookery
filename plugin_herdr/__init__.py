@@ -1,0 +1,101 @@
+"""herdr plugin for Rookery — attaches herdr as an optional CONSOLE.
+
+This directory is the ENTIRE herdr surface. Core imports none of it:
+`plugins.load()` discovers any `plugin_*` module beside it and calls register(),
+which attaches whatever herdr can currently provide. Delete this directory and
+Rookery is unchanged — still a standalone messenger, still multiplexer-agnostic,
+suite still green, `rookery --help` no longer mentions herdr.
+
+    __init__.py   this file — the attachment points and nothing else
+    bridge.py     the herdr CLI wrapper (every subprocess call lives here)
+    cli.py        the `rookery herdr ...` subcommands
+
+What it contributes:
+
+    injector "herdr"   `herdr agent prompt` as a --injector for terminal_node
+    an alert sink      `herdr notification show` for postmaster events
+    `rookery herdr`    status / bind / focus / notify
+
+The mechanism boundary the plugin exists to respect (docs/HERDR_INTEGRATION.md):
+human->agent is pane injection, agent->agent is MAIL at any distance. The
+injector is the human's on-ramp and the terminal-node watcher's delivery path —
+never how two agents talk. Rookery keeps owning the messaging; herdr only
+renders it and hands the human a keyboard.
+"""
+import plugins
+
+from . import bridge as H
+
+# event kind -> herdr toast sound. Unlisted events stay silent.
+_SOUNDS = {"needcred": "request"}
+
+
+def _send(target: str, text: str) -> bool:
+    """Submit to a recognised agent — no separate Enter keystroke."""
+    return H.prompt(target, text)
+
+
+def _check() -> None:
+    """Explicit opt-in, so fail loudly rather than silently dropping mail."""
+    H.require("--injector herdr")
+
+
+def _sink(event: str, title: str, body: str | None = None, **meta) -> bool:
+    return H.notify(title, body=body, sound=_SOUNDS.get(event))
+
+
+def _commands(subparsers) -> None:
+    from . import cli
+
+    p = subparsers.add_parser(
+        "herdr", help="Console integration — pane<->node binding, focus, toasts."
+    )
+    sub = p.add_subparsers(dest="herdr_command", metavar="<herdr_command>")
+    sub.required = True
+
+    p_status = sub.add_parser(
+        "status", help="What herdr sees vs what the mailroom knows (+ NEEDCRED)."
+    )
+    p_status.set_defaults(func=cli.cmd_herdr_status)
+
+    p_bind = sub.add_parser("bind", help="Enroll named herdr panes as mesh nodes.")
+    p_bind.add_argument(
+        "--existing-only",
+        action="store_true",
+        help="Only bind panes whose node already exists (register nothing new).",
+    )
+    p_bind.add_argument(
+        "--sync-status",
+        action="store_true",
+        help="Also mirror herdr's lifecycle state onto nodes.status "
+             "(blocked -> waiting); 'unknown' never overwrites.",
+    )
+    p_bind.set_defaults(func=cli.cmd_herdr_bind)
+
+    p_focus = sub.add_parser("focus", help="Jump to a node's pane.")
+    p_focus.add_argument("node", help="Node id (or a raw herdr pane id).")
+    p_focus.set_defaults(func=cli.cmd_herdr_focus)
+
+    p_notify = sub.add_parser("notify", help="Raise a console toast.")
+    p_notify.add_argument("title")
+    p_notify.add_argument("--body", default=None)
+    p_notify.add_argument(
+        "--sound", choices=["none", "done", "request"], default=None
+    )
+    p_notify.set_defaults(func=cli.cmd_herdr_notify)
+
+
+def register() -> None:
+    """Attach to the core registry. Called by plugins.load()."""
+    if not H.available():
+        # No herdr binary: contribute nothing at all, so `--injector herdr` is
+        # not offered and `rookery herdr` never appears in --help. An install
+        # that ships this plugin is indistinguishable from one that does not.
+        return
+
+    # The injector attaches whenever herdr is INSTALLED, even if unusable right
+    # now (outside a pane, say) — so the operator gets _check()'s diagnostic
+    # rather than a bare "unknown injector".
+    plugins.injector("herdr", _send, check=_check)
+    plugins.sink(_sink)
+    plugins.command(_commands)

@@ -85,7 +85,7 @@ host-vs-peer model: **[`docs/QUICKSTART.md` → Installation](docs/QUICKSTART.md
 - **[`docs/NODE_BRIEFING.md`](docs/NODE_BRIEFING.md)** — the instruction block you hand each agent so it knows its name, its siblings, and how to message them (CLI + MCP variants, with a filled `architect ↔ triage` example).
 - **[`docs/STORIES.md`](docs/STORIES.md)** — narrative use-cases with the commands lifted from the matching demo (Claude↔Codex review, Mac Studio joins over LAN, external A2A agent, federation, CIBA credential phone-home, three-vendor parallel work).
 - **[`docs/rookery-explained.html`](docs/rookery-explained.html)** — single-page visual explainer (model · deploy shapes · A2A · security tiers · engines).
-- **[`docs/HERDR_INTEGRATION.md`](docs/HERDR_INTEGRATION.md)** — design note: herdr as the console over the mesh (human→agent = pane, agent→agent = mail; `blocked` ↔ `NEEDCRED`). Not implemented.
+- **[`docs/HERDR_INTEGRATION.md`](docs/HERDR_INTEGRATION.md)** — herdr as the console over the mesh (human→agent = pane, agent→agent = mail; `blocked` ↔ `NEEDCRED`). Ships as the optional `plugin_herdr/` package on the `plugins.py` registry — delete the directory and core is unchanged. Adds `--injector herdr`, `rookery herdr status|bind|focus|notify`, and a `postmaster --notify` sink; see `demo_herdr.sh`.
 - Design rationale: [`docs/index.html`](docs/index.html) (links the two research reports + paired-debate transcript).
 
 ## Why this shape (from the paired debate)
