@@ -113,6 +113,27 @@ def get_node(conn, node_id):
     return conn.execute("SELECT * FROM nodes WHERE node_id=?", (node_id,)).fetchone()
 
 
+def get_address(conn, node_id):
+    """A node's pane/endpoint address (nodes.address), or None.
+
+    Whatever put it there — terminal_node, a plugin binding panes to nodes, a
+    remote peer — this is how the rest of the mesh asks "where does this node
+    live?" without knowing which mechanism answered.
+    """
+    row = conn.execute(
+        "SELECT address FROM nodes WHERE node_id=?", (node_id,)
+    ).fetchone()
+    return row["address"] if row and row["address"] else None
+
+
+def set_address(conn, node_id, address):
+    conn.execute(
+        "UPDATE nodes SET address=?, last_seen=? WHERE node_id=?",
+        (address, now(), node_id),
+    )
+    conn.commit()
+
+
 def set_session_ref(conn, node_id, session_ref):
     conn.execute(
         "UPDATE nodes SET session_ref=? WHERE node_id=?", (session_ref, node_id)

@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 
+import plugins
 import rookery as R
 
 _MENTION = re.compile(r"@([A-Za-z0-9_-]+)")
@@ -76,7 +77,8 @@ def wake(node, engine, lifecycle, idle_timeout, allowed_tools="", model=None, mc
     return proc
 
 
-def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools="", model=None, mcp=""):
+def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools="", model=None,
+        mcp="", notify_events="needcred"):
     conn = R.connect()
     nodes = list(node_engine)
 
@@ -97,6 +99,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
     running = {}        # node_id -> Popen (at most one live turn per node)
     woke_at = {}        # node_id -> last wake time (for warm-pool LRU eviction)
     granted_seen = set()
+    needcred_seen = set()
     last_mention_id = 0
     try:
         while True:
@@ -112,7 +115,32 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                     del running[n]
                     log(f"'{n}' finished its turn -> asleep ($0)")
 
-            # 2. approved credentials -> mail the grant to the waiting node
+            # 2. NEEDCRED -> raise it through whatever alert sinks are attached.
+            #    A credential phone-home IS "an agent stuck waiting on a human".
+            #    With no plugin attached there is no sink, notify() returns 0,
+            #    and the request stays exactly as visible as it always was —
+            #    which is the standalone behaviour, not a degraded one.
+            if notify_events != "none":
+                for r in conn.execute(
+                    "SELECT * FROM credential_requests WHERE status='pending'"
+                ).fetchall():
+                    if r["id"] in needcred_seen:
+                        continue
+                    needcred_seen.add(r["id"])
+                    addr = R.get_address(conn, r["node_id"])
+                    where = f" [{addr}]" if addr else ""
+                    fired = plugins.notify(
+                        "needcred",
+                        f"NEEDCRED — {r['node_id']} is blocked",
+                        f"wants {r['resource']}{where}. Approve: "
+                        f"mesh_approve.py --id {r['id']} --approve",
+                        node=r["node_id"], resource=r["resource"], request_id=r["id"],
+                    )
+                    if fired:
+                        log(f"credential #{r['id']} ('{r['node_id']}' -> "
+                            f"{r['resource']}) -> raised on {fired} sink(s)")
+
+            # 3. approved credentials -> mail the grant to the waiting node
             for r in conn.execute(
                 "SELECT * FROM credential_requests WHERE status='approved'"
             ).fetchall():
@@ -124,7 +152,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                            f"CRED_GRANTED:{r['resource']}:{r['token_ref']}")
                     log(f"credential #{r['id']} approved -> mailed grant to '{r['node_id']}'")
 
-            # 3. "they're talking about you": notify a managed node @mentioned in
+            # 4. "they're talking about you": notify a managed node @mentioned in
             #    new mail it isn't the recipient of (scan each message once).
             for r in conn.execute(
                 "SELECT * FROM inbox WHERE id > ? ORDER BY id", (last_mention_id,)
@@ -142,7 +170,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                                f"{(r['body'] or '')[:140]}")
                         log(f"@{m} mentioned by {r['sender']} -> notified")
 
-            # 4. wake any managed node that has mail and isn't already running
+            # 5. wake any managed node that has mail and isn't already running
             for n in nodes:
                 if n in running or not has_mail(conn, n):
                     continue
@@ -158,6 +186,10 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                 running[n] = wake(n, node_engine[n], lifecycle(n), idle_timeout,
                                   allowed_tools, model, mcp)
                 woke_at[n] = time.time()
+                if notify_events == "all":
+                    # Opt-in only: under a fan-out this is one alert per wake.
+                    plugins.notify("mail", f"mail for {n}",
+                                   f"{n} woke to handle its inbox", node=n)
 
             time.sleep(poll)
     except KeyboardInterrupt:
@@ -189,6 +221,13 @@ def main():
     ap.add_argument("--model", default=None, help="claude model override for all claude nodes")
     ap.add_argument("--mcp", default="",
                     help="comma list of MCP servers (from ~/.claude.json) to attach to claude-sdk nodes")
+    ap.add_argument("--notify", dest="notify_events",
+                    choices=["needcred", "all", "none"], default="needcred",
+                    help="what to raise through attached alert sinks (see "
+                         "plugins.py): needcred (default) = only credential "
+                         "requests waiting on a human; all = also every mail wake "
+                         "(one alert per wake — noisy under fan-out); none = off. "
+                         "A no-sink install is unaffected either way.")
     ap.add_argument("--poll", type=float, default=0.5)
     a = ap.parse_args()
     node_engine = {}
@@ -203,7 +242,8 @@ def main():
             node_engine[entry] = a.engine
     persistent_set = {x.strip() for x in a.persistent.split(",") if x.strip()}
     run(node_engine, persistent_set, a.max_warm, a.idle_timeout, a.poll,
-        allowed_tools=a.allowed_tools, model=a.model, mcp=a.mcp)
+        allowed_tools=a.allowed_tools, model=a.model, mcp=a.mcp,
+        notify_events=a.notify_events)
 
 
 if __name__ == "__main__":

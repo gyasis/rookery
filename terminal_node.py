@@ -5,10 +5,13 @@ the mesh. A background watcher polls this node's inbox and INJECTS new mail into
 the pane; the person/agent replies with the CLI:
     python3 send_mail.py --from <node-id> --to <other> "..."
 
-Pane control is PLUGGABLE — not tmux-locked. All three are "type into a pane":
+Pane control is PLUGGABLE — not tmux-locked. Three built in, all "type into a pane":
     --injector tmux     tmux send-keys -t <target>              (C)
     --injector wezterm  wezterm cli send-text --pane-id <t>     (Rust)
     --injector zellij   zellij action write-chars               (Rust)
+
+Plugins may contribute more (see plugins.py); `--help` lists whatever is
+attached on this machine. Core does not know their names in advance.
 
 Policy screening (security.inspect_inbound) applies here too — a blocked message
 is never injected into the pane.
@@ -17,13 +20,21 @@ import argparse
 import subprocess
 import time
 
+import plugins
 import rookery as R
 from node_runner import log, screen
+
+BUILTIN_INJECTORS = ("tmux", "wezterm", "zellij")
 
 
 def inject(injector, target, text):
     """Type `text` (+ Enter) into the target pane via the chosen multiplexer."""
-    if injector == "tmux":
+    if injector not in BUILTIN_INJECTORS:
+        entry = plugins.get_injector(injector)
+        if entry is None:
+            raise SystemExit(f"unknown injector: {injector}")
+        entry["send"](target, text)
+    elif injector == "tmux":
         subprocess.run(["tmux", "send-keys", "-t", target, "-l", text], check=False)
         subprocess.run(["tmux", "send-keys", "-t", target, "Enter"], check=False)
     elif injector == "wezterm":
@@ -37,6 +48,12 @@ def inject(injector, target, text):
 
 
 def run(node_id, injector, target, poll):
+    entry = plugins.get_injector(injector)
+    if entry and entry["check"]:
+        # A plugin injector is an explicit opt-in, so let it fail loudly rather
+        # than silently deliver nothing — mail is acked either way, and mail
+        # dropped between claim and ack is unrecoverable.
+        entry["check"]()
     conn = R.connect()
     R.register_node(conn, node_id, kind="terminal")
     conn.execute("UPDATE nodes SET address=? WHERE node_id=?", (target, node_id))
@@ -65,8 +82,14 @@ def run(node_id, injector, target, poll):
 def main():
     ap = argparse.ArgumentParser(description="Run a Rookery terminal node (pane bridge).")
     ap.add_argument("--node-id", required=True)
-    ap.add_argument("--injector", choices=["tmux", "wezterm", "zellij"], default="tmux")
-    ap.add_argument("--target", required=True, help="pane target (tmux session:win.pane / wezterm pane-id)")
+    ap.add_argument("--injector",
+                    choices=list(BUILTIN_INJECTORS) + plugins.injectors(),
+                    default="tmux",
+                    help="pane-injection mechanism; plugin-contributed ones are "
+                         "listed only when their tool is installed")
+    ap.add_argument("--target", required=True,
+                    help="pane target, in whatever form the chosen injector "
+                         "addresses (e.g. tmux session:win.pane, wezterm pane-id)")
     ap.add_argument("--poll", type=float, default=1.0)
     a = ap.parse_args()
     run(a.node_id, a.injector, a.target, a.poll)

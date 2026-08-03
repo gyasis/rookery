@@ -26,6 +26,7 @@ _PY_MODULES = [
     "cli_up.py",
     "cli_approve.py",
     "cli_known_hosts.py",
+    "plugins.py",
     "identity.py",
     "known_hosts.py",
     "discovery.py",
@@ -44,6 +45,25 @@ _PY_MODULES = [
     "policy_hardened.py",
     "policy_example.py",
 ]
+
+
+def _plugin_paths():
+    """Optional `plugin_*` modules and packages to bundle alongside core.
+
+    Discovered, never listed: core must not name a plugin, and a build must not
+    break because one was deleted. Each self-gates at load, so bundling one
+    costs an install nothing when its backing tool is absent.
+    """
+    found = []
+    for entry in sorted(os.listdir(_ROOKERY_DIR)):
+        if not entry.startswith("plugin_"):
+            continue
+        full = os.path.join(_ROOKERY_DIR, entry)
+        if os.path.isdir(full) and os.path.exists(os.path.join(full, "__init__.py")):
+            found.append(entry)
+        elif entry.endswith(".py"):
+            found.append(entry)
+    return found
 
 _DATA_FILES = [
     "schema.sql",
@@ -162,6 +182,15 @@ def build_pyz(output_path: str) -> str:
             src = os.path.join(_ROOKERY_DIR, fname)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(stage, fname))
+
+        # Copy optional plugins (flat modules or packages)
+        for entry in _plugin_paths():
+            src = os.path.join(_ROOKERY_DIR, entry)
+            dst = os.path.join(stage, entry)
+            if os.path.isdir(src):
+                shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__"))
+            else:
+                shutil.copy2(src, dst)
 
         # Copy data files
         for fname in _DATA_FILES:

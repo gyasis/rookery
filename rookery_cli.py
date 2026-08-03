@@ -4,11 +4,16 @@
 rookery_cli.py serve   [--host] [--port] [--public-url] [--card-key] [--token]
 rookery_cli.py up      [url]    [--node-id] [--insecure-tls]
 rookery_cli.py approve [--url]  [--token]
+
+Optional plugins (see plugins.py) may add further subcommands; each attaches
+only when its backing tool is installed, so `--help` shows whatever is
+available on this machine.
 """
 
 import argparse
 import os
 
+import plugins
 from cli_approve import cmd_approve
 from cli_known_hosts import cmd_known_hosts_forget, cmd_known_hosts_list
 from cli_serve import cmd_serve
@@ -98,6 +103,10 @@ def build_parser():
         "--yes", "-y", action="store_true", help="Skip the confirmation prompt."
     )
     p_kh_forget.set_defaults(func=cmd_known_hosts_forget)
+
+    # Optional integrations contribute their own subcommands here; core does
+    # not know their names. Nothing attached -> nothing added.
+    plugins.add_commands(sub)
 
     return ap
 
