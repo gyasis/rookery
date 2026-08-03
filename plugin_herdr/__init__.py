@@ -91,6 +91,17 @@ def _commands(subparsers) -> None:
                          help="Print the briefing that would be used and exit.")
     p_start.set_defaults(func=cli.cmd_herdr_start)
 
+    p_tmpl = sub.add_parser(
+        "briefing-template",
+        help="Show or write ~/.rookery/briefing_template.md (customise without "
+             "editing the plugin)."
+    )
+    p_tmpl.add_argument("--write", action="store_true",
+                        help="Write the built-in default out for editing.")
+    p_tmpl.add_argument("--force", action="store_true",
+                        help="Overwrite an existing template.")
+    p_tmpl.set_defaults(func=cli.cmd_herdr_template)
+
     p_rebrief = sub.add_parser(
         "rebrief", help="Re-deliver a node's briefing after its session restarted."
     )

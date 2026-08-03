@@ -113,7 +113,7 @@ def cmd_herdr_focus(args):
     print(f"focused {args.node} ({target})")
 
 
-BRIEFING = """\
+DEFAULT_BRIEFING = """\
 You are node "{node}" in a Rookery agent mesh, started in this pane by your \
 operator for that purpose. Your siblings on the mesh are: {siblings}.
 
@@ -136,6 +136,43 @@ Send mail with:
 Check your inbox with:
   {inbox_cmd}
 """
+
+
+def template_path() -> str:
+    """Where an operator-supplied briefing template lives, if they want one."""
+    import os
+
+    return os.environ.get("ROOKERY_BRIEFING_TEMPLATE") or os.path.join(
+        os.path.expanduser("~"), ".rookery", "briefing_template.md"
+    )
+
+
+def load_template() -> str:
+    """The briefing template: operator's file if present, else the built-in.
+
+    Deliberately a FILE rather than something you edit in the source. A briefing
+    is where per-site facts want to accumulate — a model to prefer, a host to
+    reach, a house style — and none of that belongs hardcoded in a plugin that
+    other people install. Keeping it a config file means customising the mesh
+    never means forking it, and nothing site-specific ends up committed.
+
+    Must accept the {node}, {siblings}, {send_cmd} and {inbox_cmd} placeholders;
+    a template missing one, or containing a stray brace, falls back to the
+    built-in rather than shipping a half-rendered briefing to an agent.
+    """
+    import os
+
+    path = template_path()
+    if not os.path.exists(path):
+        return DEFAULT_BRIEFING
+    try:
+        with open(path) as fh:
+            text = fh.read()
+        text.format(node="x", siblings="x", send_cmd="x", inbox_cmd="x")
+        return text
+    except (OSError, KeyError, IndexError, ValueError) as e:
+        print(f"[herdr] ignoring {path}: {e}", file=sys.stderr)
+        return DEFAULT_BRIEFING
 
 
 def compose_briefing(conn, node_id: str) -> str:
@@ -175,8 +212,8 @@ def compose_briefing(conn, node_id: str) -> str:
         inbox_cmd = (f"{env}{py} {repo}/read_mail.py --node {node_id} "
                      f"[--since <last-id-you-handled>]")
 
-    return BRIEFING.format(node=node_id, siblings=siblings,
-                           send_cmd=send_cmd, inbox_cmd=inbox_cmd)
+    return load_template().format(node=node_id, siblings=siblings,
+                                  send_cmd=send_cmd, inbox_cmd=inbox_cmd)
 
 
 def cmd_herdr_start(args):
@@ -207,6 +244,32 @@ def cmd_herdr_start(args):
     if briefing:
         print("  briefed as a mesh node via --append-system-prompt; "
               "bound to its pane, so a restart cannot lose its identity.")
+
+
+def cmd_herdr_template(args):
+    """Show, or write out for editing, the briefing template."""
+    import os
+
+    path = template_path()
+    if not args.write:
+        text = load_template()
+        # Report what is ACTUALLY in use — a rejected template must not be
+        # labelled as the source, or a typo looks like it took effect.
+        src = ("(built-in default)" if text == DEFAULT_BRIEFING
+               else path)
+        print(f"# source: {src}\n")
+        print(text)
+        return
+    if os.path.exists(path) and not args.force:
+        print(f"{path} already exists — use --force to overwrite", file=sys.stderr)
+        sys.exit(1)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(DEFAULT_BRIEFING)
+    print(f"wrote {path}\n"
+          f"Edit it freely; keep the {{node}}, {{siblings}}, {{send_cmd}} and "
+          f"{{inbox_cmd}} placeholders. Site-specific facts belong here, not in "
+          f"the plugin source.")
 
 
 def cmd_herdr_rebrief(args):
