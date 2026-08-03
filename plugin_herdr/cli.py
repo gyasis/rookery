@@ -145,20 +145,38 @@ def compose_briefing(conn, node_id: str) -> str:
     briefing is never stale about who else exists.
     """
     import os
+    import sys
 
     rows = conn.execute(
         "SELECT node_id FROM nodes WHERE node_id != ? ORDER BY node_id", (node_id,)
     ).fetchall()
     siblings = ", ".join(r["node_id"] for r in rows) or "(none yet)"
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    db = R.DB_PATH
-    return BRIEFING.format(
-        node=node_id,
-        siblings=siblings,
-        send_cmd=f"ROOKERY_DB={db} python3 {repo}/send_mail.py "
-                 f"--from {node_id} --to <sibling> --body \"...\"",
-        inbox_cmd=f"ROOKERY_DB={db} python3 {repo}/mailctl.py inbox --node {node_id}",
-    )
+    url = os.environ.get("ROOKERY_URL")
+
+    # Name the interpreter RUNNING this code, not bare "python3". A briefing is
+    # only useful if its commands run, and `python3` on a given box may be too
+    # old for the codebase (3.10+) or missing cryptography — the exact trap the
+    # install work already had to route around.
+    py = sys.executable or "python3"
+
+    if url:
+        # Remote sidecar: mailctl is the supported client for both directions.
+        tok = os.environ.get("ROOKERY_TOKEN", "")
+        auth = f" --token {tok}" if tok else ""
+        send_cmd = (f"{py} {repo}/mailctl.py send --url {url}{auth} "
+                    f"--from {node_id} --to <sibling> --body \"...\"")
+        inbox_cmd = (f"{py} {repo}/mailctl.py inbox --url {url}{auth} "
+                     f"--node {node_id}")
+    else:
+        env = f"ROOKERY_DB={R.DB_PATH} "
+        send_cmd = (f"{env}{py} {repo}/send_mail.py "
+                    f"--from {node_id} --to <sibling> --body \"...\"")
+        inbox_cmd = (f"{env}{py} {repo}/read_mail.py --node {node_id} "
+                     f"[--since <last-id-you-handled>]")
+
+    return BRIEFING.format(node=node_id, siblings=siblings,
+                           send_cmd=send_cmd, inbox_cmd=inbox_cmd)
 
 
 def cmd_herdr_start(args):
@@ -189,6 +207,47 @@ def cmd_herdr_start(args):
     if briefing:
         print("  briefed as a mesh node via --append-system-prompt; "
               "bound to its pane, so a restart cannot lose its identity.")
+
+
+def cmd_herdr_rebrief(args):
+    """Re-deliver a node's briefing into its pane, after a restart.
+
+    The failure this exists for: restarting a mesh agent wiped its briefing
+    while its MAIL survived, so it came back not knowing which node it was,
+    reported an inbox it could no longer read, and mistook another pane for its
+    peer — with its actual mail sitting unread the whole time.
+
+    Two halves. `herdr start` fixed identity at launch; this fixes RECOVERY,
+    because a session restarted by hand (or /clear'd, or crashed) never goes
+    through launch. The briefing is regenerated from the mesh rather than from
+    whatever the pane remembers, so it is correct about the roster even if the
+    node has been gone a while.
+    """
+    H.require("rookery herdr rebrief")
+    conn = R.connect()
+    nodes = [args.node] if args.node else [
+        r["node_id"] for r in conn.execute(
+            "SELECT node_id FROM nodes WHERE address IS NOT NULL ORDER BY node_id"
+        ).fetchall()
+    ]
+    if not nodes:
+        print("no node is bound to a pane — run `rookery herdr bind` first")
+        return
+    for node in nodes:
+        pane = R.get_address(conn, node)
+        if not pane:
+            print(f"{node}: not bound to a pane — skipped", file=sys.stderr)
+            continue
+        text = compose_briefing(conn, node)
+        H.write_briefing(node, text)          # keep the on-disk copy current
+        if args.file_only:
+            print(f"{node}: briefing refreshed at {H.briefing_path(node)}")
+            continue
+        if H.prompt(pane, "<ROOKERY> re-briefing (your session restarted; this "
+                          "supersedes any earlier briefing)\n\n" + text):
+            print(f"{node}: re-briefed into {pane}")
+        else:
+            print(f"{node}: could not deliver into {pane}", file=sys.stderr)
 
 
 def cmd_herdr_notify(args):

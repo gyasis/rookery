@@ -91,6 +91,16 @@ def _commands(subparsers) -> None:
                          help="Print the briefing that would be used and exit.")
     p_start.set_defaults(func=cli.cmd_herdr_start)
 
+    p_rebrief = sub.add_parser(
+        "rebrief", help="Re-deliver a node's briefing after its session restarted."
+    )
+    p_rebrief.add_argument("node", nargs="?", default=None,
+                           help="Node to re-brief; omit for every bound node.")
+    p_rebrief.add_argument("--file-only", action="store_true",
+                           help="Refresh ~/.rookery/briefings/<node>.md without "
+                                "typing into the pane.")
+    p_rebrief.set_defaults(func=cli.cmd_herdr_rebrief)
+
     p_focus = sub.add_parser("focus", help="Jump to a node's pane.")
     p_focus.add_argument("node", help="Node id (or a raw herdr pane id).")
     p_focus.set_defaults(func=cli.cmd_herdr_focus)

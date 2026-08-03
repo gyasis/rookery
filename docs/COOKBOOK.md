@@ -78,10 +78,10 @@ See `claude_engine()` in `node_runner.py`.
 
 ---
 
-### Use the warm Claude SDK session (kills the ~115 s cold start)
+### Use the warm Claude SDK session (amortises the ~7 s cold start)
 
-`engine=claude-sdk` opens one session and reuses it across turns (~2 s warm vs ~115 s
-per `claude -p` in this environment).
+`engine=claude-sdk` opens one session and reuses it across turns (~2 s warm vs ~7 s
+per `claude -p`).
 
 ```bash
 # Via the postmaster (recommended — it manages the warm window)
@@ -93,8 +93,10 @@ python3 sdk_node.py --node-id architect --idle-timeout 600 \
   --mcp deeplakesearch --allowed-tools mcp__deeplakesearch__retrieve_context
 ```
 
-`setting_sources=[]` skips SessionStart hooks (the cold-start source); `--mcp` names
-re-attach only those servers. See `sdk_node.py` and `demo_real_sdk.sh`.
+`setting_sources=[]` skips SessionStart hooks — worth ~0.1s/turn as measured
+2026-08-03, so take it for isolation rather than speed (the old "hooks are the
+cold-start source" claim was wrong; see README). `--mcp` names re-attach only
+those servers. See `sdk_node.py` and `demo_real_sdk.sh`.
 
 ---
 

@@ -32,6 +32,8 @@ _PY_MODULES = [
     "discovery.py",
     "config_manager.py",
     "mailctl.py",
+    "read_mail.py",
+    "send_mail.py",
     "rookery_mcp.py",
     "rookery.py",
     "security.py",

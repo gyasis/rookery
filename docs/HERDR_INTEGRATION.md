@@ -211,11 +211,34 @@ Replacing the tmux/wezterm/zellij injectors, or making herdr a dependency. The
 core stays Python-stdlib-only and multiplexer-agnostic; herdr is one more
 optional substrate that happens to carry richer state.
 
-## Known interaction: the SessionStart hook tax
+## The SessionStart hook tax — measured, and it is not real
 
-The README records that plain `claude -p` pays **~115s per call** in this
-environment because of the user's `SessionStart` hooks, and that the fix is a
-warm Agent SDK session with `setting_sources=[]`.
+**Resolved 2026-08-03. There is no meaningful hook tax.** This section used to
+warn that herdr's Claude integration adds a `SessionStart` hook on top of an
+alleged ~115s-per-call cost, and that it must be measured before any fan-out.
+Measured:
+
+| What | Cost |
+|---|---|
+| `herdr-agent-state.sh` (herdr's SessionStart hook) | **0.05s** |
+| SIO `session_start` hook | **0.04s** |
+| All SessionStart hooks together | **~0.1s** |
+| `claude -p` end to end, hooks ON | **6.99s** (neutral dir) / 6.78s (repo) |
+| `claude -p` end to end, hooks OFF | **6.57s** (neutral dir) / 7.15s (repo) |
+
+Three runs per cell. Hooks-on vs hooks-off sits inside the run-to-run noise —
+the hooks-off mean came out *higher* in the repo pair — so the honest reading is
+that the direct 0.1s measurement is the answer and the end-to-end difference is
+unresolvable at this sample size. The ~7s is Claude Code startup plus inference.
+
+So the herdr hook costs an ephemeral node **~0.05s**, and spawning herdr-aware
+`claude` nodes needs no special mitigation. A warm SDK session is still worth it
+for the ~7s startup, but `setting_sources=[]` should be chosen for isolation,
+not speed.
+
+The original text follows, kept because the *shape* of the concern was right —
+an always-on per-session cost multiplied across a fan-out is worth checking, and
+this one simply turned out to be ~0.05s.
 
 **herdr's Claude integration installs another `SessionStart` hook**
 (`~/.claude/hooks/herdr-agent-state.sh`, wired into `~/.claude/settings.json`,

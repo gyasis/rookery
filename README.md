@@ -146,14 +146,23 @@ python3 postmaster.py --nodes architect=claude,reviewer=codex \
   --persistent architect --max-warm 5 --idle-timeout 600
 ```
 
-> **Latency — solved via the Agent SDK.** Plain `claude -p` pays **~115s every
-> call** in this environment (the user's SessionStart hooks), *not* fixed by
-> model, MCP, or `--resume` (all measured). The fix is a **warm long-lived
-> session** through the Claude Agent SDK with `setting_sources=[]` (hooks off):
-> open the session once, reuse it per turn. Measured: **open 2s · first turn 7s ·
-> warm turns ~2s** — vs ~115s/turn. Use `engine=claude-sdk` for persistent
-> partners; the node is `sdk_node.py`. (Tool-using SDK nodes pass `mcp_servers`
-> explicitly since `setting_sources=[]` also skips global MCP.)
+> **Latency — a warm session still wins, but not for the reason recorded here.**
+> This note used to claim plain `claude -p` pays **~115s per call** because of
+> SessionStart hooks. **Re-measured 2026-08-03 and that is wrong.** Timing the
+> hooks directly: `herdr-agent-state.sh` **0.05s**, the SIO session_start hook
+> **0.04s** — about **0.1s** of hooks, not 115s. End to end, `claude -p` costs
+> **~6.6–7.2s** per call, and hooks-on vs hooks-off is inside the run-to-run
+> noise (3 runs each, two working directories; the hooks-off mean came out
+> *higher* in one pair). Whatever caused 115s here is gone or was never the
+> hooks.
+>
+> The Agent SDK fix still stands on its own merits — the cost is per-session
+> startup plus inference, so a **warm long-lived session** amortises it: **open
+> 2s · first turn 7s · warm turns ~2s** vs ~7s for every one-shot. Use
+> `engine=claude-sdk` for persistent partners; the node is `sdk_node.py`.
+> `setting_sources=[]` is now worth roughly 0.1s/turn, so choose it for
+> isolation rather than speed — and note it also skips global MCP, so
+> tool-using SDK nodes must pass `mcp_servers` explicitly.
 
 ## Run the demos
 
