@@ -175,8 +175,13 @@ def cmd_herdr_start(args):
     if args.print_briefing:
         print(briefing or "(briefing disabled)")
         return
-    if not H.start_agent(args.node, args.pane, kind=args.kind, briefing=briefing):
-        print(f"could not start '{args.kind}' in {args.pane}", file=sys.stderr)
+    if not H.start_agent(args.node, args.pane, kind=args.kind, briefing=briefing,
+                         wait_ready=args.wait_ready):
+        print(f"could not start '{args.kind}' in {args.pane} — if herdr calls it "
+              f"'not an available shell', something is already running there "
+              f"(`rookery herdr status` lists agent panes); a pane created in the "
+              f"last second needs --wait-ready above {args.wait_ready:g}s",
+              file=sys.stderr)
         sys.exit(1)
     R.set_address(conn, args.node, args.pane)
     print(f"started {args.node} ({args.kind}) in {args.pane}"

@@ -24,6 +24,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 
 # herdr agent_status -> nodes.status (schema.sql: idle|busy|waiting|asleep|offline).
 # 'unknown' maps to None deliberately: herdr's own docs warn it does not mean
@@ -112,19 +113,30 @@ def require(what: str = "herdr integration") -> None:
 
 
 # --- transport -------------------------------------------------------------
+def _run_raw(args: list[str], timeout: float = 10.0):
+    """Run a herdr subcommand, returning the CompletedProcess (or None).
+
+    For the rare caller that needs to see WHY it failed — herdr reports a
+    machine-readable error code on stderr.
+    """
+    if not enabled():
+        return None
+    try:
+        return subprocess.run(
+            ["herdr", *args], capture_output=True, text=True, timeout=timeout
+        )
+    except Exception:
+        return None
+
+
 def _run(args: list[str], timeout: float = 10.0) -> str | None:
     """Run a herdr subcommand; stdout on success, None on ANY failure.
 
     Never raises. A broken or absent console must not take down a mesh
     process whose real job is delivering mail.
     """
-    if not enabled():
-        return None
-    try:
-        r = subprocess.run(
-            ["herdr", *args], capture_output=True, text=True, timeout=timeout
-        )
-    except Exception:
+    r = _run_raw(args, timeout)
+    if r is None:
         return None
     return r.stdout if r.returncode == 0 else None
 
@@ -271,7 +283,8 @@ def write_briefing(node_id: str, text: str) -> str:
 
 
 def start_agent(node_id: str, pane: str, kind: str = "claude",
-                briefing: str | None = None, timeout: float = 60.0) -> bool:
+                briefing: str | None = None, timeout: float = 60.0,
+                wait_ready: float = 15.0) -> bool:
     """Launch an agent in PANE, named for its mesh node, briefed as that node.
 
     The briefing goes in via Claude Code's `--append-system-prompt-file`, the
@@ -284,11 +297,29 @@ def start_agent(node_id: str, pane: str, kind: str = "claude",
 
     Naming the agent `node_id` is also what lets bind_nodes() enroll it, so
     identity survives a restart of whatever is inside the pane.
+
+    A freshly-created pane is not immediately launchable: herdr rejects it with
+    `agent_pane_busy` ("not an available shell") for roughly a second, even
+    though the shell process is already up and idle — its own readiness notion
+    lags the process state, so polling the pane's foreground process group
+    (tried first) reports ready too early and does not help. So retry on
+    exactly that error until wait_ready elapses; any other failure returns
+    immediately. Both start failures in the first live test were this, misread
+    at the time as a briefing problem. Pass wait_ready=0 for a single attempt.
     """
     args = ["agent", "start", node_id, "--kind", kind, "--pane", pane]
     if briefing and kind in _BRIEFABLE:
         args += ["--", "--append-system-prompt-file", write_briefing(node_id, briefing)]
-    return _run(args, timeout=timeout) is not None
+    deadline = time.monotonic() + wait_ready
+    while True:
+        r = _run_raw(args, timeout=timeout)
+        if r is None:
+            return False
+        if r.returncode == 0:
+            return True
+        if "agent_pane_busy" not in (r.stderr or "") or time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
 
 
 # --- pane <-> node binding (W3) --------------------------------------------

@@ -83,6 +83,10 @@ def _commands(subparsers) -> None:
                          help="Skip the system-prompt briefing (not advised: an "
                               "unbriefed session treats delivered mail as "
                               "untrusted third-party text).")
+    p_start.add_argument("--wait-ready", type=float, default=15.0, metavar="SECS",
+                         help="retry this long while herdr reports the pane is "
+                              "not yet an available shell (default 15; 0 = one "
+                              "attempt). A just-created pane needs about a second.")
     p_start.add_argument("--print-briefing", action="store_true",
                          help="Print the briefing that would be used and exit.")
     p_start.set_defaults(func=cli.cmd_herdr_start)
