@@ -72,6 +72,21 @@ def _commands(subparsers) -> None:
     )
     p_bind.set_defaults(func=cli.cmd_herdr_bind)
 
+    p_start = sub.add_parser(
+        "start", help="Launch a BRIEFED mesh node in a pane, then bind it."
+    )
+    p_start.add_argument("node", help="Mesh node id; also the agent's herdr name.")
+    p_start.add_argument("--pane", required=True, help="Existing pane at a shell prompt.")
+    p_start.add_argument("--kind", default="claude",
+                         help="Agent kind herdr should launch (default claude).")
+    p_start.add_argument("--no-brief", action="store_true",
+                         help="Skip the system-prompt briefing (not advised: an "
+                              "unbriefed session treats delivered mail as "
+                              "untrusted third-party text).")
+    p_start.add_argument("--print-briefing", action="store_true",
+                         help="Print the briefing that would be used and exit.")
+    p_start.set_defaults(func=cli.cmd_herdr_start)
+
     p_focus = sub.add_parser("focus", help="Jump to a node's pane.")
     p_focus.add_argument("node", help="Node id (or a raw herdr pane id).")
     p_focus.set_defaults(func=cli.cmd_herdr_focus)

@@ -1,11 +1,12 @@
 {
+  "_comment": "Hook scripts are symlinks into ~/.dev-kid/templates, which exists on the Linux dev box but not on every machine that clones this repo. Each command is guarded with [ -x ... ] so a missing or dangling symlink is a silent no-op instead of a 'No such file or directory' hook error on every session start, tool use and stop. -x follows symlinks, so a dangling link tests false.",
   "hooks": {
     "PreCompact": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/pre-compact.sh"
+            "command": "[ -x .claude/hooks/pre-compact.sh ] && .claude/hooks/pre-compact.sh || true"
           }
         ]
       }
@@ -15,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/task-completed.sh"
+            "command": "[ -x .claude/hooks/task-completed.sh ] && .claude/hooks/task-completed.sh || true"
           }
         ]
       }
@@ -25,11 +26,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/post-tool-use.sh"
+            "command": "[ -x .claude/hooks/post-tool-use.sh ] && .claude/hooks/post-tool-use.sh || true"
           },
           {
             "type": "command",
-            "command": ".claude/hooks/handoff-notifier.sh"
+            "command": "[ -x .claude/hooks/handoff-notifier.sh ] && .claude/hooks/handoff-notifier.sh || true"
           }
         ]
       }
@@ -39,11 +40,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/user-prompt-submit.sh"
+            "command": "[ -x .claude/hooks/user-prompt-submit.sh ] && .claude/hooks/user-prompt-submit.sh || true"
           },
           {
             "type": "command",
-            "command": ".claude/hooks/handoff-notifier.sh"
+            "command": "[ -x .claude/hooks/handoff-notifier.sh ] && .claude/hooks/handoff-notifier.sh || true"
           }
         ]
       }
@@ -53,11 +54,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/session-start.sh"
+            "command": "[ -x .claude/hooks/session-start.sh ] && .claude/hooks/session-start.sh || true"
           },
           {
             "type": "command",
-            "command": ".claude/hooks/handoff-notifier.sh"
+            "command": "[ -x .claude/hooks/handoff-notifier.sh ] && .claude/hooks/handoff-notifier.sh || true"
           }
         ]
       }
@@ -67,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/session-end.sh"
+            "command": "[ -x .claude/hooks/session-end.sh ] && .claude/hooks/session-end.sh || true"
           }
         ]
       }
@@ -77,7 +78,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/pre-tool-use.sh"
+            "command": "[ -x .claude/hooks/pre-tool-use.sh ] && .claude/hooks/pre-tool-use.sh || true"
           }
         ]
       }
@@ -87,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/stop.sh"
+            "command": "[ -x .claude/hooks/stop.sh ] && .claude/hooks/stop.sh || true"
           }
         ]
       }
@@ -97,7 +98,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/post-tool-use-failure.sh"
+            "command": "[ -x .claude/hooks/post-tool-use-failure.sh ] && .claude/hooks/post-tool-use-failure.sh || true"
           }
         ]
       }

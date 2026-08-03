@@ -189,24 +189,36 @@ def notify(
     return _run(args) is not None
 
 
-def prompt(target: str, text: str, submit: bool = True,
+def prompt(target: str, text: str, submit: bool = True, clear: bool = True,
            timeout: float = 15.0) -> bool:
     """Submit TEXT to the recognised agent in pane TARGET.
 
     `herdr agent prompt` addresses an AGENT rather than a terminal, which is
-    what makes it worth preferring over send-keys. It does NOT reliably submit
-    though: against Claude Code (v2.1.220, herdr 0.7.5) it fills the input box,
-    returns rc=0, and leaves the agent `idle` with the text unsent. Verified by
-    hand on two panes — so we follow with an explicit Enter.
+    what makes it worth preferring over send-keys. It does NOT submit
+    RELIABLY though: against Claude Code (v2.1.220, herdr 0.7.5) it sometimes
+    fills the input box, returns rc=0, and leaves the agent `idle` with the
+    text unsent — observed on two freshly-started panes — while on an
+    already-exercised pane the same call submitted. The trigger is not pinned
+    down, so we always follow with an explicit Enter. That is safe in both
+    cases: Enter on an already-emptied box is a no-op.
 
     That failure mode is the dangerous one for a mail watcher: the CLI reports
     success while nothing is delivered, and terminal_node acks the message on
     the strength of it. Silently-lost mail is unrecoverable, so submission is
     confirmed rather than assumed.
 
+    `herdr agent prompt` APPENDS to the input box rather than replacing it, so
+    anything a human left half-typed there gets concatenated onto the delivered
+    mail and the agent receives a mash-up of the two. clear=True sends ctrl+u
+    (kill-line) first — verified as the one that works; `esc` leaves the text
+    untouched, and ctrl+c is unsafe because it interrupts a working agent.
+    ctrl+u on an empty box is a harmless no-op.
+
     submit=False types without sending, for composing a prompt a human will
     review before hitting Enter themselves.
     """
+    if clear:
+        _run(["agent", "send-keys", target, "ctrl+u"], timeout=timeout)
     if _run(["agent", "prompt", target, text], timeout=timeout) is None:
         return False
     if not submit:
@@ -226,6 +238,57 @@ def read(target: str, lines: int = 40, source: str = "recent") -> str | None:
 def focus(target: str) -> bool:
     """Bring the human to this agent's pane — the jump-to-whoever-is-blocked move."""
     return _run(["agent", "focus", target]) is not None
+
+
+# Kinds herdr can launch that accept Claude Code's system-prompt flags.
+_BRIEFABLE = {"claude"}
+
+
+BRIEFING_DIR = os.path.join(os.path.expanduser("~"), ".rookery", "briefings")
+
+
+def briefing_path(node_id: str) -> str:
+    """Where a node's standing briefing lives on disk."""
+    return os.path.join(BRIEFING_DIR, f"{node_id}.md")
+
+
+def write_briefing(node_id: str, text: str) -> str:
+    """Persist a node's briefing and return its path.
+
+    On disk rather than inline for two reasons. First, necessity: herdr builds
+    a shell command line for `agent start`, and rejects multi-line arguments
+    with "agent arguments cannot be encoded safely for the target shell" — so
+    `--append-system-prompt-file` is the only way to pass a real briefing.
+    Second, and more useful: a briefing that outlives the process can be
+    re-applied. The restart failure mode was an agent losing its briefing while
+    its mail survived; the briefing now survives too.
+    """
+    os.makedirs(BRIEFING_DIR, exist_ok=True)
+    path = briefing_path(node_id)
+    with open(path, "w") as fh:
+        fh.write(text)
+    return path
+
+
+def start_agent(node_id: str, pane: str, kind: str = "claude",
+                briefing: str | None = None, timeout: float = 60.0) -> bool:
+    """Launch an agent in PANE, named for its mesh node, briefed as that node.
+
+    The briefing goes in via Claude Code's `--append-system-prompt-file`, the
+    supported way to establish a session's standing role. That matters for more
+    than convenience: an UNBRIEFED session receiving
+    `<ROOKERY> mail from human: ...` sees content announcing itself as relayed
+    from a third party, and is right to be wary of instructions inside it. The
+    briefing is what makes "mail is my work queue" a fact the session holds
+    from its operator, rather than a claim made by the injected text itself.
+
+    Naming the agent `node_id` is also what lets bind_nodes() enroll it, so
+    identity survives a restart of whatever is inside the pane.
+    """
+    args = ["agent", "start", node_id, "--kind", kind, "--pane", pane]
+    if briefing and kind in _BRIEFABLE:
+        args += ["--", "--append-system-prompt-file", write_briefing(node_id, briefing)]
+    return _run(args, timeout=timeout) is not None
 
 
 # --- pane <-> node binding (W3) --------------------------------------------
