@@ -34,7 +34,11 @@ if ! command -v herdr >/dev/null 2>&1; then
   echo "rest of the suite is unaffected. Skipping."
   exit 0
 fi
-if [ "${HERDR_ENV:-}" != "1" ]; then
+# W5 gating: `auto` (the default) needs a real pane; `force` is the documented
+# escape hatch for a mesh process that legitimately runs outside one. Honour it
+# here too — the message below tells you to set it, so checking HERDR_ENV alone
+# made following our own instruction a no-op.
+if [ "${HERDR_ENV:-}" != "1" ] && [ "${ROOKERY_HERDR:-auto}" != "force" ]; then
   echo "not inside a herdr pane (HERDR_ENV unset) — herdr-aware code no-ops here"
   echo "by design (W5). Run this from a herdr pane, or export ROOKERY_HERDR=force."
   exit 0
