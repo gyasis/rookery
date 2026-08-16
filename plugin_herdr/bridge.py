@@ -201,6 +201,32 @@ def notify(
     return _run(args) is not None
 
 
+STASH_DIR = os.path.join(os.path.expanduser("~"), ".rookery", "stash")
+
+
+def stash_pane(target: str) -> str | None:
+    """Snapshot a pane's visible screen before anything destructive.
+
+    Cheap insurance, not a solution: it does not stop ctrl+u discarding a
+    human's half-typed line, it just stops that being UNRECOVERABLE. Best
+    effort throughout — a failed snapshot must never block mail delivery,
+    which is the thing the mesh actually promises.
+    """
+    text = read(target, lines=60, source="visible")
+    if not text:
+        return None
+    try:
+        os.makedirs(STASH_DIR, exist_ok=True)
+        path = os.path.join(
+            STASH_DIR, f"{target.replace(':', '-')}-{int(time.time())}.txt"
+        )
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+    except OSError:
+        return None
+
+
 def prompt(target: str, text: str, submit: bool = True, clear: bool = True,
            timeout: float = 15.0) -> bool:
     """Submit TEXT to the recognised agent in pane TARGET.
@@ -224,12 +250,24 @@ def prompt(target: str, text: str, submit: bool = True, clear: bool = True,
     mail and the agent receives a mash-up of the two. clear=True sends ctrl+u
     (kill-line) first — verified as the one that works; `esc` leaves the text
     untouched, and ctrl+c is unsafe because it interrupts a working agent.
-    ctrl+u on an empty box is a harmless no-op.
+
+    ctrl+u on an EMPTY box is a harmless no-op. On a NON-EMPTY one it discards
+    whatever the human was typing, so the pane is snapshotted to
+    ~/.rookery/stash/<target>-<ts>.txt first and the loss is recoverable rather
+    than silent. The snapshot is unconditional and unparsed on purpose: deciding
+    whether the box is non-empty means screen-scraping a TUI, which is racy
+    (the human can start typing between the read and the ctrl+u) and wrong in
+    both directions — a false "non-empty" defers mail forever, a false "empty"
+    clobbers anyway. Deferring delivery until the box clears would also trade a
+    rare, recoverable loss for a delivery-liveness failure in the one system
+    whose whole contract is delivery, and a human who half-types a line and
+    walks away would stall the queue indefinitely.
 
     submit=False types without sending, for composing a prompt a human will
     review before hitting Enter themselves.
     """
     if clear:
+        stash_pane(target)
         _run(["agent", "send-keys", target, "ctrl+u"], timeout=timeout)
     if _run(["agent", "prompt", target, text], timeout=timeout) is None:
         return False
