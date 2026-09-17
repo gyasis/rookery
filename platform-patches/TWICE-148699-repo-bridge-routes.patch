@@ -16,7 +16,7 @@ index d5c434a..5813386 100644
  	// path so it wins over the /tasks/ prefix. /tasks/ fires for
 diff --git a/internal/team/broker_repo_http.go b/internal/team/broker_repo_http.go
 new file mode 100644
-index 0000000..e146d29
+index 0000000..b5fcdb2
 --- /dev/null
 +++ b/internal/team/broker_repo_http.go
 @@ -0,0 +1,250 @@
@@ -270,7 +270,6 @@ index 0000000..e146d29
 +	mux.HandleFunc("/repo/list", b.requireAuth(b.handleRepoList))
 +	mux.HandleFunc("/repo/read", b.requireAuth(b.handleRepoRead))
 +}
-\ No newline at end of file
 diff --git a/internal/team/broker_route_contracts.go b/internal/team/broker_route_contracts.go
 index 19791c1..1e6876a 100644
 --- a/internal/team/broker_route_contracts.go
