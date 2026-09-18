@@ -33,7 +33,7 @@ DB_PATH = Path(os.environ.get("ROOKERY_DB", _HERE / "rookery.db"))
 BRANCH = os.environ.get("ROOKERY_SNAPSHOT_BRANCH", "snapshot")
 REMOTE = os.environ.get("ROOKERY_SNAPSHOT_REMOTE", "origin")
 
-# Worktree state worth snapshotting (DB + memory-bank + node config).
+# Worktree state worth snapshotting (DB sidecars + memory-bank + node config).
 SNAPSHOT_PATHS = [
     "rookery.db-wal",
     "rookery.db-shm",
@@ -167,8 +167,7 @@ def main():
     sub.add_parser("list")
     args = ap.parse_args()
     if args.cmd == "snapshot":
-        sys.exit(snap,args.tag, args.message) if False else sys.exit(
-            snapshot(args.tag, args.message))
+        sys.exit(snapshot(args.tag, args.message))
     if args.cmd == "restore":
         sys.exit(restore(args.tag, args.dest))
     if args.cmd == "list":
