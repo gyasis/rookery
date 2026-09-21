@@ -1,0 +1,381 @@
+diff --git a/internal/team/broker.go b/internal/team/broker.go
+index d5c434a..5813386 100644
+--- a/internal/team/broker.go
++++ b/internal/team/broker.go
+@@ -675,6 +675,11 @@ func (b *Broker) StartOnPort(port int) error {
+ 	mux := http.NewServeMux()
+ 	b.registerPlatformRoutes(mux)
+ 	b.registerTaskRoutes(mux)
++	// Read-only repo access for the app bridge (TWICE-19294 / TWICE-145689):
++	// GET /repo/list + GET /repo/read, bearer-auth, 64 KB server-side read
++	// cap. Handlers + route contracts live in broker_repo_http.go and
++	// broker_route_contracts.go.
++	b.registerRepoRoutes(mux)
+ 	// Lane E (multi-agent control loop): Decision Inbox + per-task
+ 	// Decision Packet view. /tasks/inbox is registered as an exact
+ 	// path so it wins over the /tasks/ prefix. /tasks/ fires for
+diff --git a/internal/team/broker_repo_http.go b/internal/team/broker_repo_http.go
+new file mode 100644
+index 0000000..b5fcdb2
+--- /dev/null
++++ b/internal/team/broker_repo_http.go
+@@ -0,0 +1,250 @@
++package team
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"os"
++	"strings"
++	"time"
++)
++
++// Read-only repo access over the broker HTTP surface.
++//
++// The MCP tools (team_repo_list / team_repo_read in internal/teammcp) call
++// Gitea directly, so sandboxed apps on the app bridge — which can only issue
++// allowlisted broker GETs — have no way to reach repo data (TWICE-19294 /
++// TWICE-145689). These two handlers expose the SAME read-only surface as HTTP
++// routes, mirroring the MCP logic (env-configured Gitea host, owner scope
++// "twicedata", 64 KB read cap). They must stay GET-only and must never leak
++// the Gitea token or raw upstream URL into a response.
++
++// repoReadMaxBytes mirrors teammcp.repoReadMaxBytes: files served through the
++// broker are capped at 64 KB, truncated with a trailing note beyond that.
++const repoReadMaxBytes = 64 * 1024
++
++// giteaRequestTimeout bounds each upstream call, mirroring the MCP client's
++// 10-second timeout so a hung Gitea cannot wedge a broker handler.
++const giteaRequestTimeout = 10 * time.Second
++
++// giteaOwnerScope is the repo owner every route here is scoped to. Mirrors the
++// MCP tools, which hardcode twicedata as the owner for all repo operations.
++const giteaOwnerScope = "twicedata"
++
++// brokerGiteaConfig holds the Gitea base URL + token read from the environment.
++type brokerGiteaConfig struct {
++	baseURL string
++	token   string
++}
++
++// brokerGiteaConfigFromEnv reads GITEA_URL / GITEA_TOKEN exactly like the MCP
++// tools' giteaEnv(). Returns an error when not configured so handlers can
++// answer 503 without panicking.
++func brokerGiteaConfigFromEnv() (brokerGiteaConfig, error) {
++	token := strings.TrimSpace(os.Getenv("GITEA_TOKEN"))
++	base := strings.TrimRight(strings.TrimSpace(os.Getenv("GITEA_URL")), "/")
++	if token == "" || base == "" {
++		return brokerGiteaConfig{}, fmt.Errorf("Gitea repo host not configured: set GITEA_URL and GITEA_TOKEN environment variables")
++	}
++	return brokerGiteaConfig{baseURL: base, token: token}, nil
++}
++
++var brokerGiteaHTTPClient = &http.Client{Timeout: giteaRequestTimeout}
++
++// brokerGiteaGet performs a GET against the Gitea API with the server-side
++// token and returns the raw body (capped at repoReadMaxBytes+1, mirroring
++// teammcp.giteaGetRaw). Non-2xx statuses are NOT errors here — the caller
++// inspects the returned status and body to build its own response.
++func brokerGiteaGet(ctx context.Context, cfg brokerGiteaConfig, path string) ([]byte, int, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.baseURL+path, nil)
++	if err != nil {
++		return nil, 0, err
++	}
++	req.Header.Set("Authorization", "token "+cfg.token)
++	res, err := brokerGiteaHTTPClient.Do(req)
++	if err != nil {
++		return nil, 0, err
++	}
++	defer res.Body.Close()
++	body, readErr := io.ReadAll(io.LimitReader(res.Body, repoReadMaxBytes+1))
++	if readErr != nil {
++		return nil, res.StatusCode, readErr
++	}
++	return body, res.StatusCode, nil
++}
++
++// encodeRepoPath URL-encodes each segment of a slash-separated path
++// individually (mirroring teammcp.encodePath), so path separators survive
++// while segment characters are escaped.
++func encodeRepoPath(p string) string {
++	segments := strings.Split(p, "/")
++	encoded := make([]string, 0, len(segments))
++	for _, seg := range segments {
++		if seg != "" {
++			encoded = append(encoded, url.PathEscape(seg))
++		}
++	}
++	return strings.Join(encoded, "/")
++}
++
++// --------------------------------------------------------------------------
++// Response shapes (mirror the MCP tool outputs so apps get the same fields)
++// --------------------------------------------------------------------------
++
++type brokerRepoSummary struct {
++	Name        string `json:"name"`
++	FullName    string `json:"full_name"`
++	Description string `json:"description"`
++	Private     bool   `json:"private"`
++	UpdatedAt   string `json:"updated_at"`
++}
++
++type brokerRepoContentEntry struct {
++	Name string `json:"name"`
++	Type string `json:"type"` // "file" or "dir"
++	Path string `json:"path"`
++}
++
++// --------------------------------------------------------------------------
++// Handlers
++// --------------------------------------------------------------------------
++
++// handleRepoList services GET /repo/list. With no repo param it returns all
++// hosted repos; with repo (+ optional path) it returns directory contents.
++// Mirrors teammcp.handleTeamRepoList.
++func (b *Broker) handleRepoList(w http.ResponseWriter, r *http.Request) {
++	if r.Method != http.MethodGet {
++		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
++		return
++	}
++	cfg, err := brokerGiteaConfigFromEnv()
++	if err != nil {
++		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
++		return
++	}
++	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
++	ctx := r.Context()
++	if repo == "" {
++		var result struct {
++			Data []brokerRepoSummary `json:"data"`
++		}
++		apiPath := "/api/v1/repos/search?limit=50&sort=updated&order=desc"
++		body, status, callErr := brokerGiteaGet(ctx, cfg, apiPath)
++		if callErr != nil {
++			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("list repos: %v", callErr)})
++			return
++		}
++		if status < 200 || status >= 300 {
++			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("list repos: HTTP %d", status)})
++			return
++		}
++		if err := json.Unmarshal(body, &result); err != nil {
++			writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("list repos: %v", err)})
++			return
++		}
++		writeJSON(w, http.StatusOK, map[string]any{"repos": result.Data})
++		return
++	}
++	dirPath := strings.Trim(strings.TrimSpace(r.URL.Query().Get("path")), "/")
++	apiPath := "/api/v1/repos/" + giteaOwnerScope + "/" + url.PathEscape(repo) + "/contents"
++	if dirPath != "" {
++		apiPath += "/" + encodeRepoPath(dirPath)
++	}
++	body, status, callErr := brokerGiteaGet(ctx, cfg, apiPath)
++	if callErr != nil {
++		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("list %q/%q: %v", repo, dirPath, callErr)})
++		return
++	}
++	if status == http.StatusNotFound {
++		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("repo or path not found: %q / %q", repo, dirPath)})
++		return
++	}
++	if status < 200 || status >= 300 {
++		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("list %q/%q: HTTP %d", repo, dirPath, status)})
++		return
++	}
++	var entries []brokerRepoContentEntry
++	if err := json.Unmarshal(body, &entries); err != nil {
++		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("list %q/%q: %v", repo, dirPath, err)})
++		return
++	}
++	for i := range entries {
++		if entries[i].Type != "dir" {
++			entries[i].Type = "file"
++		}
++	}
++	writeJSON(w, http.StatusOK, map[string]any{
++		"repo":    repo,
++		"path":    dirPath,
++		"entries": entries,
++	})
++}
++
++// handleRepoRead services GET /repo/read?repo=...&path=.... Returns raw file
++// content as text/plain, capped at 64 KB with a trailing truncation note —
++// mirroring teammcp.handleTeamRepoRead.
++func (b *Broker) handleRepoRead(w http.ResponseWriter, r *http.Request) {
++	if r.Method != http.MethodGet {
++		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
++		return
++	}
++	cfg, err := brokerGiteaConfigFromEnv()
++	if err != nil {
++		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
++		return
++	}
++	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
++	if repo == "" {
++		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "repo is required"})
++		return
++	}
++	filePath := strings.Trim(strings.TrimSpace(r.URL.Query().Get("path")), "/")
++	if filePath == "" {
++		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is required"})
++		return
++	}
++	apiPath := "/api/v1/repos/" + giteaOwnerScope + "/" + url.PathEscape(repo) + "/raw/" + encodeRepoPath(filePath)
++	body, status, callErr := brokerGiteaGet(r.Context(), cfg, apiPath)
++	if callErr != nil {
++		writeJSON(w, http.StatusBadGateway, map[string]string{
++			"repo":  repo,
++			"path":  filePath,
++			"error": fmt.Sprintf("read %q/%q: %v", repo, filePath, callErr),
++		})
++		return
++	}
++	if status == http.StatusNotFound {
++		writeJSON(w, http.StatusNotFound, map[string]string{
++			"repo":  repo,
++			"path":  filePath,
++			"error": "repo/path not found",
++		})
++		return
++	}
++	if status < 200 || status >= 300 {
++		writeJSON(w, http.StatusBadGateway, map[string]string{
++			"repo":  repo,
++			"path":  filePath,
++			"error": fmt.Sprintf("read %q/%q: HTTP %d", repo, filePath, status),
++		})
++		return
++	}
++	if len(body) > repoReadMaxBytes {
++		note := fmt.Sprintf("\n\n[truncated: file exceeds %d bytes; only the first %d bytes are shown]", repoReadMaxBytes, repoReadMaxBytes)
++		body = append(body[:repoReadMaxBytes:repoReadMaxBytes], []byte(note)...)
++	}
++	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
++	_, _ = w.Write(body)
++}
++
++// registerRepoRoutes registers the two read-only repo routes behind bearer
++// auth. Called from Broker.StartOnPort alongside registerPlatformRoutes /
++// registerTaskRoutes. GET-only: the handlers reject other methods and the
++// route contract pins Method to GET.
++func (b *Broker) registerRepoRoutes(mux *http.ServeMux) {
++	mux.HandleFunc("/repo/list", b.requireAuth(b.handleRepoList))
++	mux.HandleFunc("/repo/read", b.requireAuth(b.handleRepoRead))
++}
+diff --git a/internal/team/broker_route_contracts.go b/internal/team/broker_route_contracts.go
+index 19791c1..1e6876a 100644
+--- a/internal/team/broker_route_contracts.go
++++ b/internal/team/broker_route_contracts.go
+@@ -301,10 +301,46 @@ var wikiHistoryBrokerRoutes = []brokerRoute{
+ 	},
+ }
+ 
++// repoBrokerRoutes documents the read-only repo HTTP surface (broker_repo_http.go).
++// GET-only, bearer-auth, scoped to the intranet Gitea owner "twicedata", with a
++// server-side 64 KB cap on file reads. Registered in Broker.StartOnPort via
++// registerRepoRoutes so sandboxed apps on the bridge can list/read repo data
++// (TWICE-19294 / TWICE-145689) without any write surface.
++var repoBrokerRoutes = []brokerRoute{
++	{
++		contract: RouteContract{
++			Domain:       "repo",
++			Capability:   "Read-only repo listings and file contents",
++			Path:         "/repo/list",
++			Method:       http.MethodGet,
++			Auth:         RouteAuthBearer,
++			RequestType:  "query: repo?, path?",
++			ResponseType: "{repos: []team.brokerRepoSummary} | {repo, path, entries: []team.brokerRepoContentEntry}",
++		},
++		handler: func(b *Broker) http.HandlerFunc {
++			return b.handleRepoList
++		},
++	},
++	{
++		contract: RouteContract{
++			Domain:       "repo",
++			Capability:   "Read-only repo listings and file contents",
++			Path:         "/repo/read",
++			Method:       http.MethodGet,
++			Auth:         RouteAuthBearer,
++			RequestType:  "query: repo, path",
++			ResponseType: "text/plain file content (64 KB cap)",
++		},
++		handler: func(b *Broker) http.HandlerFunc {
++			return b.handleRepoRead
++		},
++	},
++}
++
+ // BrokerRouteContracts returns the contract registry for routes that have been
+ // moved under explicit domain registration.
+ func BrokerRouteContracts() []RouteContract {
+-	routes := make([]RouteContract, 0, len(platformBrokerRoutes)+len(taskBrokerRoutes)+len(wikiHistoryBrokerRoutes))
++	routes := make([]RouteContract, 0, len(platformBrokerRoutes)+len(taskBrokerRoutes)+len(wikiHistoryBrokerRoutes)+len(repoBrokerRoutes))
+ 	appendContracts := func(source []brokerRoute) {
+ 		for _, route := range source {
+ 			routes = append(routes, route.contract)
+@@ -313,6 +349,7 @@ func BrokerRouteContracts() []RouteContract {
+ 	appendContracts(platformBrokerRoutes)
+ 	appendContracts(taskBrokerRoutes)
+ 	appendContracts(wikiHistoryBrokerRoutes)
++	appendContracts(repoBrokerRoutes)
+ 	return routes
+ }
+ 
+diff --git a/web/src/components/apps/CustomAppFrame.test.ts b/web/src/components/apps/CustomAppFrame.test.ts
+index 15ca8ee..8239923 100644
+--- a/web/src/components/apps/CustomAppFrame.test.ts
++++ b/web/src/components/apps/CustomAppFrame.test.ts
+@@ -28,6 +28,9 @@ describe("isAllowedGetPath", () => {
+     expect(isAllowedGetPath("/tasks?status=open")).toBe(true);
+     expect(isAllowedGetPath("/office-members")).toBe(true);
+     expect(isAllowedGetPath("/wiki/list")).toBe(true);
++    // Read-only repo access (TWICE-19294): listings + file contents.
++    expect(isAllowedGetPath("/repo/list")).toBe(true);
++    expect(isAllowedGetPath("/repo/read?repo=rookery&path=README.md")).toBe(true);
+   });
+ 
+   it("rejects non-whitelisted, mutating, or off-broker paths", () => {
+@@ -41,6 +44,9 @@ describe("isAllowedGetPath", () => {
+     expect(isAllowedGetPath("/apps/app_0123456789abcdef")).toBe(false);
+     // Prefix-spoofing must not pass (/tasksomething is not /tasks/*).
+     expect(isAllowedGetPath("/tasks-secret")).toBe(false);
++    // L2 still holds: no write or history surface on /repo/*.
++    expect(isAllowedGetPath("/repo/write")).toBe(false);
++    expect(isAllowedGetPath("/repo/history")).toBe(false);
+     expect(isAllowedGetPath("/wiki/write")).toBe(false);
+     // Path traversal must be normalized away before the allowlist check, since
+     // the browser resolves it before sending (security review finding 1).
+diff --git a/web/src/components/apps/CustomAppFrame.tsx b/web/src/components/apps/CustomAppFrame.tsx
+index 506627c..a8d25c8 100644
+--- a/web/src/components/apps/CustomAppFrame.tsx
++++ b/web/src/components/apps/CustomAppFrame.tsx
+@@ -82,6 +82,11 @@ const ALLOWED_GET_PREFIXES: readonly string[] = [
+   "/wiki/catalog",
+   "/wiki/read",
+   "/wiki/tree",
++  // Read-only repo data (TWICE-19294 / TWICE-145689): repo listings + file
++  // contents from the intranet Gitea via the broker's GET /repo/list and
++  // GET /repo/read routes (bearer-auth, 64 KB server-side read cap).
++  "/repo/list",
++  "/repo/read",
+ ];
+ 
+ const HOST_SOURCE = "wuphf-host";
+@@ -343,7 +348,7 @@ export function isAllowedGetPath(path: string): boolean {
+  * Keep this in sync with ALLOWED_GET_PREFIXES: a text endpoint added there and
+  * missed here fails the same way.
+  */
+-const TEXT_GET_PREFIXES = ["/wiki/read", "/wiki/list"];
++const TEXT_GET_PREFIXES = ["/wiki/read", "/wiki/list", "/repo/read"];
+ 
+ export function isTextGetPath(path: string): boolean {
+   if (!path.startsWith("/")) return false;
