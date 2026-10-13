@@ -16,20 +16,32 @@ Wire into Claude Code via ~/.claude.json mcpServers:
   }
 Env: ROOKERY_NODE (this session's node id, default 'claude-main'),
      ROOKERY_DB (local) or ROOKERY_URL + ROOKERY_TOKEN (remote sidecar).
+
+SHARED HTTP MODE (2026-10-13): `rookery_mcp.py --http 7702` runs ONE server for
+every Claude session (systemd --user rookery-mcp.service) instead of one stdio
+copy per session — 23 copies for 23 sessions before this. Identity can no longer
+come from the process, so each MCP connection gets its own node:
+  · an `X-Rookery-Node` request header, if the client sends one, else
+  · claude-<host>-<first 8 of the Mcp-Session-Id>, stable for the connection.
+Same semantics as the per-process default it replaces: unique per session.
 """
 
+import asyncio
 import os
 import socket
+import sys
 import time
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 import rookery as R
 
 # Node identity: an explicit ROOKERY_NODE always wins. Otherwise fall back to a
 # unique-per-process id so two MCP sessions on one host never silently collide
 # (the old default pinned every session to "claude-main").
-NODE = os.environ.get("ROOKERY_NODE") or f"claude-{socket.gethostname().split('.')[0]}-{os.getpid()}"
+HOST = socket.gethostname().split('.')[0]
+NODE = os.environ.get("ROOKERY_NODE") or f"claude-{HOST}-{os.getpid()}"
+HTTP = "--http" in sys.argv
 URL = os.environ.get(
     "ROOKERY_URL"
 )  # if set, talk to a remote sidecar instead of the local DB
@@ -39,12 +51,12 @@ URL = os.environ.get(
 if URL:
     import mailctl  # reuses ROOKERY_TOKEN for the Authorization header
 
-    def _send(to, body, topic=None):
+    def _send(node, to, body, topic=None):
         return mailctl.call(
             URL,
             "/send",
             "POST",
-            {"sender": NODE, "recipient": to, "body": body, "topic": topic},
+            {"sender": node, "recipient": to, "body": body, "topic": topic},
         )["id"]
 
     def _pending(node):
@@ -54,8 +66,8 @@ if URL:
         mailctl.call(URL, "/claim", "POST", {"ids": ids})
         mailctl.call(URL, "/ack", "POST", {"ids": ids})
 
-    def _register():
-        mailctl.call(URL, "/register", "POST", {"node_id": NODE, "kind": "mcp"})
+    def _register(node):
+        mailctl.call(URL, "/register", "POST", {"node_id": node, "kind": "mcp"})
 
     def _roster():
         card = mailctl.call(URL, "/.well-known/agent-card.json", "GET")
@@ -63,9 +75,9 @@ if URL:
 
 else:
 
-    def _send(to, body, topic=None):
+    def _send(node, to, body, topic=None):
         c = R.connect()
-        return R.send(c, NODE, to, body, topic)
+        return R.send(c, node, to, body, topic)
 
     def _pending(node):
         c = R.connect()
@@ -76,9 +88,9 @@ else:
         R.claim(c, ids)
         R.ack(c, ids)
 
-    def _register():
+    def _register(node):
         c = R.connect()
-        R.register_node(c, NODE, kind="mcp")
+        R.register_node(c, node, kind="mcp")
 
     def _roster():
         c = R.connect()
@@ -88,42 +100,64 @@ else:
         ]
 
 
-def _drain():
+_seen: set[str] = set()
+
+
+def _node(ctx: Context) -> str:
+    """This connection's node id (see SHARED HTTP MODE); stdio keeps NODE."""
+    if not HTTP:
+        return NODE
+    req = ctx.request_context.request
+    hdr = req.headers if req is not None else {}
+    node = hdr.get("x-rookery-node") or (
+        f"claude-{HOST}-{(hdr.get('mcp-session-id') or 'nosession')[:8]}")
+    if node not in _seen:                  # register on first use, like startup did
+        _register(node)
+        _seen.add(node)
+    return node
+
+
+def _drain(node):
     """Return + consume new mail addressed to this session's node."""
-    msgs = _pending(NODE)
+    msgs = _pending(node)
     if msgs:
         _consume([m["id"] for m in msgs])
     return [{"from": m["sender"], "body": m["body"]} for m in msgs]
 
 
-_register()
+if not HTTP:
+    _register(NODE)
 mcp = FastMCP("rookery")
 
 
 @mcp.tool()
-def send(to: str, body: str, topic: str = "") -> str:
+def send(to: str, body: str, ctx: Context, topic: str = "") -> str:
     """Send a message to another agent/node in the Rookery mesh.
     `to` may be a node id, or node@mailroom for a federated mailroom."""
-    mid = _send(to, body, topic or None)
-    return f"sent #{mid}: {NODE} -> {to}"
+    node = _node(ctx)
+    mid = _send(node, to, body, topic or None)
+    return f"sent #{mid}: {node} -> {to}"
 
 
 @mcp.tool()
-def check_inbox() -> list:
+def check_inbox(ctx: Context) -> list:
     """Return (and consume) any new messages addressed to this session."""
-    return _drain()
+    return _drain(_node(ctx))
 
 
 @mcp.tool()
-def await_message(timeout: float = 30.0) -> list:
+async def await_message(ctx: Context, timeout: float = 30.0) -> list:
     """Block up to `timeout` seconds for new mail to this session; return it
     (consumed). Empty list on timeout. Use after send() to get a reply."""
+    # async + asyncio.sleep: a sync sleep here would stall the shared server's
+    # event loop, freezing every OTHER session's calls for up to `timeout`.
+    node = _node(ctx)
     deadline = time.time() + timeout
     while time.time() < deadline:
-        got = _drain()
+        got = _drain(node)
         if got:
             return got
-        time.sleep(1.0)
+        await asyncio.sleep(1.0)
     return []
 
 
@@ -134,4 +168,9 @@ def roster() -> list:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    if HTTP:
+        mcp.settings.host = "127.0.0.1"
+        mcp.settings.port = int(sys.argv[sys.argv.index("--http") + 1])
+        mcp.run(transport="streamable-http")      # served at /mcp
+    else:
+        mcp.run()
