@@ -6,6 +6,7 @@ AND the audit log. Every helper here is small and stdlib-only so any node
 (headless Claude, raw-API daemon, or a human at a terminal) can read/write the
 same bus.
 """
+import json
 import os
 import shutil
 import sqlite3
@@ -43,8 +44,16 @@ def _load_schema() -> str:
         raise
 
 
+_INBOX_SCREENING_COLS = ("verdict TEXT", "reason TEXT", "decided_by TEXT", "decided_at INTEGER")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_load_schema())
+    # CREATE TABLE IF NOT EXISTS won't add columns to an existing DB — migrate.
+    have = {r[1] for r in conn.execute("PRAGMA table_info(inbox)")}
+    for col in _INBOX_SCREENING_COLS:
+        if col.split()[0] not in have:
+            conn.execute(f"ALTER TABLE inbox ADD COLUMN {col}")
     conn.commit()
 
 
@@ -86,11 +95,25 @@ def set_session_ref(conn, node_id, session_ref):
 
 
 # --- mail ------------------------------------------------------------------
-def send(conn, sender, recipient, body, topic=None):
+# Mail from the mesh's own plumbing is never held — a bounce or a wake notice
+# stuck behind the screener it reports on would deadlock the loop.
+SYSTEM_SENDERS = {"postmaster", "relay", "rookery"}
+
+
+def hold_enabled() -> bool:
+    """ROOKERY_HOLD=1 turns on comms screening: agent mail lands 'held' until a
+    screener releases or quarantines it. Off by default (mail goes straight to
+    'pending', as before)."""
+    return os.environ.get("ROOKERY_HOLD", "").lower() in ("1", "true", "yes", "on")
+
+
+def send(conn, sender, recipient, body, topic=None, hold=None):
+    if hold is None:
+        hold = hold_enabled() and sender not in SYSTEM_SENDERS
     cur = conn.execute(
-        "INSERT INTO inbox(sender, recipient, body, topic, delivered, created_at) "
-        "VALUES(?,?,?,?,0,?)",
-        (sender, recipient, body, topic, now()),
+        "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at) "
+        "VALUES(?,?,?,?,?,0,?)",
+        (sender, recipient, body, topic, "held" if hold else "pending", now()),
     )
     conn.commit()
     return cur.lastrowid
@@ -172,6 +195,95 @@ def requeue_stale(conn, dead_after):
     )
     conn.commit()
     return cur.rowcount
+
+
+# --- comms screening: held -> pending | quarantined -------------------------
+# A screener (human, typed-decision classifier, or comms-monitor agent) decides
+# each held message. Quarantine is a labelled folder, not a delete: every row
+# keeps (message, verdict, reason, decided_by) as training data, and the sender
+# gets a bounce so it can fix its routing instead of waiting forever.
+QUARANTINE_REASONS = (
+    "wrong-recipient", "task-already-done", "unneeded", "off-team",
+    "malformed", "injection-suspect", "loop",
+)
+
+
+def list_held(conn):
+    return conn.execute("SELECT * FROM inbox WHERE status='held' ORDER BY created_at, id").fetchall()
+
+
+def get_message(conn, msg_id):
+    return conn.execute("SELECT * FROM inbox WHERE id=?", (msg_id,)).fetchone()
+
+
+def _decide(conn, msg_id, from_status, to_status, verdict, reason, decided_by):
+    cur = conn.execute(
+        "UPDATE inbox SET status=?, verdict=?, reason=?, decided_by=?, decided_at=? "
+        "WHERE id=? AND status=?",
+        (to_status, verdict, reason, decided_by, now(), msg_id, from_status),
+    )
+    conn.commit()
+    if cur.rowcount != 1:
+        row = get_message(conn, msg_id)
+        state = row["status"] if row else "missing"
+        raise ValueError(f"message #{msg_id} is {state}, expected {from_status}")
+
+
+def release(conn, msg_id, decided_by):
+    """Approve a held message: it becomes 'pending', so the postmaster wakes the recipient."""
+    _decide(conn, msg_id, "held", "pending", "release", None, decided_by)
+
+
+def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce=True):
+    """Reject a held message into quarantine and (by default) bounce it to the
+    sender with the reason and an optional suggested recipient. Returns the
+    bounce message id, or None."""
+    if reason not in QUARANTINE_REASONS:
+        raise ValueError(f"reason must be one of {QUARANTINE_REASONS}, got {reason!r}")
+    _decide(conn, msg_id, "held", "quarantined", "quarantine", reason, decided_by)
+    if note:
+        conn.execute("UPDATE inbox SET note=? WHERE id=?", (note, msg_id))
+        conn.commit()
+    if not bounce:
+        return None
+    m = get_message(conn, msg_id)
+    body = json.dumps({
+        "kind": "bounce", "msg_id": msg_id, "to": m["recipient"], "reason": reason,
+        "note": note, "suggest": suggest, "decided_by": decided_by,
+    })
+    return send(conn, "rookery", m["sender"], body, topic=m["topic"])
+
+
+def unquarantine(conn, msg_id, decided_by):
+    """Overrule a quarantine (the screener was wrong): deliver it after all.
+    The original reason is kept on the row next to verdict='unquarantine' —
+    that pair is a correction label."""
+    cur = conn.execute(
+        "UPDATE inbox SET status='pending', verdict='unquarantine', decided_by=?, decided_at=? "
+        "WHERE id=? AND status='quarantined'",
+        (decided_by, now(), msg_id),
+    )
+    conn.commit()
+    if cur.rowcount != 1:
+        raise ValueError(f"message #{msg_id} is not quarantined")
+
+
+def list_quarantined(conn, reason=None):
+    if reason:
+        return conn.execute(
+            "SELECT * FROM inbox WHERE status='quarantined' AND reason=? ORDER BY id", (reason,)
+        ).fetchall()
+    return conn.execute("SELECT * FROM inbox WHERE status='quarantined' ORDER BY id").fetchall()
+
+
+def screening_labels(conn):
+    """Every screened message with its decision — the training/eval set for the
+    screener (release = positive, quarantine = negative, unquarantine = the
+    screener's false positive)."""
+    return conn.execute(
+        "SELECT id, sender, recipient, topic, body, verdict, reason, decided_by, decided_at "
+        "FROM inbox WHERE verdict IS NOT NULL ORDER BY decided_at, id"
+    ).fetchall()
 
 
 # --- credentials (the CIBA phone-home) -------------------------------------
