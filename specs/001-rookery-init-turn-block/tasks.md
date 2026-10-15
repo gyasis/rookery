@@ -308,7 +308,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
   - Without a session, no hook writes `state/turn.json`.
   - `held` and `quarantined` mail is not unread.
   - An exception inside a hook gives exit 0 and one log line.
-- [ ] T034 [US4] Add these inbox cases to `test_hooks.py` (FR-031):
+- [x] T034 [US4] Add these inbox cases to `test_hooks.py` (FR-031):
   - `rookery inbox --json` lists only the mail of the resolved agent ID, and marks it read.
   - `rookery peek --json` lists the same mail and changes nothing.
   - Neither command accepts `--as` or `--all`.
@@ -327,7 +327,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
 ### Implementation
 
 - [x] T036 [US4] Write `unread(conn, agent_id)` and `unread_summary(conn, agent_id)` in `turn_block.py` (D7). Unread rows have `recipient=<agent_id>` and `status='pending'`. The summary gives the count, the sender names and the task IDs. Map each agent ID to its name through `identities`. A bounce has the sender name `rookery`. Also write `new_failed_blocks(root, session, name)` (D23). It lists the failed blocks in `<root>/postmaster/outbox/<session>/<name>/failed/` and `agents/<session>/<name>/outbox/failed/` that `state/failed-seen.json` does not name.
-- [ ] T037 [US4] Write `session_start(args)` in `cli_hook.py` (FR-015, D9). Resolve the identity. Without a session, return. Else register the node. When `CLAUDE_ENV_FILE` is set, append the exports. Write `state/turn.json` with `idle`. Then print the who-am-I line, the newest `runs/*/HANDOFF.md` by mtime, the unread line, and one line for each new failed block. Add each shown block to `state/failed-seen.json`.
+- [x] T037 [US4] Write `session_start(args)` in `cli_hook.py` (FR-015, D9). Resolve the identity. Without a session, return. Else register the node. When `CLAUDE_ENV_FILE` is set, append the exports. Write `state/turn.json` with `idle`. Then print the who-am-I line, the newest `runs/*/HANDOFF.md` by mtime, the unread line, and one line for each new failed block. Add each shown block to `state/failed-seen.json`.
 - [ ] T038 [US4] Write `prompt(args)` in `cli_hook.py` (FR-016). Write `state/turn.json` with `busy`. Print one line only when unread mail exists: `[rookery] N unread from A, B about TASK-1, TASK-2. Read them with: rookery inbox`. Then print one line for each new failed block, with the text of D23, and add it to `state/failed-seen.json` (FR-037). Print nothing else.
 - [ ] T039 [US4] Add the idle write to `stop()` in `cli_hook.py` (FR-017, D8). After `dispatch_text()`, write `state/turn.json` with `{"state": "idle", "since": ts}` through `write_json_atomic()`. Never print and never block.
 - [x] T040 [US4] Add `rookery inbox` and `rookery peek` to `cli_rookery_session.py`, and register them in `rookery_cli.py` (FR-031). `inbox` calls `rookery.claim()` and `rookery.ack()` on the listed IDs. Log `inbox-read`. Without a session, exit 3.
@@ -338,7 +338,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
   - Find its first binding whose kind has a `wake` entry in `load_config()`. Run each command of that entry with `subprocess.run(list, shell=False, timeout=10)`. Then write the new last pushed ID.
   - Without such a binding, log `no-wake-binding` and skip. Do not call `wake()`.
   - Log each push to the `postmaster` stream. Put no herdr or tmux name in the code.
-- [ ] T058 [US4] Make `--nodes` optional in `postmaster.py` (D10, FR-018). Without a roster, `run()` skips the roster steps and runs only the outbox scan and the wake step. With `--nodes`, the behavior stays the same. Add a case to `test_wake.py`: start `python3 postmaster.py --poll 0.2` with no `--nodes` as a subprocess, with an idle identity that has new mail. Within 5 s the fixture script runs once. Then stop the process. Run `python3 test_held_quarantine.py`. It must still pass.
+- [x] T058 [US4] Make `--nodes` optional in `postmaster.py` (D10, FR-018). Without a roster, `run()` skips the roster steps and runs only the outbox scan and the wake step. With `--nodes`, the behavior stays the same. Add a case to `test_wake.py`: start `python3 postmaster.py --poll 0.2` with no `--nodes` as a subprocess, with an idle identity that has new mail. Within 5 s the fixture script runs once. Then stop the process. Run `python3 test_held_quarantine.py`. It must still pass.
 - [ ] T042 [US4] Run this after T033, T034, T035, T036, T037, T038, T039, T040, T041. Run `python3 -m unittest test_hooks test_wake -v`. All cases must pass.
 
 **Checkpoint**: the agent sees its mail at start, at each prompt and when it is idle. Nothing interrupts its turn.

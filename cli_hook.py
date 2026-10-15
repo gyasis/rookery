@@ -12,6 +12,7 @@ import os
 import secrets
 import sqlite3
 import sys
+import unicodedata
 
 
 class HookArgError(Exception):
@@ -108,7 +109,8 @@ def _safe_log(root, **fields):
         return
     try:
         import turn_block
-        turn_block.log_event(root, adapter="stop", **fields)
+        fields.setdefault("adapter", "stop")
+        turn_block.log_event(root, **fields)
     except Exception:
         pass
 
@@ -140,8 +142,166 @@ def _keep_unresolved(turn_block, root, session, text, outcome="no-identity",
                          task=(block or {}).get("task"), kept=block is not None)
 
 
+_HANDOFF_CAP = 16 * 1024    # bytes of HANDOFF.md printed into context
+
+
+def _newest_handoff(ws):
+    """Text of the newest runs/*/HANDOFF.md (by mtime) inside the workspace, or None.
+    Symlinks (file or run folder) and paths that resolve outside the workspace are skipped."""
+    runs = os.path.join(ws, "runs")
+    real_ws = os.path.realpath(ws)
+    best = None
+    try:
+        names = os.listdir(runs)
+    except OSError:
+        return None
+    for n in names:
+        d = os.path.join(runs, n)
+        p = os.path.join(d, "HANDOFF.md")
+        try:
+            if os.path.islink(d) or os.path.islink(p) or not os.path.isfile(p):
+                continue
+            if os.path.commonpath([real_ws, os.path.realpath(p)]) != real_ws:
+                continue
+            m = os.path.getmtime(p)
+        except (OSError, ValueError):
+            continue
+        if best is None or (m, p) > best:
+            best = (m, p)
+    if best is None:
+        return None
+    with open(best[1], "rb") as fh:
+        raw = fh.read(_HANDOFF_CAP + 1)
+    text = raw[:_HANDOFF_CAP].decode("utf-8", errors="ignore")   # cut mid-char: drop, no U+FFFD
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    import turn_block
+    text = "".join(ch for ch in text if ch in "\n\t"
+                   or unicodedata.category(ch) not in turn_block._DROP_CATEGORIES)
+    text = text.rstrip("\n")
+    if len(raw) > _HANDOFF_CAP:
+        text += f"\n[rookery] HANDOFF.md truncated at {_HANDOFF_CAP} bytes."
+    return text or None
+
+
+def _env_value(v):
+    return "".join(str(v).split())      # IDs are safe; never let a newline through
+
+
+_ENV_FILE_CAP = 1024 * 1024
+
+
+def _write_env_file(path, session_id, agent_id):
+    """Append the two exports unless they are already the last ROOKERY_* exports in the file.
+    A missing trailing newline is repaired first so the previous line is never corrupted."""
+    pair = [f"export ROOKERY_SESSION={_env_value(session_id)}",
+            f"export ROOKERY_NODE={_env_value(agent_id)}"]
+    existing = ""
+    try:
+        with open(path, "rb") as fh:
+            existing = fh.read(_ENV_FILE_CAP).decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        pass
+    last = [ln for ln in existing.splitlines() if ln.startswith("export ROOKERY_")]
+    if last[-2:] == pair:
+        return
+    prefix = "\n" if existing and not existing.endswith("\n") else ""
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(prefix + "\n".join(pair) + "\n")
+
+
+def _resolve_buffered(turn_block, rookery_identity, conn, hook_input, root):
+    """resolve(create=True), holding its log events back so a failing call logs ONE line.
+    Returns (events, resolved)."""
+    events = []
+    orig = turn_block.log_event
+    turn_block.log_event = lambda _root, stream="turn-block", **f: events.append((stream, f))
+    try:
+        resolved = rookery_identity.resolve(
+            conn, os.environ, hook_input, root, create=True)
+    finally:
+        turn_block.log_event = orig
+    return events, resolved
+
+
+def _flush_events(turn_block, root, events):
+    for stream, fields in events:
+        turn_block.log_event(root, stream=stream, **fields)
+
+
 def session_start(args):
-    """Empty until T037."""
+    """SessionStart hook (FR-015, D9, D16, D20). Creates identity/bindings, prints context."""
+    root = None
+    session_id = None
+    events = []
+    ids = {}
+    turn_block = None
+    try:
+        import turn_block
+        import rookery_identity
+        import rookery
+
+        if _no_session_possible(turn_block, rookery_identity):
+            return                          # no session: print nothing, write nothing
+        root = turn_block.project_root(args.project)
+        hook_input, bad = _read_input()
+        if bad:
+            hook_input = {}                 # identity may still come from the environment
+        conn = turn_block.open_db()
+        try:
+            ended = rookery_identity.find_session(
+                conn, os.environ, rookery_identity.load_config(persist=False))
+            if ended is not None and ended["state"] != "open":
+                turn_block.log_event(root, adapter="session-start",
+                                     session=ended["session_id"], outcome="session-ended")
+                return                      # the session is over: create and print nothing
+            events, resolved = _resolve_buffered(
+                turn_block, rookery_identity, conn, hook_input, root)
+            if resolved is None:
+                _flush_events(turn_block, root, events)
+                return
+            session, identity, _bindings = resolved
+            if identity is None:
+                return
+            session_id = session["session_id"]
+            agent_id, name = identity["agent_id"], identity["name"]
+            ids = {"agent_id": agent_id, "name": name}
+            rookery.register_node(conn, agent_id, kind="pane", lifecycle="persistent")
+            lines = [f"[rookery] You are {name} ({agent_id}) in Rookery session "
+                     f"{session['name']}."]
+            ws = turn_block.workspace(root, session["name"], name)
+            env_file = os.environ.get("CLAUDE_ENV_FILE")
+            if env_file:
+                _write_env_file(env_file, session_id, agent_id)
+            turn_block.write_json_atomic(
+                os.path.join(ws, "state", "turn.json"),
+                {"state": "idle", "since": rookery.now()})
+            handoff = _newest_handoff(ws)
+            if handoff:
+                lines.append(handoff)
+            unread = turn_block.format_unread_line(turn_block.unread_summary(conn, agent_id))
+            if unread:
+                lines.append(unread)
+            failed = turn_block.new_failed_blocks(root, session["name"], name)
+            lines.extend(turn_block.format_failed_line(it) for it in failed)
+        finally:
+            conn.close()
+        sys.stdout.write("\n".join(lines) + "\n")     # one write: nothing partial on failure
+        sys.stdout.flush()
+        if failed:
+            turn_block.mark_failed_seen(root, session["name"], name,
+                                        [it["file"] for it in failed])
+        _flush_events(turn_block, root, events)
+        turn_block.log_event(root, adapter="session-start", session=session_id,
+                             agent_id=agent_id, outcome="session-start",
+                             source=hook_input.get("source"), failed_shown=len(failed))
+    except Exception as exc:                # D16: log and exit 0, no stdout
+        # keep the audit trail of identities already committed, then ONE hook-error line
+        try:
+            _flush_events(turn_block, root, events)
+        except Exception:
+            pass
+        _safe_log(root, adapter="session-start", session=session_id, **ids,
+                  outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
 
 
 def prompt(args):

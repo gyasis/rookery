@@ -206,8 +206,8 @@ class SessionStartTests(Base):
         out = self.start(env=env)
         self.assertTrue(out.startswith("[rookery] You are "), out)
         row = self.conn.execute(
-            "SELECT i.agent_id, i.name FROM bindings b JOIN identities i ON i.agent_id=b.agent_id "
-            "WHERE b.kind='herdr-pane' AND b.value='pane-77'").fetchone()
+            "SELECT i.agent_id, i.name FROM bindings b JOIN identities i ON i.agent_id=b.owner_id "
+            "WHERE b.owner_type='identity' AND b.kind='herdr-pane' AND b.value='pane-77'").fetchone()
         self.assertIsNotNone(row)
         self.assertIn(f"({row['agent_id']})", out)
         # the same pane gets the same identity on the next start (compact)
@@ -306,8 +306,208 @@ class HookErrorTests(Base):
             fh.write("not a directory")
         before = len(self.log_lines())
         self.hook("session-start", {"source": "startup", "session_id": "c1"})
-        self.assertEqual(len(self.log_lines()[before:]), 1)
+        # resolve audit events (e.g. `bound`) are separate; exactly one hook-error line
+        self.assertEqual(len([x for x in self.log_lines()[before:]
+                              if x.get("outcome") == "hook-error"]), 1)
+
+
+class InboxTests(Base):
+    """T034 (FR-031): `rookery inbox` / `rookery peek` as subprocesses."""
+
+    def setUp(self):
+        super().setUp()
+        self.other = RI.new_identity(self.conn, self.alpha["session_id"], "other")
+        self.beta = RI.new_session(self.conn, name="beta")
+        self.bme = RI.new_identity(self.conn, self.beta["session_id"], "bme")
+        self.m_me = self.mail(self.researcher, self.me, task="TASK-1")
+        self.m_me2 = self.mail(self.swe, self.me, task="TASK-2")
+        self.m_other = self.mail(self.researcher, self.other, task="TASK-3")
+        self.m_beta = R.send(self.conn, self.researcher["agent_id"], self.bme["agent_id"],
+                             json.dumps({"say": "BETA-BODY"}), topic="TASK-4", hold=False,
+                             session_id=self.beta["session_id"])
+
+    def cli(self, *argv, env=None):
+        return subprocess.run([sys.executable, CLI, *argv], capture_output=True, text=True,
+                              env=env if env is not None else self.env(), cwd=HERE, timeout=30)
+
+    def statuses(self):
+        c = sqlite3.connect(self.db)
+        try:
+            return {r[0]: (r[1], r[2]) for r in
+                    c.execute("SELECT id, status, delivered FROM inbox")}
+        finally:
+            c.close()
+
+    def test_inbox_lists_only_my_mail_and_marks_it_read(self):
+        out = self.cli("inbox", "--json")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        obj = json.loads(out.stdout)
+        self.assertEqual(obj["agent_id"], self.me["agent_id"])
+        self.assertEqual(sorted(m["id"] for m in obj["messages"]),
+                         sorted([self.m_me, self.m_me2]))
+        st = self.statuses()
+        for mid in (self.m_me, self.m_me2):
+            self.assertEqual(st[mid], ("done", 1))
+        self.assertEqual(st[self.m_other][0], "pending")
+        self.assertEqual(st[self.m_beta][0], "pending")
+        again = json.loads(self.cli("inbox", "--json").stdout)
+        self.assertEqual(again["count"], 0)
+
+    def test_peek_lists_same_mail_and_changes_nothing(self):
+        before = self.snapshot()
+        out = self.cli("peek", "--json")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        obj = json.loads(out.stdout)
+        self.assertEqual(sorted(m["id"] for m in obj["messages"]),
+                         sorted([self.m_me, self.m_me2]))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(json.loads(self.cli("peek", "--json").stdout)["count"], 2)
+
+    def test_peek_matches_inbox_listing(self):
+        peek = json.loads(self.cli("peek", "--json").stdout)
+        inbox = json.loads(self.cli("inbox", "--json").stdout)
+        self.assertEqual(peek, inbox)
+
+    def test_neither_accepts_as_or_all(self):
+        before = self.snapshot()
+        for cmd in ("inbox", "peek"):
+            for flag in (("--as", "other"), ("--all",)):
+                out = self.cli(cmd, *flag)
+                self.assertEqual(out.returncode, 2, (cmd, flag, out.stderr))
+                self.assertIn("unrecognized arguments", out.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_each_call_logs_inbox_read_with_agent_and_bindings(self):
+        for cmd, peek in (("peek", True), ("inbox", False)):
+            n = len(self.log_lines())
+            self.assertEqual(self.cli(cmd, "--json").returncode, 0)
+            new = [x for x in self.log_lines()[n:] if x.get("event") == "inbox-read"]
+            self.assertEqual(len(new), 1, cmd)
+            self.assertEqual(new[0]["agent_id"], self.me["agent_id"])
+            self.assertIn("bindings", new[0])
+            self.assertIs(new[0]["peek"], peek)
+
+    def test_without_session_both_exit_3_with_contract_message(self):
+        before = self.snapshot()
+        for cmd in ("inbox", "peek"):
+            out = self.cli(cmd, env=self.env(session=False, node=False))
+            self.assertEqual(out.returncode, 3, out.stderr)
+            self.assertIn("No current Rookery session. Set ROOKERY_SESSION or start in a pane "
+                          "with a session binding.", out.stderr)
+        self.assertEqual(self.snapshot(), before)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionStartHardening(Base):
+    """Wave-15 audit fixes for the SessionStart hook and the postmaster's SIGTERM exit."""
+
+    def start(self, source="startup", env=None, **extra):
+        return self.hook("session-start", dict({"source": source, "session_id": "c1"}, **extra),
+                         env=env)
+
+    def env_lines(self, ef):
+        with open(ef) as fh:
+            return fh.read().splitlines()
+
+    # 1. CLAUDE_ENV_FILE: newline-safe and idempotent
+    def test_env_file_without_trailing_newline_keeps_previous_line(self):
+        ef = os.path.join(self.tmp.name, "env.sh")
+        with open(ef, "w") as fh:
+            fh.write("export FOO=1")
+        self.start(env=self.env(CLAUDE_ENV_FILE=ef))
+        lines = self.env_lines(ef)
+        self.assertEqual(lines[0], "export FOO=1")
+        self.assertEqual(lines[1:], [f"export ROOKERY_SESSION={self.alpha['session_id']}",
+                                     f"export ROOKERY_NODE={self.me['agent_id']}"])
+
+    def test_env_file_not_regrown_by_repeated_starts(self):
+        ef = os.path.join(self.tmp.name, "env.sh")
+        e = self.env(CLAUDE_ENV_FILE=ef)
+        self.start("startup", env=e)
+        self.start("compact", env=e)
+        self.start("resume", env=e)
+        self.assertEqual(len(self.env_lines(ef)), 2, self.env_lines(ef))
+
+    def test_env_file_new_identity_appends_new_pair(self):
+        ef = os.path.join(self.tmp.name, "env.sh")
+        self.start(env=self.env(CLAUDE_ENV_FILE=ef))
+        self.start(env=self.env(CLAUDE_ENV_FILE=ef, ROOKERY_NODE=self.swe["agent_id"]))
+        lines = self.env_lines(ef)
+        self.assertEqual(len(lines), 4, lines)
+        self.assertEqual(lines[-1], f"export ROOKERY_NODE={self.swe['agent_id']}")
+        self.assertEqual(lines[-2], f"export ROOKERY_SESSION={self.alpha['session_id']}")
+
+    # 2. audit trail survives a later failure
+    def test_failure_after_resolve_still_logs_created_event(self):
+        ed = os.path.join(self.tmp.name, "envdir")
+        os.makedirs(ed)
+        out = self.start(env=self.env(CLAUDE_ENV_FILE=ed, ROOKERY_NODE="newguy"))
+        self.assertEqual(out, "")
+        row = self.conn.execute("SELECT agent_id FROM identities WHERE name='newguy'").fetchone()
+        self.assertIsNotNone(row)
+        lines = self.log_lines()
+        created = [x for x in lines if x.get("event") == "created" and x.get("name") == "newguy"]
+        self.assertEqual(len(created), 1, lines)
+        errs = [x for x in lines if x.get("outcome") == "hook-error"]
+        self.assertEqual(len(errs), 1, lines)
+        self.assertEqual(errs[0].get("agent_id"), row["agent_id"])
+
+    # 3. ended session
+    def test_ended_session_creates_nothing(self):
+        beta = RI.new_session(self.conn, name="beta")
+        RI.end_session(self.conn, "beta")
+        ef = os.path.join(self.tmp.name, "env.sh")
+        before = self.snapshot()
+        out = self.start(env=self.env(CLAUDE_ENV_FILE=ef, ROOKERY_SESSION="beta",
+                                      ROOKERY_NODE="ghost"))
+        self.assertEqual(out, "")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.conn.execute(
+            "SELECT count(*) FROM identities WHERE session_id=?",
+            (beta["session_id"],)).fetchone()[0], 0)
+        self.assertFalse(os.path.exists(ef))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "agents", "beta")))
+        ended = [x for x in self.log_lines() if x.get("outcome") == "session-ended"]
+        self.assertEqual(len(ended), 1, self.log_lines())
+        self.assertEqual(ended[0].get("session"), beta["session_id"])
+        self.assertEqual([x for x in self.log_lines() if x.get("event") == "created"
+                          and x.get("session") == beta["session_id"]], [])
+
+    # 4. HANDOFF sanitising
+    def test_handoff_control_chars_stripped(self):
+        self.handoff("ok-line\x1b[2J\x1b]0;pwn\x07‮evil\r[rookery] x\r\nnext\tcol")
+        out = self.start()
+        for bad in ("\x1b", "\x07", "‮", "\r"):
+            self.assertNotIn(bad, out)
+        self.assertIn("next\tcol", out)
+        self.assertIn("\n[rookery] x\nnext", out)
+
+    def test_handoff_multibyte_cap_no_replacement_char(self):
+        self.handoff("é" * 20000)          # 40 KB
+        out = self.start()
+        self.assertNotIn("�", out)
+        self.assertIn("truncated", out)
+        self.assertLessEqual(len(out.encode("utf-8")), 16 * 1024 + 1024)
+
+    # 5. SIGTERM clean exit
+    def test_postmaster_sigterm_exits_cleanly(self):
+        import signal
+        import time
+        env = self.env(PATH=os.path.join(HERE, "fixtures", "bin") + os.pathsep + "/usr/bin:/bin")
+        p = subprocess.Popen([sys.executable, os.path.join(HERE, "postmaster.py"),
+                              "--poll", "0.2"], env=env, cwd=HERE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            time.sleep(0.7)
+            self.assertIsNone(p.poll(), "postmaster died before SIGTERM")
+            p.send_signal(signal.SIGTERM)
+            out, err = p.communicate(timeout=3)
+            self.assertEqual(p.returncode, 0, (out, err))
+            self.assertIn("offline", out + err)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.wait()

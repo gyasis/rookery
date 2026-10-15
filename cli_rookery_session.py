@@ -351,10 +351,15 @@ def _mail(args, read):
                 turn_block.log_event(root, event="inbox-read", session=s["session_id"],
                                      agent_id=i["agent_id"], name=i["name"],
                                      bindings=[list(b) for b in bindings],
-                                     count=len(ids), ids=ids)
+                                     count=len(ids), ids=ids, peek=False)
             return
         else:
             msgs = _unread_with_bodies(conn, i["agent_id"])
+            if root:                        # FR-031: peek logs too; it still changes no mail row
+                turn_block.log_event(root, event="inbox-read", session=s["session_id"],
+                                     agent_id=i["agent_id"], name=i["name"],
+                                     bindings=[list(b) for b in bindings],
+                                     count=len(msgs), ids=[m["id"] for m in msgs], peek=True)
         _out(args, {"agent_id": i["agent_id"], "name": i["name"],
                     "session_id": s["session_id"], "session": s["name"],
                     "count": len(msgs), "messages": msgs},

@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -239,7 +240,30 @@ def _write_pushed(root, agent_id, pending_ids, announced):
         {"last_id": max(pending_ids, default=0), "pushed_ids": sorted(announced)})
 
 
+def run_identities_only(root, poll):
+    """No --nodes (D10, FR-018): skip every roster step; run only the outbox scan and the wake step."""
+    wake_conn = turn_block.open_db()      # same db_path() as the hooks (D6)
+    skip_logged, backoff = {}, {}
+    log("online. no roster: outbox scan + identity wake step only.")
+    try:
+        while True:
+            # TODO(T046): outbox scan runs here (before the wake step); not implemented yet.
+            try:
+                wake_identities(wake_conn, root, rookery_identity.load_config(persist=False),
+                                skip_logged=skip_logged, backoff=backoff)
+            except Exception as exc:     # never kill the loop; retried next tick
+                turn_block.log_event(root, "postmaster", outcome="wake-step-error", reason=str(exc))
+            time.sleep(poll)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        wake_conn.close()
+        log("offline")
+
+
 def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools="", model=None, mcp="", root=None):
+    if not node_engine:
+        return run_identities_only(root, poll)
     conn = R.connect()
     wake_conn = turn_block.open_db() if root else None   # same db_path() as the hooks (D6)
     skip_logged = {}
@@ -343,11 +367,17 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
         log("offline")
 
 
+def _on_sigterm(_signum, _frame):
+    raise KeyboardInterrupt        # run the same clean-exit path as Ctrl-C (finally: close, offline)
+
+
 def main():
+    signal.signal(signal.SIGTERM, _on_sigterm)
     ap = argparse.ArgumentParser(description="Run the Rookery central postmaster.")
-    ap.add_argument("--nodes", required=True,
+    ap.add_argument("--nodes", default="",
                     help="roster, comma-separated. Per-node engine with "
-                         "name=engine, e.g. architect=claude,reviewer=codex")
+                         "name=engine, e.g. architect=claude,reviewer=codex. Optional: without it "
+                         "only the outbox scan and the identity wake step run")
     ap.add_argument("--engine", choices=["mock", "claude", "codex", "gemini", "claude-sdk"],
                     default="mock",
                     help="default engine for roster entries with no =engine "
@@ -386,6 +416,10 @@ def main():
             a.project or os.path.basename(os.getcwd())))
     except ValueError:      # unsafe folder name and no ROOKERY_ROOT: roster steps only
         root = None
+    if not node_engine and root is None:
+        sys.stderr.write("postmaster: no --nodes and no resolvable project root (set ROOKERY_ROOT, "
+                         "or pass --root/--project); nothing to do, exiting.\n")
+        sys.exit(2)
     run(node_engine, persistent_set, a.max_warm, a.idle_timeout, a.poll,
         allowed_tools=a.allowed_tools, model=a.model, mcp=a.mcp, root=root)
 

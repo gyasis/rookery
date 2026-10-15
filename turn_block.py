@@ -858,8 +858,10 @@ def new_failed_blocks(root, session_name, agent_name) -> list:
                 if prefix == "postmaster":
                     block = path[:-len(".result.json")]
                     shown = block if os.path.exists(block) else path
-                    reason = reason if isinstance(reason, str) and reason else (
-                        data.get("outcome") if isinstance(data.get("outcome"), str) else "failed")
+                    # The notice names the outcome (contract: "failed (send-failed)").
+                    outcome = data.get("outcome")
+                    reason = outcome if isinstance(outcome, str) and outcome else (
+                        reason if isinstance(reason, str) and reason else "failed")
                 else:
                     shown = path
                     reason = reason if isinstance(reason, str) and reason else "remote-unsupported"

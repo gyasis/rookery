@@ -291,5 +291,62 @@ class TestWaveFourteen(WakeBase):
         self.assertEqual(len(self.calls()), 2)
 
 
+class TestNoRosterProcess(WakeBase):
+    """T058: `postmaster.py --poll 0.2` with no --nodes runs the wake step (D10, FR-018)."""
+
+    def _env(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("ROOKERY_", "HERDR_", "TMUX"))}
+        env.update(PATH=FIXBIN + os.pathsep + "/usr/bin:/bin", HOME=self.tmp.name,
+                   ROOKERY_DB=os.environ["ROOKERY_DB"], ROOKERY_ROOT=self.root,
+                   HERDR_RECORD=self.record)
+        return env
+
+    def _start(self, env, *args):
+        return subprocess.Popen(["python3", os.path.join(HERE, "postmaster.py"), *args],
+                                cwd=self.tmp.name, env=env, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, text=True)
+
+    def _stop(self, proc):
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        if proc.stderr:
+            proc.stderr.close()
+
+    def test_no_nodes_pushes_once_to_idle_identity(self):
+        self.mail()
+        proc = self._start(self._env(), "--poll", "0.2")
+        try:
+            import time
+            end = time.time() + 5
+            while time.time() < end and len(self.calls()) < 2:
+                time.sleep(0.05)
+            self.assertEqual(len(self.calls()), 2, self.calls())
+            time.sleep(0.6)
+            self.assertEqual(len(self.calls()), 2, "second push without new mail")
+            self.assertIsNone(proc.poll(), "postmaster exited")
+        finally:
+            self._stop(proc)
+
+    def test_no_nodes_no_root_exits_2(self):
+        env = self._env()
+        del env["ROOKERY_ROOT"]
+        bad = os.path.join(self.tmp.name, "bad name")      # unsafe folder name, no --root/--project
+        os.makedirs(bad)
+        proc = subprocess.Popen(["python3", os.path.join(HERE, "postmaster.py"), "--poll", "0.2"],
+                                cwd=bad, env=env, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, text=True)
+        try:
+            err = proc.communicate(timeout=5)[1]
+            self.assertEqual(proc.returncode, 2, err)
+            self.assertIn("no --nodes", err)
+        finally:
+            self._stop(proc)
+
+
 if __name__ == "__main__":
     unittest.main()
