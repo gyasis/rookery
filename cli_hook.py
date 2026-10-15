@@ -79,6 +79,7 @@ def stop(args):
                     root, adapter="stop", session=session["session_id"],
                     outcome="no-message-field",
                     reason="Stop JSON has no last_assistant_message")
+                _write_idle(turn_block, root, session, identity)
                 return
             if identity is None:
                 _keep_unresolved(turn_block, root, session, text)
@@ -86,6 +87,7 @@ def stop(args):
             ctx = {"root": root, "session": session, "identity": identity,
                    "adapter": "stop"}
             turn_block.dispatch_text(conn, text, ctx)
+            _write_idle(turn_block, root, session, identity)
         finally:
             conn.close()
     except sqlite3.OperationalError as exc:
@@ -102,6 +104,22 @@ def stop(args):
         _safe_log(root, outcome="db-busy" if busy else "hook-error", reason=str(exc))
     except Exception as exc:                # D16: log and exit 0
         _safe_log(root, outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
+
+
+def _write_idle(turn_block, root, session, identity):
+    """FR-017, D8: the turn ended, so the identity is idle and the postmaster may push.
+    Never prints and never raises: a failed write is logged (no outcome field, so the
+    call still has exactly one outcome line)."""
+    if identity is None:
+        return
+    try:
+        import rookery
+        ws = turn_block.workspace(root, session["name"], identity["name"])
+        turn_block.write_json_atomic(os.path.join(ws, "state", "turn.json"),
+                                     {"state": "idle", "since": rookery.now()})
+    except Exception as exc:
+        _safe_log(root, event="idle-write-failed", session=session["session_id"],
+                  agent_id=identity["agent_id"], reason=f"{type(exc).__name__}: {exc}")
 
 
 def _safe_log(root, **fields):
@@ -209,15 +227,15 @@ def _write_env_file(path, session_id, agent_id):
         fh.write(prefix + "\n".join(pair) + "\n")
 
 
-def _resolve_buffered(turn_block, rookery_identity, conn, hook_input, root):
-    """resolve(create=True), holding its log events back so a failing call logs ONE line.
+def _resolve_buffered(turn_block, rookery_identity, conn, hook_input, root, create=True):
+    """resolve(create=...), holding its log events back so a failing call logs ONE line.
     Returns (events, resolved)."""
     events = []
     orig = turn_block.log_event
     turn_block.log_event = lambda _root, stream="turn-block", **f: events.append((stream, f))
     try:
         resolved = rookery_identity.resolve(
-            conn, os.environ, hook_input, root, create=True)
+            conn, os.environ, hook_input, root, create=create)
     finally:
         turn_block.log_event = orig
     return events, resolved
@@ -305,7 +323,75 @@ def session_start(args):
 
 
 def prompt(args):
-    """Empty until T038."""
+    """UserPromptSubmit hook (FR-016, FR-037, D8, D16, D23). Runs on every prompt: read-only
+    resolve (never creates an identity), writes turn.json = busy, prints unread/failed lines."""
+    root = None
+    session_id = None
+    events = []
+    ids = {}
+    turn_block = None
+    try:
+        import turn_block
+        import rookery_identity
+        import rookery
+
+        if _no_session_possible(turn_block, rookery_identity):
+            return                          # no session: print nothing, write nothing
+        root = turn_block.project_root(args.project)
+        hook_input, bad = _read_input()
+        if bad:
+            hook_input = {}                 # identity may still come from the environment
+        conn = turn_block.open_db()
+        try:
+            ended = rookery_identity.find_session(
+                conn, os.environ, rookery_identity.load_config(persist=False))
+            if ended is not None and ended["state"] != "open":
+                turn_block.log_event(root, adapter="prompt",
+                                     session=ended["session_id"], outcome="session-ended")
+                return                      # the session is over: write and print nothing
+            events, resolved = _resolve_buffered(
+                turn_block, rookery_identity, conn, hook_input, root, create=False)
+            if resolved is None:
+                _flush_events(turn_block, root, events)
+                return
+            session, identity, _bindings = resolved
+            if identity is None:
+                _flush_events(turn_block, root, events)
+                turn_block.log_event(root, adapter="prompt", session=session["session_id"],
+                                     outcome="no-identity")
+                return
+            session_id = session["session_id"]
+            agent_id, name = identity["agent_id"], identity["name"]
+            ids = {"agent_id": agent_id, "name": name}
+            ws = turn_block.workspace(root, session["name"], name)
+            turn_block.write_json_atomic(
+                os.path.join(ws, "state", "turn.json"),
+                {"state": "busy", "since": rookery.now()})
+            lines = []
+            unread = turn_block.format_unread_line(turn_block.unread_summary(conn, agent_id))
+            if unread:
+                lines.append(unread)
+            failed = turn_block.new_failed_blocks(root, session["name"], name)
+            lines.extend(turn_block.format_failed_line(it) for it in failed)
+        finally:
+            conn.close()
+        if lines:
+            sys.stdout.write("\n".join(lines) + "\n")   # one write; 0 bytes when nothing to say
+            sys.stdout.flush()
+        if failed:
+            turn_block.mark_failed_seen(root, session["name"], name,
+                                        [it["file"] for it in failed])
+        _flush_events(turn_block, root, events)
+        turn_block.log_event(root, adapter="prompt", session=session_id,
+                             agent_id=agent_id, outcome="prompt",
+                             unread_shown=bool(unread), failed_shown=len(failed))
+    except Exception as exc:                # D16: log and exit 0, no stdout
+        try:
+            _flush_events(turn_block, root, events)
+        except Exception:
+            pass
+        _safe_log(root, adapter="prompt", session=session_id, **ids,
+                  outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
 
 
 def add_parser(sub):

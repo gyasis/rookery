@@ -279,6 +279,18 @@ class StopTests(Base):
         self.assertEqual(self.turn_state(), "idle")
         self.assertEqual(self.snapshot()["inbox"], before)
 
+    def test_idle_write_failure_still_dispatches_one_outcome(self):
+        # A failed idle write never blocks the stop and adds no second outcome line.
+        os.makedirs(self.ws(), exist_ok=True)
+        with open(os.path.join(self.ws(), "state"), "w") as fh:
+            fh.write("not a directory")
+        before = len(self.log_lines())
+        out = self.hook("stop", {"last_assistant_message": "Done, no block here."})
+        self.assertEqual(out, "")
+        new = self.log_lines()[before:]
+        self.assertEqual([x.get("outcome") for x in new if "outcome" in x], ["no-block"], new)
+        self.assertTrue(any(x.get("event") == "idle-write-failed" for x in new), new)
+
     def test_prompt_then_stop_flips_state(self):
         self.hook("prompt", {"prompt": "go"})
         self.assertEqual(self.turn_state(), "busy")
