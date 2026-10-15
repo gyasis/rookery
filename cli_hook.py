@@ -52,6 +52,7 @@ def _read_input():
 def stop(args):
     """Stop hook (FR-005..009, FR-017, D1, D16). Never blocks, never prints."""
     root = None
+    text = None
     try:
         import turn_block
         import rookery_identity
@@ -60,6 +61,7 @@ def stop(args):
             return                          # no session: print nothing, write nothing
         root = turn_block.project_root(args.project)
         hook_input, bad = _read_input()
+        text = hook_input.get("last_assistant_message")
         if bad:
             turn_block.log_event(root, adapter="stop", outcome="bad-input", reason=bad)
             return                          # FR-022: exactly one outcome line per call
@@ -87,8 +89,16 @@ def stop(args):
             conn.close()
     except sqlite3.OperationalError as exc:
         msg = str(exc).lower()
-        outcome = "db-busy" if ("locked" in msg or "busy" in msg) else "hook-error"
-        _safe_log(root, outcome=outcome, reason=str(exc))
+        busy = "locked" in msg or "busy" in msg
+        if busy and root is not None and isinstance(text, str):
+            try:     # D16: a valid block is not lost; identity is unknown here
+                import turn_block
+                _keep_unresolved(turn_block, root, None, text, outcome="db-busy",
+                                 reason=str(exc))
+                return
+            except Exception:
+                pass
+        _safe_log(root, outcome="db-busy" if busy else "hook-error", reason=str(exc))
     except Exception as exc:                # D16: log and exit 0
         _safe_log(root, outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
 
@@ -103,11 +113,12 @@ def _safe_log(root, **fields):
         pass
 
 
-def _keep_unresolved(turn_block, root, session, text):
+def _keep_unresolved(turn_block, root, session, text, outcome="no-identity",
+                     reason="session has no identity for this caller"):
     """Session but no identity: keep a VALID block in <root>/unresolved/ and log
     `no-identity`. Writes the file only when turn_block.find_last_block and
     turn_block.validate both exist (T016/T017) and validation passes; else only logs."""
-    sid = session["session_id"]
+    sid = session["session_id"] if session else None
     find = getattr(turn_block, "find_last_block", None)
     validate = getattr(turn_block, "validate", None)
     block = None
@@ -124,8 +135,8 @@ def _keep_unresolved(turn_block, root, session, text):
             path = os.path.join(root, "unresolved",
                                 f"{block['task']}-{stamp}-{secrets.token_hex(3)}.json")
         turn_block.write_json_atomic(path, block)
-    turn_block.log_event(root, adapter="stop", session=sid, outcome="no-identity",
-                         reason="session has no identity for this caller",
+    turn_block.log_event(root, adapter="stop", session=sid, outcome=outcome,
+                         reason=reason,
                          task=(block or {}).get("task"), kept=block is not None)
 
 

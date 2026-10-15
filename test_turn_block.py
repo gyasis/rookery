@@ -533,6 +533,47 @@ class StopHookPart2(Base):
         out = self.run_hook(fixture_text("no-block.txt"))
         self.assertEqual((out.stdout, out.stderr), ("", ""))
 
+    def test_db_busy_in_open_keeps_block_unresolved(self):          # audit 6, fix 7
+        """Method: make the schema NOT current (delete the 'legacy' session row) so open_db()
+        must migrate, while another connection holds BEGIN IMMEDIATE: open_db() raises
+        OperationalError('database is locked') before any identity is resolved."""
+        self.reset()
+        self.conn.execute("DELETE FROM rookery_sessions WHERE session_id='legacy'")
+        self.conn.commit()
+        locker = sqlite3.connect(os.environ["ROOKERY_DB"], timeout=1, isolation_level=None)
+        try:
+            locker.execute("BEGIN IMMEDIATE")
+            self.run_hook(fixture_text("valid-ask.txt"))
+        finally:
+            try:
+                locker.execute("ROLLBACK")
+            finally:
+                locker.close()
+        files = self.unresolved_files()
+        self.assertEqual(len(files), 1, self.all_files())
+        self.assertEqual(load_json(files[0])["task"], "TASK-12")
+        self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["db-busy"])
+        self.assertEqual(self.rows(), [])
+
+    def test_db_busy_during_quarantine_leaves_nothing(self):
+        import time
+        self.reset()
+        locker = sqlite3.connect(os.environ["ROOKERY_DB"], timeout=1, isolation_level=None)
+        try:
+            locker.execute("BEGIN IMMEDIATE")
+            t0 = time.monotonic()
+            self.run_hook(fixture_text("wrong-recipient.txt"))
+            elapsed = time.monotonic() - t0
+        finally:
+            try:
+                locker.execute("ROLLBACK")
+            finally:
+                locker.close()
+        self.assertLess(elapsed, 3.0)
+        self.assertEqual(self.rows(), [])
+        self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["db-busy"])
+        self.assertEqual(len(self.outbox_files()), 1, self.all_files())
+
     def test_session_without_identity_keeps_block_unresolved(self):
         ids_before = [dict(r) for r in self.conn.execute("SELECT * FROM identities ORDER BY agent_id")]
         self.run_hook(fixture_text("valid-ask.txt"), node=None)
@@ -645,6 +686,133 @@ class ValidateEdgeCases(unittest.TestCase):
         self.assertEqual(self.vd(kind="banana")[1],
             'The kind "banana" is not a kind. Use ask, answer, decline, handoff, '
             "status or recruit, then send the block again.")
+
+
+class AtomicQuarantine(Base):
+    """Audit 6, fix 1: hold + quarantine + bounce are ONE transaction (D4)."""
+
+    def outbox_plain(self):
+        return glob.glob(os.path.join(self.root, "agents", "alpha", "me", "outbox", "*.json"))
+
+    def _check_rolled_back(self, res):
+        self.assertEqual(res["outcome"], "send-failed", res)
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(len(self.outbox_plain()), 1, self.all_files())
+        self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["send-failed"])
+
+    def test_quarantine_update_fails_leaves_nothing(self):
+        self.conn.execute("CREATE TRIGGER boom BEFORE UPDATE ON inbox "
+                          "WHEN NEW.status='quarantined' BEGIN SELECT RAISE(ABORT,'boom'); END")
+        self.conn.commit()
+        self._check_rolled_back(self.run_fixture("wrong-recipient.txt"))
+
+    def test_bounce_insert_fails_leaves_nothing(self):
+        self.conn.execute("CREATE TRIGGER boom BEFORE INSERT ON inbox "
+                          "WHEN NEW.sender='rookery' BEGIN SELECT RAISE(ABORT,'boom'); END")
+        self.conn.commit()
+        self._check_rolled_back(self.run_fixture("wrong-recipient.txt"))
+
+    def test_quarantine_is_one_commit(self):
+        stmts = []   # Connection.commit is read-only, so count COMMITs with a trace callback
+        self.conn.set_trace_callback(stmts.append)
+        self.run_fixture("wrong-recipient.txt")
+        self.conn.set_trace_callback(None)
+        self.assertEqual(sum(1 for s in stmts if s.strip().upper() == "COMMIT"), 1, stmts)
+        writes = [s for s in stmts if not s.lstrip().upper().startswith("SELECT")]
+        self.assertTrue(writes[0].upper().startswith("BEGIN IMMEDIATE"), writes[:2])
+
+
+class QuarantineHardening(Base):
+    """Audit 6, fixes 2, 3, 5b, 6."""
+
+    def test_agent_id_recipient_is_masked(self):                       # fix 2
+        res = self.run_fixture_text(self.block(to=self.beta_only["agent_id"], say="SECRET-BODY"))
+        self.assertEqual((res["outcome"], res["reason"]), ("quarantined", "off-team"))
+        orig, _ = self.split()
+        self.assertEqual(orig["recipient"], "rookery")
+        self.assertIn(self.beta_only["agent_id"], orig["note"])
+        for m in R.fetch_thread(self.conn, self.beta_only["agent_id"]):
+            self.assertNotIn("SECRET-BODY", m["body"])
+
+    def test_node_id_recipient_is_masked(self):                        # fix 2 (nodes)
+        self.conn.execute("INSERT INTO nodes(node_id, status, last_seen) VALUES('ag-nodeonly01','idle',0)")
+        self.conn.commit()
+        self.run_fixture_text(self.block(to="ag-nodeonly01"))
+        orig, _ = self.split()
+        self.assertEqual(orig["recipient"], "rookery")
+
+    def test_malformed_body_and_to_are_capped(self):                   # fix 3
+        raw = json.dumps({"to": "x" * 1000, "task": "T-1", "kind": "ask", "say": "y" * 1_000_000,
+                          "status": "done"})
+        res = TB.dispatch_text(self.conn, "```rookery\n" + raw + "\n```", self.ctx)
+        self.assertEqual(res["outcome"], "quarantined", res)
+        orig, _ = self.split()
+        self.assertLessEqual(len(orig["body"].encode()), 8192 + 100)
+        self.assertIn("truncated", orig["body"])
+        self.assertLessEqual(len(orig["recipient"]), 64)
+
+    def test_malformed_body_cut_is_utf8_safe(self):
+        raw = "\u00e9" * 20000      # 2 bytes each; 8192 is even, try odd-boundary too
+        for pad in ("", "a"):
+            self.conn.execute("DELETE FROM inbox")
+            self.conn.commit()
+            TB.dispatch_text(self.conn, "```rookery\n" + pad + raw + "\n```", self.ctx)
+            body = self.rows()[0]["body"]
+            body.encode("utf-8")
+            self.assertLessEqual(len(body.encode()), 8192 + 100)
+
+    def test_agent_id_beats_lookalike_name(self):                      # fix 5b
+        # legacy/hand-made row whose NAME equals another identity's agent ID
+        self.conn.execute("INSERT INTO identities(agent_id, session_id, name, previous_id, created_at) "
+                          "VALUES('ag-zzzzzzzzzz', ?, ?, NULL, '2026-01-01T00:00:00Z')",
+                          (self.alpha["session_id"], self.lc["agent_id"]))
+        self.conn.commit()
+        res = self.run_fixture_text(self.block(to=self.lc["agent_id"]))
+        self.assertEqual(res["outcome"], "sent", res)
+        self.assertEqual(self.rows()[0]["recipient"], self.lc["agent_id"])
+
+    def test_suggest_excludes_sender_name(self):                       # fix 6
+        self.run_fixture_text(self.block(to="mee"))
+        _, bounce = self.split()
+        body = json.loads(bounce["body"])
+        self.assertNotIn("me", body["suggest"] or [])
+        self.assertNotIn('"me"', self.rows()[0]["note"])
+
+    def block(self, **kw):
+        o = {"to": "law-counsel", "task": "T-1", "kind": "ask", "say": "hi", "status": "done"}
+        o.update(kw)
+        return json.dumps(o)
+
+    def run_fixture_text(self, raw):
+        return TB.dispatch_text(self.conn, "```rookery\n" + raw + "\n```", self.ctx)
+
+
+class NeverRaises(Base):
+    """Audit 6, fix 4."""
+
+    def _check(self, ctx, expect_log=True):
+        for fn in (lambda: TB.dispatch_block(self.conn, json.dumps(
+                       {"to": "law-counsel", "task": "T-1", "kind": "ask", "say": "hi",
+                        "status": "done"}), ctx),
+                   lambda: TB.dispatch_text(self.conn, "```rookery\n{}\n```", ctx),
+                   lambda: TB.dispatch_text(self.conn, "no block", ctx)):
+            if os.path.exists(os.path.join(self.root, "logs")):
+                open(os.path.join(self.root, "logs", "turn-block.jsonl"), "w").close()
+            res = fn()
+            self.assertEqual(res["outcome"], "send-failed", res)
+            if expect_log:
+                self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["send-failed"])
+
+    def test_identity_none(self):
+        self._check(dict(self.ctx, identity=None))
+
+    def test_session_none(self):
+        self._check(dict(self.ctx, session=None))
+
+    def test_no_root(self):
+        ctx = dict(self.ctx)
+        del ctx["root"]
+        self._check(ctx, expect_log=False)
 
 
 if __name__ == "__main__":

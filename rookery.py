@@ -152,7 +152,8 @@ def hold_enabled() -> bool:
     return os.environ.get("ROOKERY_HOLD", "").lower() in ("1", "true", "yes", "on")
 
 
-def send(conn, sender, recipient, body, topic=None, hold=None, session_id=None):
+def send(conn, sender, recipient, body, topic=None, hold=None, session_id=None,
+         commit=True):
     if hold is None:
         hold = hold_enabled() and sender not in SYSTEM_SENDERS
     cur = conn.execute(
@@ -161,7 +162,8 @@ def send(conn, sender, recipient, body, topic=None, hold=None, session_id=None):
         (sender, recipient, body, topic, "held" if hold else "pending", now(),
          session_id or "legacy"),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.lastrowid
 
 
@@ -262,13 +264,15 @@ def get_message(conn, msg_id):
     return conn.execute("SELECT * FROM inbox WHERE id=?", (msg_id,)).fetchone()
 
 
-def _decide(conn, msg_id, from_status, to_status, verdict, reason, decided_by):
+def _decide(conn, msg_id, from_status, to_status, verdict, reason, decided_by,
+            commit=True):
     cur = conn.execute(
         "UPDATE inbox SET status=?, verdict=?, reason=?, decided_by=?, decided_at=? "
         "WHERE id=? AND status=?",
         (to_status, verdict, reason, decided_by, now(), msg_id, from_status),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     if cur.rowcount != 1:
         row = get_message(conn, msg_id)
         state = row["status"] if row else "missing"
@@ -280,16 +284,19 @@ def release(conn, msg_id, decided_by):
     _decide(conn, msg_id, "held", "pending", "release", None, decided_by)
 
 
-def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce=True):
+def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce=True,
+               commit=True):
     """Reject a held message into quarantine and (by default) bounce it to the
     sender with the reason and an optional suggested recipient. Returns the
     bounce message id, or None."""
     if reason not in QUARANTINE_REASONS:
         raise ValueError(f"reason must be one of {QUARANTINE_REASONS}, got {reason!r}")
-    _decide(conn, msg_id, "held", "quarantined", "quarantine", reason, decided_by)
+    _decide(conn, msg_id, "held", "quarantined", "quarantine", reason, decided_by,
+            commit=commit)
     if note:
         conn.execute("UPDATE inbox SET note=? WHERE id=?", (note, msg_id))
-        conn.commit()
+        if commit:
+            conn.commit()
     if not bounce:
         return None
     m = get_message(conn, msg_id)
@@ -298,7 +305,7 @@ def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce
         "note": note, "suggest": suggest, "decided_by": decided_by,
     })
     return send(conn, "rookery", m["sender"], body, topic=m["topic"],
-                session_id=m["session_id"])
+                session_id=m["session_id"], commit=commit)
 
 
 def unquarantine(conn, msg_id, decided_by):

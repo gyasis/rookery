@@ -388,3 +388,223 @@ def _validate(raw, root):
                 return None, ('Each entry in "artifacts" needs a "path". Add "path", '
                               "then send the block again.")
     return obj, None
+
+
+# --- Dispatch (T018; research D3, D4, D17, D22, FR-007, FR-035) --------------
+import datetime
+import difflib
+import secrets
+
+
+def _stamp() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+MAX_RAW_BYTES = 8192   # stored/kept size of a malformed block's raw text (audit 6, fix 3)
+MAX_RAW_TO_CHARS = 64
+
+
+def _cap_raw(raw) -> str:
+    """At most MAX_RAW_BYTES of raw (UTF-8 safe cut) plus a truncation marker."""
+    text = raw if isinstance(raw, str) else str(raw)
+    data = text.encode("utf-8", "replace")
+    if len(data) <= MAX_RAW_BYTES:
+        return text
+    cut = data[:MAX_RAW_BYTES].decode("utf-8", "ignore")
+    return f"{cut}\u2026[truncated, {len(data)} bytes]"
+
+
+def _put_back(ctx, block, raw, failed: bool) -> str | None:
+    """Write the block to <workspace>/outbox[/failed]/<TASK-ID>-<ts>.json. Returns
+    the path, or None if the file could not be written (logged by the caller)."""
+    task = block.get("task") if isinstance(block, dict) else None
+    name = task if is_safe_name(task) else "no-task"
+    folder = os.path.join(workspace(ctx["root"], ctx["session"]["name"], ctx["identity"]["name"]),
+                          "outbox", *(("failed",) if failed else ()))
+    path = os.path.join(folder, f"{name}-{_stamp()}.json")
+    if os.path.exists(path):
+        path = os.path.join(folder, f"{name}-{_stamp()}-{secrets.token_hex(3)}.json")
+    write_json_atomic(path, block if isinstance(block, dict) else {"raw": _cap_raw(raw)})
+    return path
+
+
+def _finish(ctx, block, outcome, msg_id=None, reason=None):
+    sender = ctx["identity"]
+    log_event(ctx["root"], adapter=ctx.get("adapter"), session=ctx["session"]["session_id"],
+              agent_id=sender["agent_id"], name=sender["name"],
+              task=(block or {}).get("task") if isinstance(block, dict) else None,
+              outcome=outcome, msg_id=msg_id, reason=reason)
+    return {"outcome": outcome, "msg_id": msg_id, "reason": reason}
+
+
+def _is_busy(exc) -> bool:
+    msg = str(exc).lower()
+    return isinstance(exc, sqlite3.OperationalError) and ("locked" in msg or "busy" in msg)
+
+
+def _quarantine_recipient(conn, to):
+    """Recipient text for a quarantined row. A raw `to` that is a real agent ID
+    or node ID would let that reader see the body, so it becomes `rookery`.
+    Returns (recipient, masked)."""
+    if not isinstance(to, str) or not to:
+        return "rookery", False
+    hit = conn.execute(
+        "SELECT 1 FROM identities WHERE agent_id=? "
+        "UNION ALL SELECT 1 FROM nodes WHERE node_id=? LIMIT 1", (to, to)).fetchone()
+    return ("rookery", True) if hit is not None else (to, False)
+
+
+def _hold_and_quarantine(conn, ctx, recipient, body, topic, reason, note, suggest=None):
+    """hold + quarantine (+ note) + bounce in ONE transaction (D4). BEGIN IMMEDIATE
+    takes the write lock once, up front; any failure rolls everything back."""
+    sid = ctx["session"]["session_id"]
+    raw_to = recipient
+    recipient, masked = _quarantine_recipient(conn, raw_to)
+    if masked:
+        note += f' (The block was addressed to "{_show(raw_to)}".)'
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        msg_id = rookery.send(conn, ctx["identity"]["agent_id"], recipient, body,
+                              topic=topic, hold=True, session_id=sid, commit=False)
+        rookery.quarantine(conn, msg_id, reason, decided_by="turn-block-parser",
+                           note=note, suggest=suggest, commit=False)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return msg_id
+
+
+def _top_level_failure(ctx, exc, block=None, raw=None):
+    """A malformed ctx or an unexpected error escaped dispatch: log exactly one
+    `send-failed` line (when a root is known), keep the block when the workspace
+    can be determined, and return the result dict. Never raises."""
+    reason = f"{type(exc).__name__}: {exc}"
+    try:
+        root = ctx["root"]
+    except Exception:
+        return {"outcome": "send-failed", "msg_id": None, "reason": reason}
+    try:
+        if block is not None or raw is not None:
+            if (ctx.get("adapter")) in ("stop", "turn"):
+                _put_back(ctx, block, raw, failed=False)
+    except Exception as werr:
+        reason += f" (could not keep the block: {werr})"
+    fields = {}
+    for key, get in (("adapter", lambda: ctx.get("adapter")),
+                     ("session", lambda: ctx["session"]["session_id"]),
+                     ("agent_id", lambda: ctx["identity"]["agent_id"]),
+                     ("name", lambda: ctx["identity"]["name"]),
+                     ("task", lambda: block.get("task") if isinstance(block, dict) else None)):
+        try:
+            fields[key] = get()
+        except Exception:
+            fields[key] = None
+    log_event(root, outcome="send-failed", msg_id=None, reason=reason, **fields)
+    return {"outcome": "send-failed", "msg_id": None, "reason": reason}
+
+
+def dispatch_text(conn, text, ctx):
+    """Find the last rookery block in text and dispatch it. Returns
+    {"outcome", "msg_id", "reason"}; no block -> `no-block` (logged once).
+    Never raises."""
+    try:
+        raw = find_last_block(text)
+        if raw is None:
+            return _finish(ctx, None, "no-block")
+        return dispatch_block(conn, raw, ctx)
+    except Exception as exc:
+        return _top_level_failure(ctx, exc)
+
+
+def dispatch_block(conn, raw, ctx):
+    """Validate and route one block body (T018). Never raises."""
+    try:
+        return _dispatch_block(conn, raw, ctx)
+    except Exception as exc:
+        block = None
+        try:
+            block, _ = validate(raw, ctx["root"])
+        except Exception:
+            pass
+        return _top_level_failure(ctx, exc, block, raw if block is None else None)
+
+
+def _dispatch_block(conn, raw, ctx):
+    root, adapter = ctx["root"], ctx.get("adapter")
+    keep = adapter in ("stop", "turn")   # the outbox adapter never puts a block back (D3)
+    block, note = validate(raw, root)
+
+    if os.environ.get("ROOKERY_URL"):
+        reason = "ROOKERY_URL is set; remote sending is not supported yet"
+        if keep:
+            try:
+                _put_back(ctx, block, raw, failed=True)
+            except Exception as exc:
+                reason += f" (could not keep the block: {exc})"
+        return _finish(ctx, block, "remote-unsupported", reason=reason)
+
+    sender = ctx["identity"]
+    sid = ctx["session"]["session_id"]
+    try:
+        if block is None:
+            to = None
+            try:
+                to = json.loads(raw).get("to")
+            except Exception:
+                pass
+            recipient = to[:MAX_RAW_TO_CHARS] if isinstance(to, str) and to else "rookery"
+            body = _cap_raw(raw)
+            msg_id = _hold_and_quarantine(conn, ctx, recipient, body, None, "malformed", note)
+            return _finish(ctx, None, "quarantined", msg_id, "malformed")
+
+        to, task = block["to"], block["task"]
+        compact = json.dumps(block, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+        recipient = conn.execute(
+            "SELECT agent_id FROM identities WHERE session_id=? AND (name=? OR agent_id=?) "
+            "ORDER BY (agent_id=?) DESC LIMIT 1",
+            (sid, to, to, to)).fetchone()
+        if recipient is None:
+            elsewhere = conn.execute(
+                "SELECT 1 FROM identities WHERE name=? OR agent_id=? LIMIT 1", (to, to)).fetchone()
+            if elsewhere is not None:
+                note = (f'The agent "{_show(to)}" is in another session. Send to an agent '
+                        "in your own session, then send the block again.")
+                msg_id = _hold_and_quarantine(conn, ctx, to, compact, task, "off-team", note)
+                return _finish(ctx, block, "quarantined", msg_id, "off-team")
+            names = [r[0] for r in conn.execute(
+                "SELECT name FROM identities WHERE session_id=? AND name<>? ORDER BY created_at, rowid",
+                (sid, sender["name"]))]
+            suggest = difflib.get_close_matches(to, names, n=3)
+            note = f'There is no agent named "{_show(to)}" in your session.'
+            if suggest:
+                note += " Did you mean " + " or ".join(f'"{_show(s)}"' for s in suggest) + "?"
+            else:
+                note += " Check the names of the agents in your session."
+            note += " Fix \"to\", then send the block again."
+            msg_id = _hold_and_quarantine(conn, ctx, to, compact, task, "wrong-recipient",
+                                          note, suggest=suggest)
+            return _finish(ctx, block, "quarantined", msg_id, "wrong-recipient")
+
+        if block["kind"] == "handoff" and block["status"] == "in-progress":
+            return _finish(ctx, block, "handoff-pending",
+                           reason="handoff is still in-progress; nothing sent")
+
+        msg_id = rookery.send(conn, sender["agent_id"], recipient[0], compact,
+                              topic=task, session_id=sid)
+        return _finish(ctx, block, "sent", msg_id)
+    except Exception as exc:     # send/quarantine failed: log, keep the block, never raise
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        outcome = "db-busy" if _is_busy(exc) else "send-failed"
+        reason = str(exc)
+        if keep:
+            try:
+                _put_back(ctx, block, raw, failed=False)
+            except Exception as werr:
+                reason += f" (could not keep the block: {werr})"
+        return _finish(ctx, block, outcome, reason=reason)

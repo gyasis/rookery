@@ -179,7 +179,7 @@ and 1 bounce (R6).
   10. `self_check` and `artifacts` have the types of the schema.
 
   Put the D12 source in a comment next to the size constants.
-- [ ] T018 [US1] Write two entry points in `turn_block.py` (D3, D4, D17, D22, FR-007, FR-035). `ctx` holds the root, the session, the identity and the adapter name (`stop`, `turn` or `outbox`).
+- [x] T018 [US1] Write two entry points in `turn_block.py` (D3, D4, D17, D22, FR-007, FR-035). `ctx` holds the root, the session, the identity and the adapter name (`stop`, `turn` or `outbox`).
   - `dispatch_text(conn, text, ctx)` calls `find_last_block()`. No block: outcome `no-block`. Else it calls `dispatch_block()`.
   - `dispatch_block(conn, raw, ctx)` uses this order:
     1. `ROOKERY_URL` is set: outcome `remote-unsupported`. For `stop` and `turn`, write the block to `outbox/failed/<TASK-ID>-<ts>.json` (use `no-task` when `task` is not a safe name).

@@ -103,6 +103,18 @@ class Names(IdentityBase):
                 RI.new_session(self.conn, name=bad)
         self.assertEqual(self.count("identities"), 0)
 
+    def test_id_lookalike_names_rejected(self):          # audit 6, fix 5a
+        a = RI.new_session(self.conn, name="alpha")
+        i = RI.new_identity(self.conn, a["session_id"], "researcher")
+        for bad in (i["agent_id"], "ag-0123456789"):
+            with self.assertRaises(ValueError, msg=bad):
+                RI.new_identity(self.conn, a["session_id"], bad)
+        for bad in (a["session_id"], "rs-01234567"):
+            with self.assertRaises(ValueError, msg=bad):
+                RI.new_session(self.conn, name=bad)
+        self.assertEqual(self.count("identities"), 1)
+        RI.new_identity(self.conn, a["session_id"], "ag-short")   # not ID-shaped: fine
+
     def test_safe_name_boundary_64_accepted(self):
         a = RI.new_session(self.conn, name="alpha")
         RI.new_identity(self.conn, a["session_id"], "x" * 64)

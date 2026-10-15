@@ -25,6 +25,16 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+_ID_LOOKALIKE = re.compile(r"ag-[0-9a-f]{10}|rs-[0-9a-f]{8}")
+
+
+def _no_id_lookalike(name, what):
+    if isinstance(name, str) and _ID_LOOKALIKE.fullmatch(name):
+        raise ValueError(
+            f"Bad {what} {name!r}: it looks like a Rookery ID (ag-... or rs-...). "
+            "Pick a different name.")
+
+
 def safe_name(name, what="name") -> str:
     """Return name if it matches [A-Za-z0-9._-]{1,64} and is not '.' or '..'.
     Raise ValueError otherwise."""
@@ -113,6 +123,7 @@ def new_session(conn, name=None, binds=()) -> dict:
     'kind:value' strings; each is stored as a session binding."""
     if name is not None:
         safe_name(name, "session name")
+        _no_id_lookalike(name, "session name")
         if _one(conn, "SELECT 1 FROM rookery_sessions WHERE name=?", (name,)):
             raise ValueError(
                 f"The session name {name!r} is already used. Names are never reused, "
@@ -194,6 +205,7 @@ def _new_identity(conn, session_id, name, previous_id=None) -> dict:
     """new_identity without commit or rollback (resolve runs it inside its own
     transaction)."""
     safe_name(name, "agent name")
+    _no_id_lookalike(name, "agent name")
     s = get_session(conn, session_id)
     if s is None:
         raise ValueError(f"No Rookery session {session_id!r}.")
