@@ -191,7 +191,7 @@ and 1 bounce (R6).
   - Return `{"outcome", "msg_id", "reason"}`. Log each outcome with `log_event()`.
   - When `send()` raises an error, return `send-failed`. Only for `stop` and `turn`, also write the block to `outbox/<TASK-ID>-<ts>.json`. The `outbox` adapter never puts a block back (D3).
 - [x] T019 [US1] Create `cli_hook.py` with `stop(args)`. Read the Stop JSON from stdin, open the database with `open_db()`, and call `resolve(create=False)` (D16). Without a session, return at once. With a session but no identity, keep a valid block in `<root>/unresolved/<TASK-ID>-<ts>.json`, log `no-identity`, and return. Else call `dispatch_text()` on `last_assistant_message`. Print nothing: the hook never blocks a stop (FR-017). Put the whole body in `try/except Exception`, log the error, and exit 0. Register `rookery hook session-start|prompt|stop --project NAME` in `rookery_cli.py`. Leave `session-start` and `prompt` empty until T037 and T038.
-- [ ] T020 [US1] Run this after T014, T015, T016, T017, T018, T019. Run `python3 -m unittest test_turn_block -v`. All US1 cases must pass. Run `python3 test_held_quarantine.py`. It must still pass.
+- [x] T020 [US1] Run this after T014, T015, T016, T017, T018, T019. Run `python3 -m unittest test_turn_block -v`. All US1 cases must pass. Run `python3 test_held_quarantine.py`. It must still pass.
 
 **Checkpoint**: an agent can send mail with a block. US1 works alone.
 
