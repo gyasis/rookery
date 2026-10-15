@@ -276,7 +276,7 @@ byte-identical files.
   - For each event, find a handler whose `command` starts with `rookery hook `. Equal: no change. Different: replace it in place. Absent: append `{"hooks": [{"type": "command", "command": "rookery hook <event> --project <project>"}]}`.
   - Keep the key order and the indent of the old file.
   - Write only when the content changes. Write through a temporary file and `os.replace`, under `fcntl.flock` on `<root>/locks/init.lock`. Never create a lock file in the host repo (FR-023, constitution VII).
-- [ ] T032 [US3] Write `main(args)` in `cli_init.py` with `--harness`, `--project`, `--dir` and `--json`, as in the contract. The `--project` default is the folder name of `git rev-parse --show-toplevel` in `--dir`. Exit 2 on invalid settings JSON. Register `init` in `rookery_cli.py`. Run `python3 -m unittest test_init -v`. All cases must pass.
+- [x] T032 [US3] Write `main(args)` in `cli_init.py` with `--harness`, `--project`, `--dir` and `--json`, as in the contract. The `--project` default is the folder name of `git rev-parse --show-toplevel` in `--dir`. Exit 2 on invalid settings JSON. Register `init` in `rookery_cli.py`. Run `python3 -m unittest test_init -v`. All cases must pass.
 
 **Checkpoint**: init installs Rookery into a project and changes nothing else.
 

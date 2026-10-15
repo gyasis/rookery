@@ -9,6 +9,8 @@ import json
 import os
 import re
 import stat
+import subprocess
+import sys
 import tempfile
 
 import turn_block
@@ -190,6 +192,21 @@ def _upsert(path, text):
     return "replaced"
 
 
+def check_section(path):
+    """Raise InitError when the file cannot be read or has malformed markers. Writes nothing."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            old = fh.read()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise _oserr(path, exc)
+    starts, ends = _marker_lines(old)
+    if (starts or ends) and (len(starts) != 1 or len(ends) != 1 or ends[0][0] < starts[0][0]):
+        raise InitError(f"{path}: malformed Rookery markers ({len(starts)} START, {len(ends)} END); "
+                        f"fix the file by hand, nothing was written")
+
+
 def upsert_section(path, text):
     """Create the file, or insert/replace the marked Rookery section (D13).
 
@@ -368,3 +385,90 @@ def merge_hooks(path, project, root=None):
         return _merge_hooks(path, project)
     with init_lock(root):
         return _merge_hooks(path, project)
+
+
+# ---- `rookery init` command (T032) ---------------------------------------------------
+
+HARNESSES = ("claude", "codex", "pi", "omp")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_NEXT = ("Open agent sessions do not join. Start a new Rookery session with new panes "
+         "and agents: rookery session new --name <name>.")
+
+
+def _default_project(d):
+    try:
+        r = subprocess.run(["git", "-C", d, "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=5)
+        top = r.stdout.strip()
+        if r.returncode == 0 and top:
+            return os.path.basename(top)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return os.path.basename(d)
+
+
+def _section_text(root, project):
+    path = os.path.join(_HERE, "rookery_section.md")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            tpl = fh.read()
+    except OSError as exc:
+        raise _oserr(path, exc)
+    return tpl.replace("{root}", root).replace("{project}", project)
+
+
+def main(args):
+    """rookery init: upsert the context section, merge Claude hooks. Exit 0 or 2."""
+    try:
+        d = os.path.abspath(args.dir or os.getcwd())
+        if not os.path.isdir(d):
+            raise InitError(f"{d}: not a directory")
+        project = args.project or _default_project(d)
+        if not turn_block.is_safe_name(project):
+            raise InitError(f"unsafe project name: {project!r} (use 1-64 of "
+                            f"A-Z a-z 0-9 . _ -; pass --project)")
+        env_root = os.environ.get("ROOKERY_ROOT")
+        if env_root and not os.path.isabs(env_root):
+            raise InitError(f"ROOKERY_ROOT must be an absolute path, not {env_root!r}")
+        root = os.path.abspath(turn_block.project_root(project))
+        if os.path.commonpath([root, d]) == d:   # FR-023: no Rookery file in the host repo
+            raise InitError(f"the Rookery root {root} is inside {d}; use a root outside the project")
+        claude = args.harness == "claude"
+        ctx = os.path.join(d, "CLAUDE.md" if claude else "AGENTS.md")
+        sp = os.path.join(d, ".claude", "settings.json")
+        with init_lock(root):
+            # Check the context file first, then write settings (the write most likely
+            # to fail), then the context file: a failure never half-installs Rookery.
+            check_section(ctx)
+            settings = merge_hooks(sp, project) if claude else None
+            try:
+                action = upsert_section(ctx, _section_text(root, project))
+            except InitError as exc:
+                if settings and (settings["added"] or settings["updated"]):
+                    raise InitError(f"{sp} was updated, but {ctx} was not: {exc}") from exc
+                raise
+    except InitError as exc:
+        print(f"rookery init: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if settings is not None:
+        settings = {"path": sp, **settings}
+    if args.json:
+        print(json.dumps({"ok": True, "context_file": {"path": ctx, "action": action},
+                          "settings": settings, "project": project}))
+        return
+    print(f"Project: {project}")
+    print(f"{ctx}: {action}")
+    if settings is not None:
+        print(f"{sp}: added {', '.join(settings['added']) or '-'}; updated "
+              f"{', '.join(settings['updated']) or '-'}; unchanged "
+              f"{', '.join(settings['unchanged']) or '-'}")
+    print(_NEXT)
+
+
+def add_parser(sub):
+    p = sub.add_parser("init", help="Write the Rookery section and hooks into a project.")
+    p.add_argument("--harness", choices=HARNESSES, default="claude")
+    p.add_argument("--project", default=None, help="project name (default: git top-level folder)")
+    p.add_argument("--dir", default=None, help="project folder (default: current folder)")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=main)

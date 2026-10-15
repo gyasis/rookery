@@ -16,6 +16,7 @@ from cli_serve import cmd_serve
 from cli_up import cmd_up
 import cli_rookery_session
 import cli_hook
+import cli_init
 
 # ---------------------------------------------------------------------------
 # Argument parser
@@ -90,6 +91,9 @@ def build_parser():
 
     # --- hooks ---
     cli_hook.add_parser(sub)
+
+    # --- init ---
+    cli_init.add_parser(sub)
 
     # --- known-hosts ---
     p_kh = sub.add_parser(

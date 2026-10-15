@@ -371,3 +371,33 @@ def ev_cmd(event):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInstallSafety(InitBase):
+    """Wave-13 audit: no partial install, and the root never lands in --dir."""
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file modes")
+    def test_unwritable_settings_dir_changes_no_context_file(self):
+        os.makedirs(self.p(".claude"))
+        os.chmod(self.p(".claude"), 0o555)
+        try:
+            r = self.run_init("--json")
+        finally:
+            os.chmod(self.p(".claude"), 0o755)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(r.stdout, "")
+        self.assertFalse(os.path.exists(self.p("CLAUDE.md")))
+
+    def test_relative_rookery_root_rejected(self):
+        self.env["ROOKERY_ROOT"] = "rel"
+        r = subprocess.run(self.args(), env=self.env, cwd=self.dir,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("ROOKERY_ROOT", r.stderr)
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_root_inside_dir_rejected(self):
+        self.env["ROOKERY_ROOT"] = self.p("rk")
+        r = self.run_init()
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(os.listdir(self.dir), [])
