@@ -155,6 +155,7 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Performance optimization across all stories
 - [ ] TXXX [P] Additional unit tests in tests/unit/
 - [ ] TXXX Security hardening
+- [ ] TXXX [P] Run `ste-lint FILE --max-score 2.0 --glossary ste-glossary.txt` on every changed doc and agent-facing text (constitution VIII)
 - [ ] TXXX Run quickstart.md validation
 
 ---

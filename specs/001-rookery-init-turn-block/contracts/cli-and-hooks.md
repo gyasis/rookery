@@ -1,0 +1,148 @@
+---
+type: Contract
+task: 001-rookery-init-turn-block
+updated: 2026-10-15
+revision: 2 (sessions, identities, bindings)
+---
+
+# Contract: CLI commands and hook I/O
+
+Every command exits 0 on success. Each command that changes state prints one JSON object on stdout
+when it gets `--json` (constitution VI). Database: `ROOKERY_DB`, else
+`~/Documents/code/rookery/rookery.db` (research D6). "Resolve" means research D20.
+
+## `rookery init` (FR-012 to FR-014, RQ-1.10, RQ-1.11)
+
+```text
+rookery init [--harness claude|codex|pi|omp] [--project NAME] [--dir PATH] [--json]
+```
+
+| Option | Default |
+|---|---|
+| `--harness` | `claude` |
+| `--dir` | the current folder |
+| `--project` | the folder name of the git top level of `--dir` |
+
+- `claude`: upserts the section in `CLAUDE.md` and merges three hooks into `.claude/settings.json`.
+- `codex`, `pi`, `omp`: upserts the section in `AGENTS.md` only.
+- `--json` output:
+  `{"ok": true, "context_file": {"path": "...", "action": "created|inserted|replaced|unchanged"},
+  "settings": {"path": "...", "added": ["Stop"], "updated": [], "unchanged": ["SessionStart"]},
+  "project": "..."}`
+- Human output ends with: `Open agent sessions do not join. Start a new Rookery session with new panes
+  and agents: rookery session new --name <name>.`
+- Init writes no file in `--dir` other than the context file and `.claude/settings.json` (FR-023). Its
+  lock is `<root>/locks/init.lock` (research D13).
+- Invalid settings JSON: exit 2, no file changed, stderr
+  `settings file <path> is not valid JSON: line L column C: <message>. Fix the file, then run init again.`
+
+## `rookery session` (FR-032, FR-036, RQ-1.24, RQ-1.26)
+
+```text
+rookery session new [--name NAME] [--from SESSION] [--bind KIND:VALUE ...] [--json]
+rookery session list|show [SESSION] [--json]
+rookery session end SESSION [--json]
+```
+
+- `new` prints `{"session_id": "rs-…", "name": "...", "copied": [{"name": "...", "handoff": "..."}]}`.
+- `--from` creates one identity per agent name of the old session, with `previous_id`, and copies the
+  newest `HANDOFF.md` of each. It never copies mail, idle state or bindings.
+- `--bind` adds session bindings, for example `--bind herdr-workspace:w1`.
+
+## `rookery identity` (FR-029, FR-036, RQ-1.20, RQ-1.26)
+
+```text
+rookery identity new NAME [--session SESSION] [--json]
+rookery identity bind KIND:VALUE [--json]          # binds to the resolved identity
+rookery identity link --previous AGENT_ID [--json] # on the resolved identity
+rookery identity show [--json]                     # who am I
+rookery identity list [--session SESSION] [--json]
+```
+
+## `rookery inbox` and `rookery peek` (FR-031, RQ-1.13, RQ-1.14, RQ-1.22)
+
+```text
+rookery inbox [--json]     # unread mail of the resolved identity; marks it read
+rookery peek  [--json]     # the same mail; changes nothing
+```
+
+- No `--as`, no `--all`. Each call logs `inbox-read` with the identity and its bindings.
+- No current Rookery session: exit 3, stderr `No current Rookery session. Set ROOKERY_SESSION or start
+  in a pane with a session binding.`
+
+## `rookery hook session-start` (FR-015, FR-027, RQ-1.12)
+
+```text
+rookery hook session-start --project NAME
+```
+
+- stdin: the Claude Code SessionStart JSON (`source`, `session_id`, `cwd`, ...).
+- Resolve. No session: print nothing, write nothing, exit 0.
+- Effects: `register_node(agent_id, kind="pane", lifecycle="persistent")`. Appends
+  `export ROOKERY_SESSION=<session_id>` and `export ROOKERY_NODE=<agent_id>` to `$CLAUDE_ENV_FILE` when it
+  exists.
+- stdout (becomes context): `[rookery] You are <name> (<agent_id>) in Rookery session <session name>.`,
+  then the newest `runs/*/HANDOFF.md` of the identity, then the unread summary line, then one line for
+  each new failed block (research D23).
+- It writes `state/turn.json` = `{"state": "idle", "since": ts}` (research D8).
+
+## `rookery hook prompt` (FR-016, RQ-1.13)
+
+- stdout with no session, or with 0 unread and 0 new failed blocks: nothing (0 bytes).
+- stdout with unread: one line, for example
+  `[rookery] 2 unread from researcher, swe about TASK-12. Read them with: rookery inbox`
+- A new failed block adds one line (research D23), for example
+  `[rookery] Your block for TASK-12 failed (send-failed). It is kept in <path>. Fix the cause, then send the block again.`
+- It never prints a mail body. It never changes a mail status.
+- With a session, it writes `state/turn.json` = `{"state": "busy", "since": ts}` (research D8).
+
+## `rookery hook stop` (FR-005 to FR-009, FR-017, RQ-1.4, RQ-1.5, RQ-1.6, RQ-1.7, RQ-1.14)
+
+- stdin: the Claude Code Stop JSON. The hook reads `last_assistant_message` (research D1).
+- No session: nothing, exit 0.
+- Resolve read-only (research D16). A session but no identity: keep a valid block in
+  `<root>/unresolved/<TASK-ID>-<ts>.json`, log `no-identity`, exit 0.
+- Step 1: `dispatch_text()` on the message (outcome table in data-model.md).
+- Step 2: write `state/turn.json` = `{"state": "idle", "since": ts}` (research D8).
+- stdout is always empty. The hook never blocks a stop, not for unread mail and not for a missing block
+  (FR-017). Rookery is mail, not a phone call.
+- Any error: the hook logs it and exits 0 (research D16).
+
+## `rookery turn` — the hookless wrapper (FR-020, RQ-1.16)
+
+```text
+rookery turn --project NAME [--json] < turn-output.txt
+```
+
+- stdin: the full text of one headless turn (Codex, pi, omp). Resolve from the environment.
+- Effect: the same `dispatch_text()` as the Stop hook. It writes no idle state.
+- `--json` stdout: `{"outcome": "sent|no-block|quarantined|handoff-pending|send-failed|no-session|remote-unsupported|db-busy",
+  "msg_id": n, "reason": "..."}`.
+- On `db-busy`, exit 4. The caller still has the turn text and can run `rookery turn` again (research D16).
+
+## Postmaster steps (FR-011, FR-018, FR-028, RQ-1.9, RQ-1.15, RQ-1.23)
+
+- **Start**: `python3 postmaster.py` with no `--nodes` runs only these two steps. With `--nodes`, the
+  roster steps also run, as before (research D10).
+
+- **Outbox scan**: each loop, for each `<root>/agents/*/*/outbox/*.json`: claim it into `<root>/postmaster/`,
+  then `dispatch_block()` (research D3, D11). The scan never puts a file back and never writes `HANDOFF.md`.
+- **Wake**: each loop, for each identity in an open session with pending mail newer than
+  `<root>/postmaster/pushed/<agent_id>.json`, and ONLY when its `state/turn.json` reads `idle`: run the
+  wake command of the first binding whose kind has one in `~/.rookery/config.json`. Notice text:
+  `[rookery] new mail for <name> from <sender name> about <task>. Read it with: rookery inbox`.
+  A busy agent gets no push until its turn ends. No such binding → log `no-wake-binding`. No
+  `state/turn.json` → log `no-idle-state`. Either way the mail waits (research D10).
+
+## Bounce `note` texts
+
+Each note names the first rule that failed, then tells the agent what to do next (constitution VI). Each note
+passes `ste-lint`. Examples:
+
+- `The block is not valid JSON: <parser message>. Fix the JSON, then send the block again.`
+- `The field "to" is missing. Add "to" with the name of an agent in your session, then send the block again.`
+- `The kind "veto" is for the system only. Use ask, answer, decline, handoff, status or recruit, then send the block again.`
+- `The block has 5,210 bytes. The limit is 4,096 bytes. Put long text in a file and add its path to "read".`
+- `The read entry "<entry>" is not a path inside <root>. Put the file inside <root> and give its path.`
+- `No agent named "law-cousel" exists. Did you mean: law-counsel? Send the block again with the correct name.` (`wrong-recipient`)
+- `The agent "swe" is in another Rookery session. Mail stays inside your session. Ask the user to start a shared session.` (`off-team`)
