@@ -47,13 +47,58 @@ def _load_schema() -> str:
 _INBOX_SCREENING_COLS = ("verdict TEXT", "reason TEXT", "decided_by TEXT", "decided_at INTEGER")
 
 
+# D18: Rookery sessions, session-scoped identities and bindings (additive only).
+_SESSION_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS rookery_sessions (
+  session_id TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  state      TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  ended_at   TEXT
+);
+CREATE TABLE IF NOT EXISTS identities (
+  agent_id    TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  previous_id TEXT,
+  created_at  TEXT NOT NULL,
+  UNIQUE(session_id, name)
+);
+CREATE TABLE IF NOT EXISTS bindings (
+  session_id TEXT NOT NULL,
+  owner_type TEXT NOT NULL,
+  owner_id   TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  value      TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(session_id, owner_type, kind, value)
+);
+"""
+
+
+def _add_column(conn: sqlite3.Connection, alter_sql: str) -> None:
+    """Run an ALTER TABLE ADD COLUMN; a concurrent init_db may have added it first."""
+    try:
+        conn.execute(alter_sql)
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc):
+            raise
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_load_schema())
     # CREATE TABLE IF NOT EXISTS won't add columns to an existing DB — migrate.
     have = {r[1] for r in conn.execute("PRAGMA table_info(inbox)")}
     for col in _INBOX_SCREENING_COLS:
         if col.split()[0] not in have:
-            conn.execute(f"ALTER TABLE inbox ADD COLUMN {col}")
+            _add_column(conn, f"ALTER TABLE inbox ADD COLUMN {col}")
+    conn.executescript(_SESSION_TABLES_SQL)
+    if "session_id" not in have:
+        _add_column(conn, "ALTER TABLE inbox ADD COLUMN session_id TEXT DEFAULT 'legacy'")
+    conn.execute(
+        "INSERT OR IGNORE INTO rookery_sessions(session_id, name, state, created_at) "
+        "VALUES('legacy', 'legacy', 'open', strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+    )
     conn.commit()
 
 
@@ -107,13 +152,14 @@ def hold_enabled() -> bool:
     return os.environ.get("ROOKERY_HOLD", "").lower() in ("1", "true", "yes", "on")
 
 
-def send(conn, sender, recipient, body, topic=None, hold=None):
+def send(conn, sender, recipient, body, topic=None, hold=None, session_id=None):
     if hold is None:
         hold = hold_enabled() and sender not in SYSTEM_SENDERS
     cur = conn.execute(
-        "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at) "
-        "VALUES(?,?,?,?,?,0,?)",
-        (sender, recipient, body, topic, "held" if hold else "pending", now()),
+        "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at, session_id) "
+        "VALUES(?,?,?,?,?,0,?,?)",
+        (sender, recipient, body, topic, "held" if hold else "pending", now(),
+         session_id or "legacy"),
     )
     conn.commit()
     return cur.lastrowid
@@ -251,7 +297,8 @@ def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce
         "kind": "bounce", "msg_id": msg_id, "to": m["recipient"], "reason": reason,
         "note": note, "suggest": suggest, "decided_by": decided_by,
     })
-    return send(conn, "rookery", m["sender"], body, topic=m["topic"])
+    return send(conn, "rookery", m["sender"], body, topic=m["topic"],
+                session_id=m["session_id"])
 
 
 def unquarantine(conn, msg_id, decided_by):

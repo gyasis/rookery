@@ -1,0 +1,272 @@
+"""cli_rookery_session — `rookery session` and `rookery identity` commands.
+
+Register with: cli_rookery_session.add_parser(subparsers)
+Contract: specs/001-rookery-init-turn-block/contracts/cli-and-hooks.md
+Exit codes: 0 ok, 2 bad input or not found, 3 no current session, 4 database busy.
+Not yet here (T026): `session new --from`, `identity link`.
+"""
+
+import json
+import os
+import sqlite3
+import sys
+
+EXIT_BAD, EXIT_NO_SESSION, EXIT_BUSY = 2, 3, 4
+NO_SESSION_MSG = (
+    "No current Rookery session. Set ROOKERY_SESSION or start in a pane "
+    "with a session binding."
+)
+
+
+def _die(msg, code=EXIT_BAD):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def _row(r):
+    return dict(r) if r is not None else None
+
+
+def _out(args, obj, human):
+    if getattr(args, "json", False):
+        print(json.dumps(obj, default=str))
+    else:
+        print(human)
+
+
+def _open():
+    import turn_block  # lazy: written in T008
+
+    return turn_block.open_db()
+
+
+def _run(args, fn):
+    """Open the DB, call fn(conn), map errors to the contract's exit codes."""
+    try:
+        conn = _open()
+    except sqlite3.OperationalError as e:
+        msg = str(e).lower()
+        if "locked" in msg or "busy" in msg:
+            _die(f"database is busy: {e}", EXIT_BUSY)
+        import turn_block
+        _die(f"cannot open database at {turn_block.db_path()}: {e}", EXIT_BAD)
+    try:
+        return fn(conn)
+    except ValueError as e:
+        _die(str(e))
+    except sqlite3.IntegrityError as e:
+        if "bindings" in str(e):
+            _die(f"duplicate binding: {e}")
+        _die(f"name already exists: {e}")
+    except sqlite3.OperationalError as e:
+        _die(f"database error: {e}", EXIT_BUSY)
+    finally:
+        conn.close()
+
+
+def _need_session(conn, ref):
+    s = _row(__import__("rookery_identity").get_session(conn, ref))
+    if not s:
+        _die(f'No Rookery session "{ref}" exists. List them with: rookery session list')
+    return s
+
+
+def _env_session(conn):
+    import rookery_identity as ri
+
+    ref = os.environ.get("ROOKERY_SESSION")
+    if ref:
+        return _need_session(conn, ref)
+    s = _row(ri.find_session(conn, os.environ, ri.load_config(persist=False)))
+    if not s:
+        _die(NO_SESSION_MSG, EXIT_NO_SESSION)
+    return s
+
+
+# --------------------------------------------------------------- session
+
+
+def cmd_session_new(args):
+    import rookery_identity as ri
+
+    binds = []
+    for b in args.bind or []:
+        kind, sep, value = b.partition(":")
+        if not sep or not kind or not value:
+            _die(f'--bind "{b}" is not KIND:VALUE. Example: --bind herdr-workspace:w1')
+        binds.append((kind, value))
+
+    def go(conn):
+        s = _row(ri.new_session(conn, name=args.name, binds=tuple(binds)))
+        out = {"session_id": s["session_id"], "name": s["name"], "copied": []}
+        _out(args, out, f"Rookery session {s['name']} ({s['session_id']}) started.")
+
+    _run(args, go)
+
+
+def _fmt_session(s):
+    return f"{s['session_id']}  {s['name']}  {s['state']}"
+
+
+def cmd_session_list(args):
+    import rookery_identity as ri
+
+    def go(conn):
+        if getattr(args, "session", None):
+            s = _need_session(conn, args.session)
+            ids = [_row(i) for i in ri.list_identities(conn, s["session_id"])]
+            out = {"session": s, "identities": ids}
+            lines = [_fmt_session(s)] + [f"  {i['agent_id']}  {i['name']}" for i in ids]
+            _out(args, out, "\n".join(lines))
+            return
+        rows = [_row(r) for r in ri.list_sessions(conn)]
+        _out(args, {"sessions": rows},
+             "\n".join(_fmt_session(s) for s in rows) or "No Rookery sessions.")
+
+    _run(args, go)
+
+
+def cmd_session_end(args):
+    import rookery_identity as ri
+
+    def go(conn):
+        _need_session(conn, args.session)
+        s = _row(ri.end_session(conn, args.session))
+        _out(args, {"session_id": s["session_id"], "name": s["name"], "state": s["state"]},
+             f"Rookery session {s['name']} ({s['session_id']}) ended.")
+
+    _run(args, go)
+
+
+# -------------------------------------------------------------- identity
+
+
+def cmd_identity_new(args):
+    import rookery_identity as ri
+
+    def go(conn):
+        s = _need_session(conn, args.session) if args.session else _env_session(conn)
+        i = _row(ri.new_identity(conn, s["session_id"], args.name))
+        _out(args, {"agent_id": i["agent_id"], "name": i["name"],
+                    "session_id": s["session_id"], "session": s["name"]},
+             f"Identity {i['name']} ({i['agent_id']}) created in session {s['name']}.")
+
+    _run(args, go)
+
+
+def cmd_identity_list(args):
+    import rookery_identity as ri
+
+    def go(conn):
+        s = _need_session(conn, args.session) if args.session else _env_session(conn)
+        ids = [_row(i) for i in ri.list_identities(conn, s["session_id"])]
+        _out(args, {"session_id": s["session_id"], "session": s["name"], "identities": ids},
+             "\n".join(f"{i['agent_id']}  {i['name']}" for i in ids) or "No identities.")
+
+    _run(args, go)
+
+
+def _env_identity(conn):
+    """Identity named by ROOKERY_SESSION + ROOKERY_NODE (full resolve is D20, T0xx)."""
+    import rookery_identity as ri
+
+    s = _env_session(conn)
+    node = os.environ.get("ROOKERY_NODE")
+    if not node:
+        _die("No current identity. Set ROOKERY_NODE or run: rookery identity new NAME",
+             EXIT_NO_SESSION)
+    i = _row(ri.get_identity(conn, node, session_id=s["session_id"]))
+    if not i:
+        _die(f'No identity "{node}" in session {s["name"]}. '
+             "Create it with: rookery identity new NAME")
+    return s, i
+
+
+def cmd_identity_show(args):
+    def go(conn):
+        s, i = _env_identity(conn)
+        _out(args, {"agent_id": i["agent_id"], "name": i["name"],
+                    "previous_id": i.get("previous_id"),
+                    "session_id": s["session_id"], "session": s["name"]},
+             f"You are {i['name']} ({i['agent_id']}) in Rookery session {s['name']}.")
+
+    _run(args, go)
+
+
+def cmd_identity_bind(args):
+    import rookery_identity as ri
+
+    kind, sep, value = args.binding.partition(":")
+    if not sep or not kind or not value:
+        _die(f'"{args.binding}" is not KIND:VALUE. Example: herdr-pane:p3')
+
+    def go(conn):
+        s, i = _env_identity(conn)
+        import turn_block
+
+        try:
+            root = turn_block.project_root(os.path.basename(os.getcwd()))
+        except ValueError:      # cwd name is not a safe project name and no ROOKERY_ROOT
+            root = None
+        result = ri.bind(conn, s["session_id"], i["agent_id"], kind, value, root=root)
+        _out(args, {"agent_id": i["agent_id"], "kind": kind, "value": value, "result": result},
+             f"{result.capitalize()} {kind}:{value} to {i['name']} ({i['agent_id']}).")
+
+    _run(args, go)
+
+
+# ---------------------------------------------------------------- parser
+
+
+def _json_flag(p):
+    p.add_argument("--json", action="store_true", help="Print one JSON object.")
+
+
+def add_parser(subparsers):
+    """Add the `session` and `identity` commands to a subparsers action."""
+    ps = subparsers.add_parser("session", help="Manage Rookery sessions.")
+    ss = ps.add_subparsers(dest="session_cmd", metavar="<action>")
+    ss.required = True
+
+    p = ss.add_parser("new", help="Start a Rookery session.")
+    p.add_argument("--name", help="Session name (default: the session ID).")
+    p.add_argument("--bind", action="append", metavar="KIND:VALUE",
+                   help="Add a session binding, e.g. herdr-workspace:w1. Repeatable.")
+    _json_flag(p)
+    p.set_defaults(func=cmd_session_new)
+
+    for nm in ("list", "show"):
+        p = ss.add_parser(nm, help="List sessions, or show one." if nm == "list"
+                          else "Show one session and its identities.")
+        p.add_argument("session", nargs="?", metavar="SESSION")
+        _json_flag(p)
+        p.set_defaults(func=cmd_session_list)
+
+    p = ss.add_parser("end", help="End a session.")
+    p.add_argument("session", metavar="SESSION")
+    _json_flag(p)
+    p.set_defaults(func=cmd_session_end)
+
+    pi = subparsers.add_parser("identity", help="Manage agent identities.")
+    si = pi.add_subparsers(dest="identity_cmd", metavar="<action>")
+    si.required = True
+
+    p = si.add_parser("new", help="Create an identity in a session.")
+    p.add_argument("name", metavar="NAME")
+    p.add_argument("--session", metavar="SESSION", help="Default: ROOKERY_SESSION.")
+    _json_flag(p)
+    p.set_defaults(func=cmd_identity_new)
+
+    p = si.add_parser("list", help="List identities of a session.")
+    p.add_argument("--session", metavar="SESSION", help="Default: ROOKERY_SESSION.")
+    _json_flag(p)
+    p.set_defaults(func=cmd_identity_list)
+
+    p = si.add_parser("show", help="Show who I am (ROOKERY_SESSION + ROOKERY_NODE).")
+    _json_flag(p)
+    p.set_defaults(func=cmd_identity_show)
+
+    p = si.add_parser("bind", help="Bind KIND:VALUE to my identity.")
+    p.add_argument("binding", metavar="KIND:VALUE")
+    _json_flag(p)
+    p.set_defaults(func=cmd_identity_bind)

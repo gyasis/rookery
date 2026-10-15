@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+"""Rookery sessions, agent identities, bindings and resolve() (research D17 to D20).
+
+Part 1 (T009): new_session, get_session, end_session, new_identity, list_identities.
+Part 2 (T010): resolve(conn, env, hook_input, root, create=True)
+               -> None | (session_row, identity_row, bindings).
+
+    python3 -m unittest test_identity -v
+"""
+import json
+import os
+import re
+import sqlite3
+import sys
+import tempfile
+import unittest
+
+import rookery as R
+import rookery_identity as RI
+
+
+class IdentityBase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = os.path.join(self.tmp.name, "root")
+        os.makedirs(self.root)
+        # load_config() reads ~/.rookery/config.json: point HOME at the temp dir.
+        self._old_home = os.environ.get("HOME")
+        os.environ["HOME"] = self.tmp.name
+        self.conn = R.connect(os.path.join(self.tmp.name, "t.db"))
+        self.conn.row_factory = sqlite3.Row
+
+    def tearDown(self):
+        self.conn.close()
+        if self._old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._old_home
+        self.tmp.cleanup()
+
+    # helpers
+    def count(self, table):
+        return self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+    def snapshot(self):
+        return {t: [tuple(r) for r in self.conn.execute(f"SELECT * FROM {t} ORDER BY 1,2,3")]
+                for t in ("rookery_sessions", "identities", "bindings")}
+
+    def log_text(self):
+        p = os.path.join(self.root, "logs", "turn-block.jsonl")
+        return open(p).read() if os.path.exists(p) else ""
+
+    def resolve(self, env, hook_input=None, create=True):
+        return RI.resolve(self.conn, env, hook_input or {}, self.root, create=create)
+
+    def holder(self, kind, value, session_id):
+        r = self.conn.execute(
+            "SELECT owner_id FROM bindings WHERE session_id=? AND owner_type='identity' "
+            "AND kind=? AND value=?", (session_id, kind, value)).fetchone()
+        return r["owner_id"] if r else None
+
+
+class Ids(IdentityBase):
+    def test_session_id_format(self):
+        s = RI.new_session(self.conn, name="alpha")
+        self.assertRegex(s["session_id"], r"^rs-[0-9a-f]{8}$")
+
+    def test_agent_id_format(self):
+        s = RI.new_session(self.conn, name="alpha")
+        i = RI.new_identity(self.conn, s["session_id"], "researcher")
+        self.assertRegex(i["agent_id"], r"^ag-[0-9a-f]{10}$")
+
+    def test_no_id_repeats_in_1000_creations(self):
+        sids, aids = set(), set()
+        s = RI.new_session(self.conn, name="alpha")
+        for n in range(1000):
+            sids.add(RI.new_session(self.conn)["session_id"])
+            aids.add(RI.new_identity(self.conn, s["session_id"], f"a{n}")["agent_id"])
+        self.assertEqual((len(sids), len(aids)), (1000, 1000))
+
+
+class Names(IdentityBase):
+    def test_name_repeats_across_sessions(self):
+        a = RI.new_session(self.conn, name="alpha")
+        b = RI.new_session(self.conn, name="beta")
+        i1 = RI.new_identity(self.conn, a["session_id"], "researcher")
+        i2 = RI.new_identity(self.conn, b["session_id"], "researcher")
+        self.assertNotEqual(i1["agent_id"], i2["agent_id"])
+
+    def test_name_unique_inside_session(self):
+        a = RI.new_session(self.conn, name="alpha")
+        RI.new_identity(self.conn, a["session_id"], "researcher")
+        with self.assertRaises((ValueError, sqlite3.IntegrityError)):
+            RI.new_identity(self.conn, a["session_id"], "researcher")
+        self.assertEqual(self.count("identities"), 1)
+
+    def test_unsafe_names_rejected(self):
+        a = RI.new_session(self.conn, name="alpha")
+        for bad in ("..", "a/b", "x" * 65):
+            with self.assertRaises(ValueError, msg=bad):
+                RI.new_identity(self.conn, a["session_id"], bad)
+            with self.assertRaises(ValueError, msg=bad):
+                RI.new_session(self.conn, name=bad)
+        self.assertEqual(self.count("identities"), 0)
+
+    def test_safe_name_boundary_64_accepted(self):
+        a = RI.new_session(self.conn, name="alpha")
+        RI.new_identity(self.conn, a["session_id"], "x" * 64)
+
+    def test_session_without_name_gets_its_id(self):
+        s = RI.new_session(self.conn)
+        self.assertEqual(s["name"], s["session_id"])
+        self.assertEqual(RI.get_session(self.conn, s["name"])["session_id"], s["session_id"])
+
+    def test_ended_session_name_not_reusable(self):
+        s = RI.new_session(self.conn, name="alpha")
+        RI.end_session(self.conn, "alpha")
+        self.assertEqual(RI.get_session(self.conn, s["session_id"])["state"], "ended")
+        with self.assertRaises((ValueError, sqlite3.IntegrityError)):
+            RI.new_session(self.conn, name="alpha")
+
+
+class ResolveSession(IdentityBase):
+    def test_no_session_returns_none_and_changes_nothing(self):
+        RI.new_session(self.conn, name="alpha")
+        before = self.snapshot()
+        self.assertIsNone(self.resolve({"HERDR_PANE_ID": "p1"}))
+        self.assertIsNone(self.resolve({"HERDR_PANE_ID": "p1"}, {"session_id": "c1"}))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_rookery_session_by_name_and_by_id(self):
+        s = RI.new_session(self.conn, name="alpha")
+        by_name = self.resolve({"ROOKERY_SESSION": "alpha", "HERDR_PANE_ID": "p1"})
+        by_id = self.resolve({"ROOKERY_SESSION": s["session_id"], "HERDR_PANE_ID": "p1"})
+        self.assertEqual(by_name[0]["session_id"], s["session_id"])
+        self.assertEqual(by_id[0]["session_id"], s["session_id"])
+        self.assertEqual(by_name[1]["agent_id"], by_id[1]["agent_id"])
+
+    def test_session_binding_selects_session(self):
+        s = RI.new_session(self.conn, name="alpha", binds=("herdr-workspace:w1",))
+        RI.new_session(self.conn, name="beta", binds=("herdr-workspace:w2",))
+        r = self.resolve({"HERDR_WORKSPACE_ID": "w1", "HERDR_PANE_ID": "p1"})
+        self.assertEqual(r[0]["session_id"], s["session_id"])
+        self.assertEqual(r[1]["session_id"], s["session_id"])
+
+
+class ResolveIdentity(IdentityBase):
+    def setUp(self):
+        super().setUp()
+        self.s = RI.new_session(self.conn, name="alpha")
+        self.sid = self.s["session_id"]
+        self.env = {"ROOKERY_SESSION": "alpha"}
+
+    def test_two_panes_get_two_identities(self):
+        r1 = self.resolve({**self.env, "HERDR_PANE_ID": "p1"}, {"session_id": "c1"})
+        r2 = self.resolve({**self.env, "HERDR_PANE_ID": "p2"}, {"session_id": "c2"})
+        self.assertNotEqual(r1[1]["agent_id"], r2[1]["agent_id"])
+        self.assertEqual(self.count("identities"), 2)
+
+    def test_same_pane_rejoins_same_identity(self):
+        r1 = self.resolve({**self.env, "HERDR_PANE_ID": "p1"})
+        r2 = self.resolve({**self.env, "HERDR_PANE_ID": "p1"})
+        self.assertEqual(r1[1]["agent_id"], r2[1]["agent_id"])
+        self.assertEqual(self.count("identities"), 1)
+
+    def test_same_pane_new_session_new_identity_and_no_old_mail(self):
+        r1 = self.resolve({**self.env, "HERDR_PANE_ID": "p1"})
+        old = r1[1]["agent_id"]
+        R.send(self.conn, "someone", old, "old mail", "TASK-1")
+        RI.new_session(self.conn, name="beta")
+        r2 = RI.resolve(self.conn, {"ROOKERY_SESSION": "beta", "HERDR_PANE_ID": "p1"},
+                        {}, self.root, create=True)
+        new = r2[1]["agent_id"]
+        self.assertNotEqual(old, new)
+        self.assertEqual(R.fetch_undelivered(self.conn, new), [])
+        self.assertEqual(len(R.fetch_undelivered(self.conn, old)), 1)
+
+    def test_rookery_node_new_name_creates_identity(self):
+        r = self.resolve({**self.env, "ROOKERY_NODE": "researcher", "HERDR_PANE_ID": "p1"})
+        self.assertEqual(r[1]["name"], "researcher")
+        self.assertEqual(r[1]["session_id"], self.sid)
+        self.assertEqual(self.holder("herdr-pane", "p1", self.sid), r[1]["agent_id"])
+
+    def test_rookery_node_existing_name_and_id(self):
+        i = RI.new_identity(self.conn, self.sid, "researcher")
+        by_name = self.resolve({**self.env, "ROOKERY_NODE": "researcher"})
+        by_id = self.resolve({**self.env, "ROOKERY_NODE": i["agent_id"]})
+        self.assertEqual(by_name[1]["agent_id"], i["agent_id"])
+        self.assertEqual(by_id[1]["agent_id"], i["agent_id"])
+        self.assertEqual(self.count("identities"), 1)
+
+    def test_unknown_node_id_logs_and_continues_with_bindings(self):
+        first = self.resolve({**self.env, "HERDR_PANE_ID": "p1"})
+        r = self.resolve({**self.env, "ROOKERY_NODE": "ag-0000000000", "HERDR_PANE_ID": "p1"})
+        self.assertEqual(r[1]["agent_id"], first[1]["agent_id"])
+        self.assertIn("ag-0000000000", self.log_text())
+        self.assertEqual(self.count("identities"), 1)
+
+    def test_binding_moves_to_node_identity_and_is_logged(self):
+        a = self.resolve({**self.env, "HERDR_PANE_ID": "p1"})[1]
+        b = RI.new_identity(self.conn, self.sid, "reviewer")
+        r = self.resolve({**self.env, "ROOKERY_NODE": "reviewer", "HERDR_PANE_ID": "p1"})
+        self.assertEqual(r[1]["agent_id"], b["agent_id"])
+        self.assertEqual(self.holder("herdr-pane", "p1", self.sid), b["agent_id"])
+        self.assertNotEqual(a["agent_id"], b["agent_id"])
+        self.assertIn("binding-moved", self.log_text())
+
+    def test_without_node_agent_joins_identity_holding_binding(self):
+        b = RI.new_identity(self.conn, self.sid, "reviewer")
+        self.resolve({**self.env, "ROOKERY_NODE": "reviewer", "HERDR_PANE_ID": "p1"})
+        r = self.resolve({**self.env, "HERDR_PANE_ID": "p1"})
+        self.assertEqual(r[1]["agent_id"], b["agent_id"])
+        self.assertEqual(self.count("identities"), 1)
+
+    def test_new_identity_default_name_and_all_bindings(self):
+        r = self.resolve({**self.env, "HERDR_PANE_ID": "p1", "TMUX_PANE": "%3"},
+                         {"session_id": "claude-abc"})
+        self.assertRegex(r[1]["name"], r"^[A-Za-z0-9._-]+-[0-9a-f]{4}$")
+        agent = r[1]["agent_id"]
+        self.assertEqual(self.holder("herdr-pane", "p1", self.sid), agent)
+        self.assertEqual(self.holder("tmux-pane", "%3", self.sid), agent)
+        self.assertEqual(self.holder("claude-session", "claude-abc", self.sid), agent)
+
+
+class ReadOnly(IdentityBase):
+    def home_tree(self):
+        return sorted(os.path.join(d, f) for d, _, fs in os.walk(self.tmp.name) for f in fs
+                      if not f.startswith("t.db"))
+
+    def test_no_session_and_create_false_do_not_write_home(self):
+        cfg = os.path.join(self.tmp.name, ".rookery", "config.json")
+        RI.new_session(self.conn, name="alpha")
+        self.assertIsNone(self.resolve({"HERDR_PANE_ID": "p1"}))
+        self.assertFalse(os.path.exists(cfg))
+        r = self.resolve({"ROOKERY_SESSION": "alpha", "ROOKERY_NODE": "bob"}, create=False)
+        self.assertIsNone(r[1])
+        self.assertFalse(os.path.exists(cfg))
+        self.assertIn("no-session", self.log_text())
+
+    def test_load_config_persist_false_returns_default_without_writing(self):
+        cfg = RI.load_config(persist=False)
+        self.assertIn("identity_binding_sources", cfg)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, ".rookery")))
+        RI.load_config()
+        self.assertTrue(os.path.exists(os.path.join(self.tmp.name, ".rookery", "config.json")))
+
+    def test_create_false_creates_nothing_and_moves_nothing(self):
+        s = RI.new_session(self.conn, name="alpha")
+        tree = self.home_tree()
+        env = {"ROOKERY_SESSION": "alpha", "HERDR_PANE_ID": "p1"}
+        # no identity yet: nothing is created
+        before = self.snapshot()
+        r = RI.resolve(self.conn, env, {"session_id": "c1"}, self.root, create=False)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(r[0]["session_id"], s["session_id"])
+        self.assertIsNone(r[1])
+        # an identity holds the binding; ROOKERY_NODE names another: no move
+        a = RI.resolve(self.conn, env, {}, self.root, create=True)[1]
+        RI.new_identity(self.conn, s["session_id"], "reviewer")
+        before = self.snapshot()
+        RI.resolve(self.conn, {**env, "ROOKERY_NODE": "reviewer"}, {}, self.root, create=False)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.holder("herdr-pane", "p1", s["session_id"]), a["agent_id"])
+        self.assertNotIn("binding-moved", self.log_text())
+        self.assertEqual([f for f in self.home_tree() if "turn-block.jsonl" not in f
+                          and not f.endswith("-wal") and not f.endswith("-shm")],
+                         [f for f in tree if "turn-block.jsonl" not in f])
+
+
+class ConcurrentResolve(unittest.TestCase):
+    """Fix 3: concurrent resolve(create=True) converges instead of raising."""
+
+    WORKER = (
+        "import sys, time, json, os\n"
+        "import turn_block, rookery_identity as ri\n"
+        "time.sleep(max(0, float(sys.argv[1]) - time.time()))\n"
+        "try:\n"
+        "    c = turn_block.open_db()\n"
+        "    ri.resolve(c, {'ROOKERY_SESSION': 's', 'ROOKERY_NODE': 'bob',\n"
+        "                   'HERDR_PANE_ID': 'p9'}, {'session_id': 'cs'},\n"
+        "               os.environ['ROOKERY_ROOT'])\n"
+        "except Exception as e:\n"
+        "    print(type(e).__name__ + ': ' + str(e)); sys.exit(1)\n")
+
+    def test_same_node_and_pane_converge(self):
+        import subprocess
+        import time
+        import turn_block
+        here = os.path.dirname(os.path.abspath(__file__))
+        for rnd in range(6):
+            with tempfile.TemporaryDirectory() as d:
+                env = dict(os.environ, HOME=d, ROOKERY_DB=os.path.join(d, "t.db"),
+                           ROOKERY_ROOT=os.path.join(d, "root"))
+                old = os.environ.get("ROOKERY_DB")
+                os.environ["ROOKERY_DB"] = env["ROOKERY_DB"]
+                try:
+                    c = turn_block.open_db()
+                finally:
+                    if old is None:
+                        os.environ.pop("ROOKERY_DB")
+                    else:
+                        os.environ["ROOKERY_DB"] = old
+                sid = RI.new_session(c, name="s")["session_id"]
+                go = str(time.time() + 1.0)
+                procs = [subprocess.Popen([sys.executable, "-c", self.WORKER, go], cwd=here,
+                                          env=env, stdout=subprocess.PIPE, text=True)
+                         for _ in range(4)]
+                outs = [p.communicate()[0] for p in procs]
+                self.assertEqual([o for o in outs if o], [], f"round {rnd}")
+                ids = c.execute("SELECT agent_id FROM identities WHERE name='bob'").fetchall()
+                self.assertEqual(len(ids), 1)
+                holder = c.execute(
+                    "SELECT owner_id FROM bindings WHERE session_id=? AND owner_type='identity' "
+                    "AND kind='herdr-pane' AND value='p9'", (sid,)).fetchall()
+                self.assertEqual([r[0] for r in holder], [ids[0][0]])
+                c.close()
+
+
+class LogHandlerRecreated(unittest.TestCase):
+    """Fix 7: deleting the log file must not lose later events."""
+
+    def test_log_after_external_delete(self):
+        import turn_block
+        with tempfile.TemporaryDirectory() as d:
+            turn_block.log_event(d, event="one")
+            path = os.path.join(d, "logs", "turn-block.jsonl")
+            self.assertTrue(os.path.exists(path))
+            os.remove(path)
+            turn_block.log_event(d, event="two")
+            self.assertTrue(os.path.exists(path))
+            self.assertIn('"two"', open(path).read())
+
+
+class OpenDbReadOnly(unittest.TestCase):
+    """Fix 2 (research D16): open_db on a current schema must not need the write lock."""
+
+    def test_open_db_while_writer_holds_lock(self):
+        import time
+        import turn_block
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.db")
+            old = os.environ.get("ROOKERY_DB")
+            os.environ["ROOKERY_DB"] = path
+            try:
+                turn_block.open_db().close()          # migrate
+                w = sqlite3.connect(path, isolation_level=None)
+                w.execute("BEGIN IMMEDIATE")
+                try:
+                    t = time.time()
+                    conn = turn_block.open_db()
+                    self.assertLess(time.time() - t, 1.0)
+                    self.assertEqual(conn.execute(
+                        "SELECT COUNT(*) FROM rookery_sessions").fetchone()[0], 1)
+                    conn.close()
+                finally:
+                    w.execute("ROLLBACK")
+                    w.close()
+            finally:
+                if old is None:
+                    os.environ.pop("ROOKERY_DB", None)
+                else:
+                    os.environ["ROOKERY_DB"] = old
+
+
+class CliSessionIdentity(unittest.TestCase):
+    """T012: `rookery_cli.py session|identity ...` as subprocesses (temp DB/HOME/ROOT only)."""
+
+    CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rookery_cli.py")
+
+    def setUp(self):
+        import subprocess  # noqa: F401
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = os.path.join(self.tmp.name, "cli.db")
+        self.env = {k: v for k, v in os.environ.items()
+                    if not k.startswith("ROOKERY_")}
+        self.env.update(ROOKERY_DB=self.db, HOME=self.tmp.name,
+                        ROOKERY_ROOT=os.path.join(self.tmp.name, "root"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def cli(self, *args, env=None, code=0):
+        import subprocess
+        r = subprocess.run([sys.executable, self.CLI, *args], env=env or self.env,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, code, r.stderr + r.stdout)
+        return json.loads(r.stdout) if code == 0 else r
+
+    def count(self, table, sid):
+        c = sqlite3.connect(self.db)
+        try:
+            return c.execute(f"SELECT COUNT(*) FROM {table} WHERE session_id=?", (sid,)).fetchone()[0]
+        finally:
+            c.close()
+
+    def test_session_new_list_show_end(self):
+        n = self.cli("session", "new", "--name", "alpha", "--json")
+        self.assertEqual(n["name"], "alpha")
+        self.assertTrue(n["session_id"])
+        lst = self.cli("session", "list", "--json")
+        self.assertIn("alpha", [s["name"] for s in lst["sessions"]])
+        shown = self.cli("session", "show", "alpha", "--json")
+        self.assertEqual(shown["session"]["session_id"], n["session_id"])
+        self.assertEqual(shown["session"]["state"], "open")
+        ended = self.cli("session", "end", "alpha", "--json")
+        self.assertEqual(ended["state"], "ended")
+
+    def test_session_end_deletes_nothing(self):
+        sid = self.cli("session", "new", "--name", "alpha", "--json")["session_id"]
+        ident = self.cli("identity", "new", "bob", "--session", "alpha", "--json")
+        env = dict(self.env, ROOKERY_SESSION="alpha", ROOKERY_NODE="bob")
+        self.cli("identity", "bind", "herdr-pane:p1", "--json", env=env)
+        c = sqlite3.connect(self.db)
+        c.execute("INSERT INTO inbox(sender, recipient, body, status, created_at, session_id) "
+                  "VALUES ('x', ?, 'hi', 'pending', 1, ?)", (ident["agent_id"], sid))
+        c.commit()
+        c.close()
+        before = {t: self.count(t, sid) for t in ("identities", "bindings", "inbox")}
+        self.assertTrue(all(v >= 1 for v in before.values()), before)
+        self.assertEqual(self.cli("session", "end", "alpha", "--json")["state"], "ended")
+        after = {t: self.count(t, sid) for t in ("identities", "bindings", "inbox")}
+        self.assertEqual(before, after)
+        self.assertEqual(self.cli("session", "show", "alpha", "--json")["session"]["state"], "ended")
+
+    def test_identity_new_bind_show_list(self):
+        self.cli("session", "new", "--name", "alpha", "--json")
+        a = self.cli("identity", "new", "bob", "--session", "alpha", "--json")
+        self.assertEqual((a["name"], a["session"]), ("bob", "alpha"))
+        env = dict(self.env, ROOKERY_SESSION="alpha", ROOKERY_NODE="bob")
+        bound = self.cli("identity", "bind", "herdr-pane:p1", "--json", env=env)
+        self.assertIn("herdr-pane", json.dumps(bound))
+        me = self.cli("identity", "show", "--json", env=env)
+        self.assertEqual((me["agent_id"], me["name"]), (a["agent_id"], "bob"))
+        lst = self.cli("identity", "list", "--session", "alpha", "--json")
+        self.assertEqual([i["name"] for i in lst["identities"]], ["bob"])
+
+    def test_identity_bind_moves_binding(self):
+        self.cli("session", "new", "--name", "alpha", "--json")
+        self.cli("identity", "new", "bob", "--session", "alpha", "--json")
+        alice = self.cli("identity", "new", "alice", "--session", "alpha", "--json")
+        e = dict(self.env, ROOKERY_SESSION="alpha")
+        self.cli("identity", "bind", "p:1", "--json", env=dict(e, ROOKERY_NODE="bob"))
+        out = self.cli("identity", "bind", "p:1", "--json", env=dict(e, ROOKERY_NODE="alice"))
+        self.assertEqual(out["result"], "moved")
+        c = sqlite3.connect(self.db)
+        rows = c.execute("SELECT owner_id FROM bindings WHERE owner_type='identity' "
+                         "AND kind='p' AND value='1'").fetchall()
+        c.close()
+        self.assertEqual([r[0] for r in rows], [alice["agent_id"]])
+
+    def test_identity_list_uses_session_binding(self):
+        self.cli("session", "new", "--name", "ws", "--bind", "herdr-workspace:w1", "--json")
+        env = dict(self.env, HERDR_WORKSPACE_ID="w1")
+        out = self.cli("identity", "list", "--json", env=env)
+        self.assertEqual(out["session"], "ws")
+
+    def test_duplicate_bind_reported_as_binding(self):
+        r = self.cli("session", "new", "--name", "ws", "--bind", "a:b", "--bind", "a:b", code=2)
+        self.assertIn("binding", r.stderr.lower())
+        self.assertNotIn("name already exists", r.stderr)
+
+    def test_unopenable_db_is_not_reported_busy(self):
+        env = dict(self.env, ROOKERY_DB=os.path.join(self.tmp.name, "nodir", "x.db"))
+        r = self.cli("session", "list", "--json", env=env, code=2)
+        self.assertIn("cannot open database", r.stderr)
+
+    def test_help_lists_old_and_new_commands(self):
+        import subprocess
+        r = subprocess.run([sys.executable, self.CLI, "--help"], env=self.env,
+                           capture_output=True, text=True, timeout=60)
+        for w in ("serve", "up", "approve", "session", "identity"):
+            self.assertIn(w, r.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

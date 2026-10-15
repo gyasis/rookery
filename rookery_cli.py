@@ -13,6 +13,7 @@ from cli_approve import cmd_approve
 from cli_known_hosts import cmd_known_hosts_forget, cmd_known_hosts_list
 from cli_serve import cmd_serve
 from cli_up import cmd_up
+import cli_rookery_session
 
 # ---------------------------------------------------------------------------
 # Argument parser
@@ -81,6 +82,9 @@ def build_parser():
         help="Bearer token (default $ROOKERY_TOKEN)",
     )
     p_approve.set_defaults(func=cmd_approve)
+
+    # --- session / identity ---
+    cli_rookery_session.add_parser(sub)
 
     # --- known-hosts ---
     p_kh = sub.add_parser(

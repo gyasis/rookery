@@ -42,9 +42,9 @@ temporary Rookery root, as `test_held_quarantine.py` does. Write each test first
 
 **Purpose**: the fixtures and data files that later phases need.
 
-- [ ] T001 [P] Copy `.claude/settings.json` of this repo to `fixtures/settings/devkid.json` without change. Tests use this copy as the dev-kid settings file (US3).
-- [ ] T002 [P] Create `rookery_config.default.json` with the exact content in research D19. Mark `TMUX_PANE` as UNTESTED in a `_comment` key.
-- [ ] T003 [P] Create `fixtures/turns/README.md`. List each fixture file of T013 and T021 with its expected outcome from the outcome table in [data-model.md](data-model.md).
+- [x] T001 [P] Copy `.claude/settings.json` of this repo to `fixtures/settings/devkid.json` without change. Tests use this copy as the dev-kid settings file (US3).
+- [x] T002 [P] Create `rookery_config.default.json` with the exact content in research D19. Mark `TMUX_PANE` as UNTESTED in a `_comment` key.
+- [x] T003 [P] Create `fixtures/turns/README.md`. List each fixture file of T013 and T021 with its expected outcome from the outcome table in [data-model.md](data-model.md).
 
 ---
 
@@ -55,14 +55,14 @@ temporary Rookery root, as `test_held_quarantine.py` does. Write each test first
 
 ### Tests first
 
-- [ ] T004 [P] Write `test_sessions_migration.py` (FR-029, FR-034, constitution I). Use `ROOKERY_DB` when it exists. Else build an old database from `schema.sql` of commit `e2bbed5` with sample rows. Check these items:
+- [x] T004 [P] Write `test_sessions_migration.py` (FR-029, FR-034, constitution I). Use `ROOKERY_DB` when it exists. Else build an old database from `schema.sql` of commit `e2bbed5` with sample rows. Check these items:
   - The tables `rookery_sessions`, `identities` and `bindings` exist.
   - The column `inbox.session_id` exists, and each old row reads `legacy`.
   - One `legacy` session row exists.
   - Old column values stay identical.
   - A second `init_db()` changes nothing.
   - `rookery.fetch_undelivered(conn, <old node name>)` returns the same rows as before.
-- [ ] T005 [P] Write `test_identity.py` (RQ-1.20, RQ-1.21, RQ-1.22, R8, FR-025 to FR-027, FR-032, SC-009, SC-011). Check these cases:
+- [x] T005 [P] Write `test_identity.py` (RQ-1.20, RQ-1.21, RQ-1.22, R8, FR-025 to FR-027, FR-032, SC-009, SC-011). Check these cases:
   - Session IDs match `rs-` + 8 hex. Agent IDs match `ag-` + 10 hex.
   - No ID repeats in 1,000 creations.
   - A name can repeat across sessions, but not inside one session.
@@ -82,12 +82,12 @@ temporary Rookery root, as `test_held_quarantine.py` does. Write each test first
 
 ### Implementation
 
-- [ ] T006 Edit `rookery.init_db()` in `rookery.py` (D18). Delete nothing. Add these items:
+- [x] T006 Edit `rookery.init_db()` in `rookery.py` (D18). Delete nothing. Add these items:
   - `CREATE TABLE IF NOT EXISTS` for `rookery_sessions`, `identities` and `bindings`, with the columns and `UNIQUE` rules of D18.
   - The column `inbox.session_id TEXT DEFAULT 'legacy'`, with the same `PRAGMA table_info` check that the screening columns use.
   - The `legacy` session row, with `INSERT OR IGNORE`.
-- [ ] T007 Edit `rookery.send()` and `rookery.quarantine()` in `rookery.py` (D18). `send()` gets `session_id=None`, and `None` writes `legacy`. `quarantine()` reads the `session_id` of the original row and gives it to the bounce. Change nothing else. Then run `python3 test_held_quarantine.py` and `python3 test_sessions_migration.py`. Both must pass.
-- [ ] T008 Add the shared helpers to `turn_block.py` (D6, D15):
+- [x] T007 Edit `rookery.send()` and `rookery.quarantine()` in `rookery.py` (D18). `send()` gets `session_id=None`, and `None` writes `legacy`. `quarantine()` reads the `session_id` of the original row and gives it to the bounce. Change nothing else. Then run `python3 test_held_quarantine.py` and `python3 test_sessions_migration.py`. Both must pass.
+- [x] T008 Add the shared helpers to `turn_block.py` (D6, D15):
   - `SAFE_NAME`: the regex `[A-Za-z0-9._-]{1,64}`, and a check that rejects `.` and `..`.
   - `db_path()`.
   - `project_root(project)`: `ROOKERY_ROOT`, else `~/.rookery/projects/<project>/`.
@@ -95,19 +95,19 @@ temporary Rookery root, as `test_held_quarantine.py` does. Write each test first
   - `log_event(root, stream="turn-block", **fields)`: one JSON line through `RotatingFileHandler(maxBytes=1_000_000, backupCount=3)`. `turn-block` writes `<root>/logs/turn-block.jsonl`. `postmaster` writes `<root>/postmaster/postmaster.jsonl`. Use the fields of D15.
   - `open_db()`: `sqlite3.connect(db_path(), timeout=2)`, `PRAGMA busy_timeout=2000`, WAL, `row_factory`, then `rookery.init_db()` (D16).
   - `write_json_atomic(path, obj)`: a temporary file in the same folder, then `os.replace`.
-- [ ] T009 Create part 1 of `rookery_identity.py` (D17, D19):
+- [x] T009 Create part 1 of `rookery_identity.py` (D17, D19):
   - `load_config()` reads `~/.rookery/config.json`. When the file does not exist, it first copies `rookery_config.default.json` there. Inside the zipapp, read the default through the module loader, as `rookery._load_schema()` does.
   - Session functions: `new_session(conn, name=None, binds=())`, `list_sessions`, `get_session(conn, name_or_id)` and `end_session`. `end_session` sets `state=ended` and deletes nothing. A session without a name gets its session ID as its name (D18).
   - Identity functions: `new_identity(conn, session_id, name, previous_id=None)`, `list_identities` and `get_identity`.
   - IDs come from `secrets.token_hex`. The insert checks that the ID is new, and tries again if not.
-- [ ] T010 Create part 2 of `rookery_identity.py` (D20, FR-026, FR-027):
+- [x] T010 Create part 2 of `rookery_identity.py` (D20, FR-026, FR-027):
   - `bindings_from(env, hook_input, config)` returns `kind:value` pairs from `identity_binding_sources`, plus `claude-session:<session_id>` from the hook input.
   - `bind(conn, session_id, agent_id, kind, value)` moves a value that another identity holds, and logs `binding-moved`.
   - `resolve(conn, env, hook_input, root, create=True)` follows the exact order of D20. With `create=False` it creates no identity and moves no binding (D16). It returns `None` and logs `no-session`, or it returns `(session_row, identity_row, bindings)`.
   - Log `created` and `bound` through `turn_block.log_event()`.
   - Run `python3 -m unittest test_identity -v`. All cases must pass.
-- [ ] T011 Create `cli_rookery_session.py` with the `session` and `identity` commands of [contracts/cli-and-hooks.md](contracts/cli-and-hooks.md). Leave `--from` and `identity link` for T026. With `--json`, each command prints one JSON object.
-- [ ] T012 Register the `session` and `identity` subcommands in `rookery_cli.py`, next to `up` and `approve`. Add CLI cases to `test_identity.py`. Each case runs `python3 rookery_cli.py …` as a subprocess and parses the JSON:
+- [x] T011 Create `cli_rookery_session.py` with the `session` and `identity` commands of [contracts/cli-and-hooks.md](contracts/cli-and-hooks.md). Leave `--from` and `identity link` for T026. With `--json`, each command prints one JSON object.
+- [x] T012 Register the `session` and `identity` subcommands in `rookery_cli.py`, next to `up` and `approve`. Add CLI cases to `test_identity.py`. Each case runs `python3 rookery_cli.py …` as a subprocess and parses the JSON:
   - `session new --name alpha`, then `session list`, `session show alpha` and `session end alpha`.
   - After `session end`, the counts of `identities`, `bindings` and `inbox` rows for `alpha` do not change, and `state` reads `ended` (FR-032).
   - `identity new`, `identity bind`, `identity show` and `identity list` (FR-029).
@@ -191,7 +191,7 @@ and 1 bounce (R6).
   - Return `{"outcome", "msg_id", "reason"}`. Log each outcome with `log_event()`.
   - When `send()` raises an error, return `send-failed`. Only for `stop` and `turn`, also write the block to `outbox/<TASK-ID>-<ts>.json`. The `outbox` adapter never puts a block back (D3).
 - [ ] T019 [US1] Create `cli_hook.py` with `stop(args)`. Read the Stop JSON from stdin, open the database with `open_db()`, and call `resolve(create=False)` (D16). Without a session, return at once. With a session but no identity, keep a valid block in `<root>/unresolved/<TASK-ID>-<ts>.json`, log `no-identity`, and return. Else call `dispatch_text()` on `last_assistant_message`. Print nothing: the hook never blocks a stop (FR-017). Put the whole body in `try/except Exception`, log the error, and exit 0. Register `rookery hook session-start|prompt|stop --project NAME` in `rookery_cli.py`. Leave `session-start` and `prompt` empty until T037 and T038.
-- [ ] T020 [US1] Run `python3 -m unittest test_turn_block -v`. All US1 cases must pass. Run `python3 test_held_quarantine.py`. It must still pass.
+- [ ] T020 [US1] Run this after T014, T015, T016, T017, T018, T019. Run `python3 -m unittest test_turn_block -v`. All US1 cases must pass. Run `python3 test_held_quarantine.py`. It must still pass.
 
 **Checkpoint**: an agent can send mail with a block. US1 works alone.
 
@@ -229,7 +229,7 @@ and 1 bounce (R6).
 - [ ] T024 [US2] Write `write_handoff(ws, block, identity, session)` in `turn_block.py`. Use the exact template of [data-model.md](data-model.md). Write to a temporary file in the same folder, then call `os.replace`.
 - [ ] T025 [US2] Edit `dispatch_block()` in `turn_block.py` (FR-009, D11). Call `write_handoff()` for each valid block, before step 3 of T018, only when the adapter is `stop` or `turn`. The `outbox` adapter never writes `HANDOFF.md`: an outbox file is not the end of a turn, and the postmaster writes only `<root>/postmaster/` (constitution VII). A malformed block writes nothing.
 - [ ] T026 [US2] Add `--from SESSION` to `rookery session new`, and add `rookery identity link --previous AGENT_ID`, in `cli_rookery_session.py` (D21). Put the copy logic in `rookery_identity.carry_over(conn, old, new, root)`.
-- [ ] T027 [US2] Run `python3 -m unittest test_turn_block test_identity -v`. All cases must pass.
+- [ ] T027 [US2] Run this after T021, T022, T023, T024, T025, T026. Run `python3 -m unittest test_turn_block test_identity -v`. All cases must pass.
 
 **Checkpoint**: US1 and US2 both work. A hand-off reaches a peer only when the work is done.
 
@@ -339,7 +339,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
   - Without such a binding, log `no-wake-binding` and skip. Do not call `wake()`.
   - Log each push to the `postmaster` stream. Put no herdr or tmux name in the code.
 - [ ] T058 [US4] Make `--nodes` optional in `postmaster.py` (D10, FR-018). Without a roster, `run()` skips the roster steps and runs only the outbox scan and the wake step. With `--nodes`, the behavior stays the same. Add a case to `test_wake.py`: start `python3 postmaster.py --poll 0.2` with no `--nodes` as a subprocess, with an idle identity that has new mail. Within 5 s the fixture script runs once. Then stop the process. Run `python3 test_held_quarantine.py`. It must still pass.
-- [ ] T042 [US4] Run `python3 -m unittest test_hooks test_wake -v`. All cases must pass.
+- [ ] T042 [US4] Run this after T033, T034, T035, T036, T037, T038, T039, T040, T041. Run `python3 -m unittest test_hooks test_wake -v`. All cases must pass.
 
 **Checkpoint**: the agent sees its mail at start, at each prompt and when it is idle. Nothing interrupts its turn.
 
@@ -375,7 +375,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
   3. Read the file and call `dispatch_block()` with the adapter `outbox`.
   4. Move the file to `sent/` or `failed/` as `<TASK-ID>-<file name>`, with a `.result.json`. Never put a file back.
   5. Log each outcome to the `postmaster` stream.
-- [ ] T047 [US5] Run `python3 -m unittest test_turn_block test_outbox -v`. All cases must pass.
+- [ ] T047 [US5] Run this after T043, T044, T045, T046. Run `python3 -m unittest test_turn_block test_outbox -v`. All cases must pass.
 
 **Checkpoint**: all five stories work.
 
@@ -389,9 +389,9 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
 - [ ] T051 [P] Write `CHANGELOG.md` with a 0.7.0 entry for this phase.
 - [ ] T052 [P] Add a short section "rookery init and sessions" to `README.md`, with the commands of quickstart §3.
 - [ ] T053 Lint all prose of this phase (RQ-1.19, FR-024). Collect each bounce note, notice and error text from `turn_block.py`, `cli_hook.py`, `cli_init.py` and `cli_rookery_session.py` into one file in the scratch folder. Run `ste-lint FILE --max-score 2.0 --glossary ste-glossary.txt` on that file and on these files: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, `tasks.md`, `contracts/cli-and-hooks.md`, `rookery_section.md`, `CHANGELOG.md` and the `README.md` section. Also lint the OKF files that this PR changes (constitution VIII covers requirement files and docs): `okf/requirements/rookery-0-7.md`, `okf/design/rookery-stays-in-context.md` and `okf/risks/register.md` (after T057). Fix each failure.
-- [ ] T054 Run the full suite: `python3 -m unittest test_turn_block test_init test_hooks test_identity test_outbox test_wake -v` and `python3 test_held_quarantine.py`. All cases must pass.
+- [ ] T054 Run this after T048, T049, T050, T051, T052. Run the full suite: `python3 -m unittest test_turn_block test_init test_hooks test_identity test_outbox test_wake -v` and `python3 test_held_quarantine.py`. All cases must pass.
 - [ ] T055 Run `spec-pane cover` for this feature. Each of RQ-1.1 to RQ-1.27 must appear in `spec.md` and `tasks.md` (SC-007).
-- [ ] T056 Do the live checks of quickstart §6 with the user. Check the wake in a herdr pane: no notice during a running turn, one notice after it ends (RQ-1.15, RQ-1.23). Check a block after `/compact` (R5, RQ-1.18, SC-003). Check a plain `claude` session without a Rookery session (SC-010). Record each transcript path. These checks need the panes of the user. Do not mark them done from fixtures.
+- [ ] T056 Run this after T053, T054. Do the live checks of quickstart §6 with the user. Check the wake in a herdr pane: no notice during a running turn, one notice after it ends (RQ-1.15, RQ-1.23). Check a block after `/compact` (R5, RQ-1.18, SC-003). Check a plain `claude` session without a Rookery session (SC-010). Record each transcript path. These checks need the panes of the user. Do not mark them done from fixtures.
 - [ ] T057 Edit `~/Documents/code/inter-agent-comms/okf/risks/register.md`. Move R5, R6, R7 and R8 to `proven`. Give the test name or the transcript path of T056 as the evidence for each.
 
 ---
