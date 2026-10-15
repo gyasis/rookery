@@ -229,7 +229,7 @@ and 1 bounce (R6).
 - [x] T024 [US2] Write `write_handoff(ws, block, identity, session)` in `turn_block.py`. Use the exact template of [data-model.md](data-model.md). Write to a temporary file in the same folder, then call `os.replace`.
 - [x] T025 [US2] Edit `dispatch_block()` in `turn_block.py` (FR-009, D11). Call `write_handoff()` for each valid block, before step 3 of T018, only when the adapter is `stop` or `turn`. The `outbox` adapter never writes `HANDOFF.md`: an outbox file is not the end of a turn, and the postmaster writes only `<root>/postmaster/` (constitution VII). A malformed block writes nothing.
 - [x] T026 [US2] Add `--from SESSION` to `rookery session new`, and add `rookery identity link --previous AGENT_ID`, in `cli_rookery_session.py` (D21). Put the copy logic in `rookery_identity.carry_over(conn, old, new, root)`.
-- [ ] T027 [US2] Run this after T021, T022, T023, T024, T025, T026. Run `python3 -m unittest test_turn_block test_identity -v`. All cases must pass.
+- [x] T027 [US2] Run this after T021, T022, T023, T024, T025, T026. Run `python3 -m unittest test_turn_block test_identity -v`. All cases must pass.
 
 **Checkpoint**: US1 and US2 both work. A hand-off reaches a peer only when the work is done.
 
