@@ -455,7 +455,7 @@ def turn(args):
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
             _turn_exit(args, 2, "bad-input", "input is not valid UTF-8",
-                       human="Input is not valid UTF-8. Nothing was sent.")
+                       human="Input is not valid UTF-8. Rookery sent nothing.")
         if not text.strip():
             _turn_exit(args, 2, "bad-input", "empty stdin",
                        human="Empty input. Pipe the text of the turn into rookery turn.")

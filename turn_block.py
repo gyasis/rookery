@@ -297,7 +297,7 @@ def validate(raw, root):
     try:
         return _validate(raw, root)
     except Exception as exc:   # last line of defence: a hook must not crash
-        return None, (f"The block could not be checked ({type(exc).__name__}). "
+        return None, (f"The check of the block failed ({type(exc).__name__}). "
                       "Fix the block, then send it again.")
 
 
@@ -466,7 +466,7 @@ def _hold_and_quarantine(conn, ctx, recipient, body, topic, reason, note, sugges
     raw_to = recipient
     recipient, masked = _quarantine_recipient(conn, raw_to)
     if masked:
-        note += f' (The block was addressed to "{_show(raw_to)}".)'
+        note += f' (You addressed the block to "{_show(raw_to)}".)'
     if conn.in_transaction:
         conn.commit()
     conn.execute("BEGIN IMMEDIATE")
@@ -543,7 +543,7 @@ def _dispatch_block(conn, raw, ctx):
     block, note = validate(raw, root)
 
     if os.environ.get("ROOKERY_URL"):
-        reason = "ROOKERY_URL is set; remote sending is not supported yet"
+        reason = "ROOKERY_URL has a value. Remote sending does not work yet."
         if keep:
             try:
                 _put_back(ctx, block, raw, failed=True)

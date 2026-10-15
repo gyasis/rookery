@@ -108,14 +108,14 @@ def cmd_session_new(args):
             except ValueError:
                 _die("Cannot find the project folder to copy HANDOFF.md files into: the "
                      "current folder name is not a safe project name. Set ROOKERY_ROOT or "
-                     "run from the project folder. No session was created.")
+                     "run from the project folder. Rookery created no session.")
             try:
                 srow, made, copied, failed = ri.new_session_from(
                     conn, old["session_id"], args.name, tuple(binds), root)
             except (ValueError, sqlite3.Error):
                 raise                    # _run maps these (busy -> 4, else 2)
             except RuntimeError as e:
-                _die(f"Could not carry over from {old['name']}: {e} No session was created.")
+                _die(f"Could not carry over from {old['name']}: {e} Rookery created no session.")
             s = _row(srow)
             n_carried = len(made)
         out = {"session_id": s["session_id"], "name": s["name"], "copied": copied}

@@ -183,7 +183,7 @@ def _upsert(path, text):
         raise InitError(
             f"{path}: malformed Rookery markers ({len(starts)} START, {len(ends)} END"
             f"{', END before START' if starts and ends and ends[0][0] < starts[0][0] else ''}); "
-            f"fix the file by hand, nothing was written")
+            f"fix the file by hand. Rookery wrote nothing.")
     a, e = starts[0][1], ends[0][0]
     new_body = nl.join(text.rstrip("\n").split("\n")) + nl
     if old[a:e] == new_body:
@@ -204,7 +204,7 @@ def check_section(path):
     starts, ends = _marker_lines(old)
     if (starts or ends) and (len(starts) != 1 or len(ends) != 1 or ends[0][0] < starts[0][0]):
         raise InitError(f"{path}: malformed Rookery markers ({len(starts)} START, {len(ends)} END); "
-                        f"fix the file by hand, nothing was written")
+                        f"fix the file by hand. Rookery wrote nothing.")
 
 
 def upsert_section(path, text):
@@ -259,12 +259,12 @@ def _merge_event(path, hooks, event, cmd):
         hooks[event] = [{"hooks": [{"type": "command", "command": cmd}]}]
         return "added"
     if not isinstance(groups, list):
-        raise InitError(f"{path}: hooks.{event} is not a list; fix the file by hand, "
-                        f"nothing was written")
+        raise InitError(f"{path}: hooks.{event} is not a list; fix the file by hand. "
+                        f"Rookery wrote nothing.")
     for i, g in enumerate(groups):
         if not isinstance(g, dict) or not isinstance(g.get("hooks"), list):
             raise InitError(f"{path}: hooks.{event}[{i}] is not an object with a "
-                            f"\"hooks\" list; fix the file by hand, nothing was written")
+                            f"\"hooks\" list; fix the file by hand. Rookery wrote nothing.")
     first = None   # the first rookery handler
     changed = False
     for g in list(groups):
@@ -316,7 +316,7 @@ def _merge_hooks(path, project):
             d = {}
             for k, v in items:
                 if k in d:
-                    raise bad(f"duplicate key {k!r} would be silently dropped")
+                    raise bad(f"duplicate key {k!r} appears twice and JSON keeps only one value")
                 d[k] = v
             return d
 
@@ -337,13 +337,13 @@ def _merge_hooks(path, project):
                             f"again.")
         if not isinstance(data, dict):
             raise InitError(f"{path}: the settings file must hold one JSON object; "
-                            f"fix the file by hand, nothing was written")
+                            f"fix the file by hand. Rookery wrote nothing.")
         indent = _detect_indent(old)
         tail = "\n" if old.endswith("\n") else ""
     hooks = data.setdefault("hooks", {})
     if not isinstance(hooks, dict):
-        raise InitError(f"{path}: \"hooks\" is not an object; fix the file by hand, "
-                        f"nothing was written")
+        raise InitError(f"{path}: \"hooks\" is not an object; fix the file by hand. "
+                        f"Rookery wrote nothing.")
     result = {"added": [], "updated": [], "unchanged": []}
     for event, sub in HOOK_EVENTS:
         cmd = f"{_CMD_PREFIX}{sub} --project {project}"
@@ -454,7 +454,7 @@ def main(args):
                 action = upsert_section(ctx, text)
             except InitError as exc:
                 if settings and (settings["added"] or settings["updated"]):
-                    raise InitError(f"{sp} was updated, but {ctx} was not: {exc}") from exc
+                    raise InitError(f"Rookery updated {sp} but not {ctx}: {exc}") from exc
                 raise
     except InitError as exc:
         print(f"rookery init: {exc}", file=sys.stderr)
