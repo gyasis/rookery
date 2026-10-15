@@ -260,6 +260,117 @@ def cmd_identity_link(args):
     _run(args, go)
 
 
+# ----------------------------------------------------------- inbox / peek
+
+
+def _mail_root():
+    import turn_block
+
+    try:
+        return turn_block.project_root(os.path.basename(os.getcwd()))
+    except ValueError:
+        return None
+
+
+def _current_identity(conn, root):
+    """Resolve like the hooks do (D20), writing nothing. Exits 3 when there is no
+    session or no identity."""
+    import rookery_identity as ri
+
+    res = ri.resolve(conn, os.environ, {}, root or os.getcwd(), create=False)
+    if res is None:
+        _die(NO_SESSION_MSG, EXIT_NO_SESSION)
+    s, i, bindings = res
+    if i is None:
+        _die("No current identity. Set ROOKERY_NODE or run: rookery identity new NAME",
+             EXIT_NO_SESSION)
+    return _row(s), _row(i), bindings
+
+
+def _unread_with_bodies(conn, agent_id):
+    """Unread = recipient is me AND status 'pending' (D7). Sender names come from
+    identities.name; the system sender 'rookery' keeps its own name."""
+    rows = conn.execute(
+        "SELECT m.id, m.sender, COALESCE(i.name, m.sender) AS sender_name, m.topic, "
+        "m.body, m.created_at FROM inbox m LEFT JOIN identities i ON i.agent_id = m.sender "
+        "WHERE m.recipient=? AND m.status='pending' ORDER BY m.created_at, m.id",
+        (agent_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _mail_text(s, i, msgs):
+    if not msgs:
+        return f"No unread mail for {i['name']}."
+    lines = [f"{len(msgs)} unread for {i['name']} in session {s['name']}:"]
+    for m in msgs:
+        about = f" about {m['topic']}" if m["topic"] else ""
+        lines.append(f"--- #{m['id']} from {m['sender_name']}{about}")
+        lines.append(m["body"])
+    return "\n".join(lines)
+
+
+def _mail(args, read):
+    import rookery
+    import turn_block
+
+    root = _mail_root()
+
+    def go(conn):
+        s, i, bindings = _current_identity(conn, root)
+        ids = []
+        if read:
+            # One transaction: select, print, then claim+ack. If the reader has gone away the
+            # print fails and nothing changes, so no mail is marked read without being delivered.
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                msgs = _unread_with_bodies(conn, i["agent_id"])
+                ids = [m["id"] for m in msgs]
+                obj = {"agent_id": i["agent_id"], "name": i["name"],
+                       "session_id": s["session_id"], "session": s["name"],
+                       "count": len(msgs), "messages": msgs}
+                text = json.dumps(obj, default=str) if getattr(args, "json", False) \
+                    else _mail_text(s, i, msgs)
+                try:
+                    sys.stdout.write(text + "\n")
+                    sys.stdout.flush()
+                except OSError as exc:      # BrokenPipeError is an OSError
+                    try:
+                        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+                    except (OSError, ValueError):
+                        pass
+                    conn.rollback()
+                    _die(f"inbox: output closed ({exc}); {len(ids)} unread mail left unread", 1)
+                if ids:
+                    rookery.claim(conn, ids, commit=False)    # pending -> inflight
+                    rookery.ack(conn, ids, commit=False)      # inflight -> done
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
+            if root:
+                turn_block.log_event(root, event="inbox-read", session=s["session_id"],
+                                     agent_id=i["agent_id"], name=i["name"],
+                                     bindings=[list(b) for b in bindings],
+                                     count=len(ids), ids=ids)
+            return
+        else:
+            msgs = _unread_with_bodies(conn, i["agent_id"])
+        _out(args, {"agent_id": i["agent_id"], "name": i["name"],
+                    "session_id": s["session_id"], "session": s["name"],
+                    "count": len(msgs), "messages": msgs},
+             _mail_text(s, i, msgs))
+
+    _run(args, go)
+
+
+def cmd_inbox(args):
+    _mail(args, True)
+
+
+def cmd_peek(args):
+    _mail(args, False)
+
+
 # ---------------------------------------------------------------- parser
 
 
@@ -268,7 +379,7 @@ def _json_flag(p):
 
 
 def add_parser(subparsers):
-    """Add the `session` and `identity` commands to a subparsers action."""
+    """Add the `session`, `identity`, `inbox` and `peek` commands to a subparsers action."""
     ps = subparsers.add_parser("session", help="Manage Rookery sessions.")
     ss = ps.add_subparsers(dest="session_cmd", metavar="<action>")
     ss.required = True
@@ -322,3 +433,11 @@ def add_parser(subparsers):
     p.add_argument("--previous", required=True, metavar="AGENT_ID")
     _json_flag(p)
     p.set_defaults(func=cmd_identity_link)
+
+    p = subparsers.add_parser("inbox", help="Read my unread mail and mark it read.")
+    _json_flag(p)
+    p.set_defaults(func=cmd_inbox)
+
+    p = subparsers.add_parser("peek", help="Show my unread mail without changing anything.")
+    _json_flag(p)
+    p.set_defaults(func=cmd_peek)

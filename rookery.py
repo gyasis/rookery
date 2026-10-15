@@ -184,7 +184,7 @@ def fetch_thread(conn, node):
     ).fetchall()
 
 
-def claim(conn, ids):
+def claim(conn, ids, commit=True):
     """Mark messages IN-FLIGHT when a node picks them up, so the poller won't
     re-inject them while they're being processed. If the node crashes before
     ack(), requeue_stale() returns them to 'pending' (no lost mail)."""
@@ -192,16 +192,18 @@ def claim(conn, ids):
         "UPDATE inbox SET status='inflight', claimed_at=? WHERE id=?",
         [(now(), i) for i in ids],
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
-def ack(conn, ids):
+def ack(conn, ids, commit=True):
     """Mark in-flight messages DONE after the turn handled them successfully."""
     conn.executemany(
         "UPDATE inbox SET status='done', delivered=1, delivered_at=? WHERE id=?",
         [(now(), i) for i in ids],
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def dlq(conn, msg_id, reason):

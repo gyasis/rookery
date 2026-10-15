@@ -11,6 +11,7 @@ import re
 import sqlite3
 import tempfile
 import time
+import unicodedata
 
 import rookery
 
@@ -705,3 +706,187 @@ def write_handoff(ws: str, block: dict, identity: dict, session: dict) -> str:
             pass
         raise
     return path
+
+
+# ---- unread mail and failed-block notices (T036, research D7 / D23) ----------------------
+
+MAX_FAILED_LISTED = 20   # newest failed blocks one notice pass will list
+
+
+def unread(conn, agent_id) -> list:
+    """Unread mail of agent_id (D7): recipient=agent_id and status='pending', oldest first.
+    Rows: id, sender (raw), sender_name, topic, created_at, session_id. No body.
+    sender_name: identities.name for an agent ID; the string itself otherwise
+    ("rookery" for a bounce or other system sender, a node name for legacy mail)."""
+    rows = conn.execute(
+        "SELECT i.id, i.sender, i.topic, i.created_at, i.session_id, d.name AS sender_name "
+        "FROM inbox i LEFT JOIN identities d ON d.agent_id = i.sender "
+        "WHERE i.recipient=? AND i.status='pending' ORDER BY i.created_at, i.id",
+        (agent_id,)).fetchall()
+    out = []
+    for r in rows:
+        r = dict(r) if not isinstance(r, dict) else r
+        out.append({"id": r["id"], "sender": r["sender"],
+                    "sender_name": r["sender_name"] or r["sender"],
+                    "topic": r["topic"], "created_at": r["created_at"],
+                    "session_id": r["session_id"]})
+    return out
+
+
+def unread_summary(conn, agent_id) -> dict:
+    """{"count", "senders", "tasks"}: de-duplicated, first-seen order; tasks = topics, None/empty skipped."""
+    rows = unread(conn, agent_id)
+    senders, tasks = [], []
+    for r in rows:
+        if r["sender_name"] not in senders:
+            senders.append(r["sender_name"])
+        t = r["topic"]
+        if t and t not in tasks:
+            tasks.append(t)
+    return {"count": len(rows), "senders": senders, "tasks": tasks}
+
+
+_DROP_CATEGORIES = ("Cc", "Cf", "Cs", "Zl", "Zp")
+MAX_NOTICE_LISTED = 5     # senders / tasks named in one notice line
+MAX_NOTICE_LEN = 400      # hard cap on one notice line
+_NOTICE_TAIL = ". Read them with: rookery inbox"
+
+
+def notice_field(s, cap=64) -> str:
+    """One free-form value made safe to print or type into a pane: no control, format, surrogate or
+    line/paragraph-separator characters (ESC, ^C, DEL, bidi marks, U+2028/9), whitespace runs
+    collapsed to one space, stripped, cut at cap characters with an ellipsis."""
+    s = "".join(c for c in str(s) if unicodedata.category(c) not in _DROP_CATEGORIES)
+    s = " ".join(s.split())
+    return s if len(s) <= cap else s[:cap - 1] + "\u2026"
+
+
+def notice_list(items, limit=MAX_NOTICE_LISTED, cap=64) -> str:
+    """Comma list of cleaned items; more than limit become 'a, b, ... and N more'."""
+    items = list(items)
+    shown = ", ".join(notice_field(x, cap) for x in items[:limit])
+    return shown + (f" and {len(items) - limit} more" if len(items) > limit else "")
+
+
+def cap_notice(head, tail, cap=MAX_NOTICE_LEN) -> str:
+    """head + tail, cut inside head (never the tail) when longer than cap."""
+    if len(head) + len(tail) > cap:
+        head = head[:max(cap - len(tail) - 1, 0)] + "\u2026"
+    return head + tail
+
+
+def format_unread_line(summary):
+    """Contract line for the unread notice; None when there is no unread mail."""
+    if not summary or not summary.get("count"):
+        return None
+    head = f"[rookery] {summary['count']} unread from {notice_list(summary['senders'])}"
+    if summary.get("tasks"):
+        head += f" about {notice_list(summary['tasks'])}"
+    return cap_notice(head, _NOTICE_TAIL)
+
+
+def format_failed_line(item) -> str:
+    """Contract line for one failed block (D23)."""
+    return (f"[rookery] Your block for {notice_field(item.get('task') or 'no-task')} failed "
+            f"({notice_field(item.get('reason') or 'unknown')}). It is kept in "
+            f"{notice_field(item['path'], 200)}. "
+            "Fix the cause, then send the block again.")
+
+
+def _seen_path(root, session_name, agent_name) -> str:
+    return os.path.join(workspace(root, session_name, agent_name), "state", "failed-seen.json")
+
+
+def _load_seen(path) -> set:
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        return {x for x in data if isinstance(x, str)} if isinstance(data, list) else set()
+    except (OSError, ValueError):
+        return set()
+
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def new_failed_blocks(root, session_name, agent_name) -> list:
+    """Failed blocks of this identity that state/failed-seen.json does not name (D23). Read-only.
+    Items: {"file", "path", "task", "reason"}. "file" is the seen key, prefixed by origin so the
+    two folders cannot collide: "postmaster/<name>.result.json" or "outbox/<name>.json".
+    Postmaster items: task/reason from the .result.json; path is the kept block next to it
+    (the result name minus .result.json) if present, else the result file. Workspace items:
+    task from the block JSON (else the file's TASK prefix), reason = its "reason" key if a
+    string, else "remote-unsupported". Newest MAX_FAILED_LISTED by mtime, oldest first;
+    unreadable or corrupt files are skipped; never raises."""
+    try:
+        _check_name("session", session_name)
+        _check_name("agent", agent_name)
+        ws = os.path.join(root, "agents", session_name, agent_name)
+        seen = _load_seen(os.path.join(ws, "state", "failed-seen.json"))
+        found = []   # (mtime, item)
+        pdir = os.path.join(root, "postmaster", "outbox", session_name, agent_name, "failed")
+        wdir = os.path.join(ws, "outbox", "failed")
+        for d, prefix, suffix in ((pdir, "postmaster", ".result.json"), (wdir, "outbox", ".json")):
+            try:
+                names = os.listdir(d)
+            except OSError:
+                continue
+            for fn in names:
+                if not fn.endswith(suffix) or fn.startswith(".tmp-"):
+                    continue
+                if prefix == "outbox" and fn.endswith(".result.json"):
+                    continue
+                key = f"{prefix}/{fn}"
+                if key in seen:
+                    continue
+                path = os.path.join(d, fn)
+                if os.path.islink(path):
+                    continue
+                data = _read_json(path)
+                if not isinstance(data, dict):
+                    continue
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                task, reason = data.get("task"), data.get("reason")
+                if prefix == "postmaster":
+                    block = path[:-len(".result.json")]
+                    shown = block if os.path.exists(block) else path
+                    reason = reason if isinstance(reason, str) and reason else (
+                        data.get("outcome") if isinstance(data.get("outcome"), str) else "failed")
+                else:
+                    shown = path
+                    reason = reason if isinstance(reason, str) and reason else "remote-unsupported"
+                    if not isinstance(task, str):
+                        task = fn.rsplit("-", 1)[0] if "-" in fn else None
+                if not isinstance(task, str) or not task:
+                    task = None
+                found.append((mtime, {"file": key, "path": os.path.abspath(shown),
+                                      "task": task, "reason": reason}))
+        found.sort(key=lambda p: (p[0], p[1]["file"]))
+        return [it for _, it in found[-MAX_FAILED_LISTED:]]
+    except Exception:
+        return []
+
+
+def mark_failed_seen(root, session_name, agent_name, files) -> None:
+    """Add the "file" keys of printed failed blocks to state/failed-seen.json (atomic).
+    The identity's own workspace, so the hook is its only writer."""
+    path = _seen_path(root, session_name, agent_name)
+    seen = _load_seen(path)
+    seen.update(f for f in files if isinstance(f, str))
+    folders = {"postmaster": os.path.join(root, "postmaster", "outbox", session_name, agent_name, "failed"),
+               "outbox": os.path.join(root, "agents", session_name, agent_name, "outbox", "failed")}
+
+    def alive(key):      # keys name a file in one of the two folders; drop the ones that are gone
+        origin, _, fn = key.partition("/")
+        return origin in folders and os.path.lexists(os.path.join(folders[origin], fn))
+
+    seen = {k for k in seen if alive(k)}
+    write_json_atomic(path, sorted(seen))

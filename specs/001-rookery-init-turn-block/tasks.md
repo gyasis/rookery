@@ -294,7 +294,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
 
 ### Tests first
 
-- [ ] T033 [P] [US4] Write `test_hooks.py` (RQ-1.12, RQ-1.13, RQ-1.14, RQ-1.24, FR-015 to FR-017, FR-037, SC-005, SC-006, SC-010). Run each hook as a subprocess. Check these cases:
+- [x] T033 [P] [US4] Write `test_hooks.py` (RQ-1.12, RQ-1.13, RQ-1.14, RQ-1.24, FR-015 to FR-017, FR-037, SC-005, SC-006, SC-010). Run each hook as a subprocess. Check these cases:
   - Without a session, each hook prints 0 bytes. The tables `nodes`, `identities` and `inbox` do not change.
   - Session start prints `[rookery] You are <name> (<agent_id>) in Rookery session <name>.`, then the newest `HANDOFF.md`, then the unread line.
   - Session start calls `register_node(agent_id, kind="pane", lifecycle="persistent")`.
@@ -314,7 +314,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
   - Neither command accepts `--as` or `--all`.
   - Each call logs `inbox-read` with the agent ID and the bindings.
   - Without a session, both exit 3 with the message of the contract.
-- [ ] T035 [P] [US4] Write `test_wake.py` (RQ-1.15, RQ-1.23, FR-018, FR-028). Put a fixture script `fixtures/bin/herdr` on `PATH`. The script appends its arguments as one JSON line to a file. Check these cases:
+- [x] T035 [P] [US4] Write `test_wake.py` (RQ-1.15, RQ-1.23, FR-018, FR-028). Put a fixture script `fixtures/bin/herdr` on `PATH`. The script appends its arguments as one JSON line to a file. Check these cases:
   - An idle identity has the binding `herdr-pane:w1:p2` and new pending mail. The script runs once for each command of the `wake` entry, as an argument list, with `{value}` and `{text}` filled in.
   - The text names the sender name, the task and `rookery inbox`.
   - A second loop without new mail runs nothing (`<root>/postmaster/pushed/<agent_id>.json`).
@@ -326,12 +326,12 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
 
 ### Implementation
 
-- [ ] T036 [US4] Write `unread(conn, agent_id)` and `unread_summary(conn, agent_id)` in `turn_block.py` (D7). Unread rows have `recipient=<agent_id>` and `status='pending'`. The summary gives the count, the sender names and the task IDs. Map each agent ID to its name through `identities`. A bounce has the sender name `rookery`. Also write `new_failed_blocks(root, session, name)` (D23). It lists the failed blocks in `<root>/postmaster/outbox/<session>/<name>/failed/` and `agents/<session>/<name>/outbox/failed/` that `state/failed-seen.json` does not name.
+- [x] T036 [US4] Write `unread(conn, agent_id)` and `unread_summary(conn, agent_id)` in `turn_block.py` (D7). Unread rows have `recipient=<agent_id>` and `status='pending'`. The summary gives the count, the sender names and the task IDs. Map each agent ID to its name through `identities`. A bounce has the sender name `rookery`. Also write `new_failed_blocks(root, session, name)` (D23). It lists the failed blocks in `<root>/postmaster/outbox/<session>/<name>/failed/` and `agents/<session>/<name>/outbox/failed/` that `state/failed-seen.json` does not name.
 - [ ] T037 [US4] Write `session_start(args)` in `cli_hook.py` (FR-015, D9). Resolve the identity. Without a session, return. Else register the node. When `CLAUDE_ENV_FILE` is set, append the exports. Write `state/turn.json` with `idle`. Then print the who-am-I line, the newest `runs/*/HANDOFF.md` by mtime, the unread line, and one line for each new failed block. Add each shown block to `state/failed-seen.json`.
 - [ ] T038 [US4] Write `prompt(args)` in `cli_hook.py` (FR-016). Write `state/turn.json` with `busy`. Print one line only when unread mail exists: `[rookery] N unread from A, B about TASK-1, TASK-2. Read them with: rookery inbox`. Then print one line for each new failed block, with the text of D23, and add it to `state/failed-seen.json` (FR-037). Print nothing else.
 - [ ] T039 [US4] Add the idle write to `stop()` in `cli_hook.py` (FR-017, D8). After `dispatch_text()`, write `state/turn.json` with `{"state": "idle", "since": ts}` through `write_json_atomic()`. Never print and never block.
-- [ ] T040 [US4] Add `rookery inbox` and `rookery peek` to `cli_rookery_session.py`, and register them in `rookery_cli.py` (FR-031). `inbox` calls `rookery.claim()` and `rookery.ack()` on the listed IDs. Log `inbox-read`. Without a session, exit 3.
-- [ ] T041 [US4] Add the wake step to `postmaster.run()` in `postmaster.py` (D10, FR-018, FR-028):
+- [x] T040 [US4] Add `rookery inbox` and `rookery peek` to `cli_rookery_session.py`, and register them in `rookery_cli.py` (FR-031). `inbox` calls `rookery.claim()` and `rookery.ack()` on the listed IDs. Log `inbox-read`. Without a session, exit 3.
+- [x] T041 [US4] Add the wake step to `postmaster.run()` in `postmaster.py` (D10, FR-018, FR-028):
   - Open the database with `turn_block.open_db()`, so the postmaster and the hooks use the same `db_path()` (D6).
   - Each loop, find each identity in an open session with pending mail above the ID in `<root>/postmaster/pushed/<agent_id>.json`.
   - Push only when its `state/turn.json` reads `idle`. Read that file; never write it. No file: log `no-idle-state` and skip.
