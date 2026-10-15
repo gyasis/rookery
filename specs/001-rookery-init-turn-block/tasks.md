@@ -339,7 +339,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
   - Without such a binding, log `no-wake-binding` and skip. Do not call `wake()`.
   - Log each push to the `postmaster` stream. Put no herdr or tmux name in the code.
 - [x] T058 [US4] Make `--nodes` optional in `postmaster.py` (D10, FR-018). Without a roster, `run()` skips the roster steps and runs only the outbox scan and the wake step. With `--nodes`, the behavior stays the same. Add a case to `test_wake.py`: start `python3 postmaster.py --poll 0.2` with no `--nodes` as a subprocess, with an idle identity that has new mail. Within 5 s the fixture script runs once. Then stop the process. Run `python3 test_held_quarantine.py`. It must still pass.
-- [ ] T042 [US4] Run this after T033, T034, T035, T036, T037, T038, T039, T040, T041. Run `python3 -m unittest test_hooks test_wake -v`. All cases must pass.
+- [x] T042 [US4] Run this after T033, T034, T035, T036, T037, T038, T039, T040, T041. Run `python3 -m unittest test_hooks test_wake -v`. All cases must pass.
 
 **Checkpoint**: the agent sees its mail at start, at each prompt and when it is idle. Nothing interrupts its turn.
 
