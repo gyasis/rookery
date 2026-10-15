@@ -207,8 +207,8 @@ and 1 bounce (R6).
 
 ### Tests first
 
-- [ ] T021 [P] [US2] Create `fixtures/turns/ask-in-progress.txt`: an `ask` with `status: in-progress`, two `artifacts`, two `read` entries and a `self_check.gap`.
-- [ ] T022 [US2] Add these cases to `test_turn_block.py` (RQ-1.6, RQ-1.7, RQ-1.8, R7, SC-002, SC-008):
+- [x] T021 [P] [US2] Create `fixtures/turns/ask-in-progress.txt`: an `ask` with `status: in-progress`, two `artifacts`, two `read` entries and a `self_check.gap`.
+- [x] T022 [US2] Add these cases to `test_turn_block.py` (RQ-1.6, RQ-1.7, RQ-1.8, R7, SC-002, SC-008):
   - `handoff-in-progress` gives 0 rows and a `HANDOFF.md` with `status: in-progress`.
   - `handoff-done` gives 1 row and `status: done`.
   - `ask-in-progress` gives 1 row.
@@ -218,7 +218,7 @@ and 1 bounce (R6).
   - A malformed block leaves `HANDOFF.md` unchanged.
   - `wrong-recipient` and `off-team` rewrite `HANDOFF.md`.
   - Each file that Rookery wrote under the workspace for `TASK-12` has `TASK-12` in its path, and a `task: TASK-12` line (Markdown) or a `"task": "TASK-12"` key (JSON). This covers `HANDOFF.md` and the put-back files of T015 (FR-010).
-- [ ] T023 [P] [US2] Add these cases to `test_identity.py` (FR-036, RQ-1.26):
+- [x] T023 [P] [US2] Add these cases to `test_identity.py` (FR-036, RQ-1.26):
   - `session new --from alpha` creates one identity for each name of `alpha`, with `previous_id` set.
   - It copies the newest `runs/*/HANDOFF.md` of each name into the new workspace, and logs each copy.
   - It copies no mail, no `state/` file and no binding.
@@ -226,9 +226,9 @@ and 1 bounce (R6).
 
 ### Implementation
 
-- [ ] T024 [US2] Write `write_handoff(ws, block, identity, session)` in `turn_block.py`. Use the exact template of [data-model.md](data-model.md). Write to a temporary file in the same folder, then call `os.replace`.
+- [x] T024 [US2] Write `write_handoff(ws, block, identity, session)` in `turn_block.py`. Use the exact template of [data-model.md](data-model.md). Write to a temporary file in the same folder, then call `os.replace`.
 - [ ] T025 [US2] Edit `dispatch_block()` in `turn_block.py` (FR-009, D11). Call `write_handoff()` for each valid block, before step 3 of T018, only when the adapter is `stop` or `turn`. The `outbox` adapter never writes `HANDOFF.md`: an outbox file is not the end of a turn, and the postmaster writes only `<root>/postmaster/` (constitution VII). A malformed block writes nothing.
-- [ ] T026 [US2] Add `--from SESSION` to `rookery session new`, and add `rookery identity link --previous AGENT_ID`, in `cli_rookery_session.py` (D21). Put the copy logic in `rookery_identity.carry_over(conn, old, new, root)`.
+- [x] T026 [US2] Add `--from SESSION` to `rookery session new`, and add `rookery identity link --previous AGENT_ID`, in `cli_rookery_session.py` (D21). Put the copy logic in `rookery_identity.carry_over(conn, old, new, root)`.
 - [ ] T027 [US2] Run this after T021, T022, T023, T024, T025, T026. Run `python3 -m unittest test_turn_block test_identity -v`. All cases must pass.
 
 **Checkpoint**: US1 and US2 both work. A hand-off reaches a peer only when the work is done.

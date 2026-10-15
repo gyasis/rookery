@@ -121,6 +121,17 @@ def new_session(conn, name=None, binds=()) -> dict:
     name=None -> the name is the session ID. A name is unique forever, including
     names of ended sessions (ValueError). binds: iterable of (kind, value) or
     'kind:value' strings; each is stored as a session binding."""
+    try:
+        row = _new_session(conn, name, binds)
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+    return row
+
+
+def _new_session(conn, name=None, binds=()) -> dict:
+    """new_session without commit or rollback (the caller owns the transaction)."""
     if name is not None:
         safe_name(name, "session name")
         _no_id_lookalike(name, "session name")
@@ -141,18 +152,12 @@ def new_session(conn, name=None, binds=()) -> dict:
         except sqlite3.IntegrityError:
             if name is not None and _one(
                     conn, "SELECT 1 FROM rookery_sessions WHERE name=?", (name,)):
-                conn.rollback()
                 raise ValueError(f"The session name {name!r} is already used.")
             continue  # ID or auto-name clash: try a new ID
-        try:
-            for kind, value in pairs:
-                conn.execute(
-                    "INSERT INTO bindings(session_id, owner_type, owner_id, kind, value, "
-                    "created_at) VALUES(?,?,?,?,?,?)", (sid, "session", sid, kind, value, created))
-        except sqlite3.Error:
-            conn.rollback()
-            raise
-        conn.commit()
+        for kind, value in pairs:
+            conn.execute(
+                "INSERT INTO bindings(session_id, owner_type, owner_id, kind, value, "
+                "created_at) VALUES(?,?,?,?,?,?)", (sid, "session", sid, kind, value, created))
         return get_session(conn, sid)
     raise RuntimeError("Could not generate a unique session ID after "
                        f"{_ID_TRIES} tries.")
@@ -444,3 +449,193 @@ def _resolve_identity(conn, env, hook_input, root, config, session, create):
             result, holder = _bind(conn, sid, identity["agent_id"], kind, value)
             _log_bind(root, result, holder, sid, identity["agent_id"], kind, value)
     return session, identity, presented
+
+
+# --- carry-over (D21) ------------------------------------------------------
+def _newest_handoff(root, old_name, name):
+    """Newest runs/*/HANDOFF.md of an old workspace as (task, real_path), or None.
+    Newest by mtime, ties by path. Skips unsafe task names, non-regular files and
+    any file whose real path leaves the old workspace (symlink escape). The old
+    session folder must itself stay inside the project root, and the workspace inside
+    the session folder, so a symlinked agents/<old>/<name> pointing out is skipped."""
+    import turn_block
+    runs = os.path.join(root, "agents", old_name, name, "runs")
+    try:
+        tasks = os.listdir(runs)
+    except OSError:
+        return None
+    root_real = os.path.realpath(root)
+    sess = os.path.realpath(os.path.join(root, "agents", old_name))
+    base = os.path.realpath(os.path.join(root, "agents", old_name, name))
+    if (os.path.commonpath([root_real, sess]) != root_real
+            or os.path.commonpath([sess, base]) != sess or base == sess):
+        return None
+    best = None
+    for task in tasks:
+        if not turn_block.is_safe_name(task):
+            continue
+        real = os.path.realpath(os.path.join(runs, task, "HANDOFF.md"))
+        if os.path.commonpath([base, real]) != base or not os.path.isfile(real):
+            continue
+        key = (os.path.getmtime(real), real)
+        if best is None or key > best[0]:
+            best = (key, task, real)
+    return (best[1], best[2]) if best else None
+
+
+_HANDOFF_MAX = 1024 * 1024
+
+
+def _carry_identities(conn, o, n):
+    """Create each identity of session row `o` in session row `n` (previous_id = the
+    old agent_id). No commit: the caller owns the transaction."""
+    return [(i, _new_identity(conn, n["session_id"], i["name"], i["agent_id"]))
+            for i in list_identities(conn, o["session_id"])]
+
+
+def _copy_handoff(root, src, new_name, name, task):
+    """Copy src to the new workspace's runs/<task>/HANDOFF.md; return the new path.
+    Never overwrites (FileExistsError), never follows a symlink out of the new
+    workspace, and always removes its temp file."""
+    import tempfile
+    import turn_block
+    with open(src, "rb") as fh:
+        data = fh.read(_HANDOFF_MAX + 1)
+    if len(data) > _HANDOFF_MAX:
+        raise ValueError(f"{src} is larger than {_HANDOFF_MAX} bytes")
+    ws = os.path.realpath(turn_block.workspace(root, new_name, name))
+    sess = os.path.realpath(os.path.join(root, "agents", new_name))
+    dest_dir = os.path.join(ws, "runs", task)
+
+    def inside():
+        real = os.path.realpath(dest_dir)
+        return (os.path.commonpath([sess, ws]) == sess and ws != sess
+                and os.path.commonpath([ws, real]) == ws)
+    if not inside():
+        raise ValueError("destination leaves the new workspace")
+    os.makedirs(dest_dir, exist_ok=True)
+    if not inside():
+        raise ValueError("destination leaves the new workspace")
+    dest = os.path.join(dest_dir, "HANDOFF.md")
+    if os.path.lexists(dest):
+        raise FileExistsError("exists")
+    fd, tmp = tempfile.mkstemp(dir=dest_dir, prefix=".tmp-", suffix=".md")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+        um = os.umask(0)
+        os.umask(um)
+        os.chmod(tmp, 0o666 & ~um)       # mkstemp makes 0600; match other files
+        os.replace(tmp, dest)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    return dest
+
+
+def _carry_files(o_name, n, made, root):
+    """After the commit: copy each carried agent's newest HANDOFF.md.
+    Returns (copied, failed); failed is [{name, task, reason}]."""
+    copied, failed = [], []
+    for old_i, new_i in made:
+        name = new_i["name"]
+        task = None
+        try:
+            found = _newest_handoff(root, o_name, name) if root else None
+            if not found:
+                continue
+            task, src = found
+            dest = _copy_handoff(root, src, n["name"], name, task)
+        except (OSError, ValueError) as e:
+            reason = "exists" if isinstance(e, FileExistsError) else str(e) or type(e).__name__
+            _log(root, event="carry-over-failed", outcome="carry-over-failed",
+                 session=n["session_id"], agent_id=new_i["agent_id"], name=name,
+                 task=task, reason=reason)
+            failed.append({"name": name, "task": task, "reason": reason})
+            continue
+        _log(root, event="carried-over", outcome="carried-over",
+             session=n["session_id"], agent_id=new_i["agent_id"], name=name,
+             task=task, previous_id=old_i["agent_id"], **{"from": src})
+        copied.append({"name": name, "agent_id": new_i["agent_id"],
+                       "previous_id": old_i["agent_id"], "task": task,
+                       "path": dest, "handoff": dest})
+    return copied, failed
+
+
+def carry_over(conn, old, new, root):
+    """Carry an old session's agents into an existing new session (D21).
+
+    For each identity of `old` (session ID or name), create the same name in `new`
+    with previous_id = the old agent_id (one BEGIN IMMEDIATE transaction), then,
+    after the commit, copy the newest runs/*/HANDOFF.md of that name into the new
+    workspace and log 'carried-over'. Copies no mail, no state/ file and no binding.
+    Returns (copied, failed): copied is [{name, agent_id, previous_id, task, path,
+    handoff}] (path == handoff == the new file); failed is [{name, task, reason}].
+    ValueError for an unknown session."""
+    o, n = get_session(conn, old), get_session(conn, new)
+    if o is None:
+        raise ValueError(f"No Rookery session {old!r}.")
+    if n is None:
+        raise ValueError(f"No Rookery session {new!r}.")
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        made = _carry_identities(conn, o, n)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return _carry_files(o["name"], n, made, root)
+
+
+def new_session_from(conn, old, name, binds, root):
+    """Create a new session AND carry `old`'s agents into it in ONE BEGIN IMMEDIATE
+    transaction (all or nothing: on any error no session row remains), then copy the
+    HANDOFF.md files after the commit. Returns (session_row, made, copied, failed)
+    where made is the list of new identity rows."""
+    o = get_session(conn, old)
+    if o is None:
+        raise ValueError(f"No Rookery session {old!r}.")
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        s = _new_session(conn, name, binds)
+        made = _carry_identities(conn, o, s)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    copied, failed = _carry_files(o["name"], s, made, root)
+    return s, [m[1] for m in made], copied, failed
+
+
+def link_previous(conn, agent_id, previous_id) -> dict:
+    """Set previous_id on an identity by hand (D21). previous_id must be an existing
+    agent ID, not the identity itself. Moves nothing else. Returns the updated row."""
+    cur = get_identity(conn, agent_id)
+    if cur is None:
+        raise ValueError(f"No identity {agent_id!r}.")
+    prev = _one(conn, "SELECT agent_id FROM identities WHERE agent_id=?", (previous_id,))
+    if prev is None:
+        raise ValueError(f"No identity {previous_id!r} to link to. "
+                         "List identities with: rookery identity list --session SESSION")
+    if previous_id == cur["agent_id"]:
+        raise ValueError("An identity cannot be its own previous identity.")
+    seen, nxt = set(), previous_id       # walk the chain; reaching `cur` would be a cycle
+    for _ in range(1000):
+        if nxt is None or nxt in seen:
+            break
+        if nxt == cur["agent_id"]:
+            raise ValueError(f"Linking {cur['agent_id']} to {previous_id} would make a "
+                             "cycle of previous identities.")
+        seen.add(nxt)
+        row = _one(conn, "SELECT previous_id FROM identities WHERE agent_id=?", (nxt,))
+        nxt = row["previous_id"] if row else None
+    conn.execute("UPDATE identities SET previous_id=? WHERE agent_id=?",
+                 (previous_id, cur["agent_id"]))
+    conn.commit()
+    return get_identity(conn, cur["agent_id"])

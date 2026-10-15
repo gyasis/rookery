@@ -815,5 +815,222 @@ class NeverRaises(Base):
         self._check(ctx, expect_log=False)
 
 
+SECTIONS = ["## Last thing I did", "## State now (what exists, with paths)",
+            "## What is left", "## Open threads"]
+
+
+class HandoffFile(Base):
+    """T022 [US2] (RQ-1.6, RQ-1.7, RQ-1.8, R7, SC-002, SC-008, FR-009, FR-010, D11).
+
+    HANDOFF.md is written by dispatch_block for the `stop` and `turn` adapters only (T025).
+    Written test-first: these fail until write_handoff exists and is wired in."""
+
+    def handoff_path(self, task="TASK-12"):
+        return os.path.join(self.root, "agents", "alpha", "me", "runs", task, "HANDOFF.md")
+
+    def read_handoff(self):
+        p = self.handoff_path()
+        self.assertTrue(os.path.exists(p), f"HANDOFF.md missing; files: {self.all_files()}")
+        with open(p, encoding="utf-8") as fh:
+            return fh.read()
+
+    def parse(self, text):
+        """(frontmatter dict, {section heading: [non-empty body lines]}, heading order)."""
+        lines = text.split("\n")
+        self.assertEqual(lines[0], "---", text)
+        end = lines.index("---", 1)
+        front = {}
+        for ln in lines[1:end]:
+            k, _, v = ln.partition(":")
+            front[k.strip()] = v.strip()
+        secs, order, cur = {}, [], None
+        for ln in lines[end + 1:]:
+            if ln.startswith("## "):
+                cur = ln.rstrip()
+                order.append(cur)
+                secs[cur] = []
+            elif cur is not None and ln.strip():
+                secs[cur].append(ln.strip())
+        return front, secs, order
+
+    def block_ctx(self, adapter):
+        c = dict(self.ctx)
+        c["adapter"] = adapter
+        return c
+
+    def test_handoff_in_progress_writes_in_progress(self):
+        res = self.run_fixture("handoff-in-progress.txt")
+        self.assertEqual(res["outcome"], "handoff-pending")
+        self.assertEqual(self.rows(), [])
+        front, _, _ = self.parse(self.read_handoff())
+        self.assertEqual(front["status"], "in-progress")
+
+    def test_handoff_done_writes_done(self):
+        self.run_fixture("handoff-done.txt")
+        self.assertEqual(len(self.rows()), 1)
+        front, _, _ = self.parse(self.read_handoff())
+        self.assertEqual(front["status"], "done")
+
+    def test_ask_in_progress_one_row(self):
+        res = self.run_fixture("ask-in-progress.txt")
+        self.assertEqual(res["outcome"], "sent")
+        self.assertEqual(len(self.rows()), 1)
+        front, _, _ = self.parse(self.read_handoff())
+        self.assertEqual(front["status"], "in-progress")
+
+    def test_frontmatter_fields(self):
+        self.run_fixture("ask-in-progress.txt")
+        front, _, _ = self.parse(self.read_handoff())
+        self.assertEqual(front["type"], "Handoff")
+        self.assertEqual(front["task"], "TASK-12")
+        self.assertEqual(front["agent"], "me")
+        self.assertEqual(front["agent_id"], self.me["agent_id"])
+        self.assertEqual(front["session"], "alpha")
+        self.assertTrue(front["updated"])
+        self.assertIn(front["status"], ("done", "in-progress"))
+
+    def test_sections_in_order_with_fixture_content(self):
+        self.run_fixture("ask-in-progress.txt")
+        text = self.read_handoff()
+        _, secs, order = self.parse(text)
+        self.assertEqual(order, SECTIONS)
+        self.assertIn("Does clause 4 of the lease", "\n".join(secs[SECTIONS[0]]))
+        state = "\n".join(secs[SECTIONS[1]])
+        for needle in ("docs/lease.md", "Lease draft under review",
+                       "notes/clause4.md", "My notes on the subletting clause"):
+            self.assertIn(needle, state)
+        # one line per artifact, then one line per read pointer (read entries repeat the paths)
+        self.assertGreaterEqual(len(secs[SECTIONS[1]]), 4)
+        self.assertIn("Clause 7 notice period is not yet checked", "\n".join(secs[SECTIONS[2]]))
+        threads = "\n".join(secs[SECTIONS[3]])
+        for needle in ("lease-review", "law-counsel", "ask"):
+            self.assertIn(needle, threads)
+
+    def test_defaults_without_gap_and_thread(self):
+        self.run_fixture("handoff-done.txt")      # no self_check, no thread, no artifacts
+        _, secs, order = self.parse(self.read_handoff())
+        self.assertEqual(order, SECTIONS)
+        self.assertEqual(secs[SECTIONS[2]], ["Nothing stated."])
+        self.assertEqual(secs[SECTIONS[3]], ["None."])
+
+    def test_malformed_leaves_existing_handoff_unchanged(self):
+        p = self.handoff_path()
+        os.makedirs(os.path.dirname(p))
+        known = "---\ntype: Handoff\ntask: TASK-12\n---\nknown content\n"
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(known)
+        for name in ("malformed-json.txt", "malformed-status.txt", "malformed-say-long.txt"):
+            self.run_fixture(name)
+        with open(p, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), known)
+
+    def test_malformed_creates_no_handoff(self):
+        for name in ("malformed-json.txt", "malformed-missing-to.txt", "no-block.txt"):
+            self.run_fixture(name)
+        self.assertFalse(os.path.exists(self.handoff_path()), self.all_files())
+
+    def test_wrong_recipient_rewrites_handoff(self):
+        self.run_fixture("wrong-recipient.txt")
+        front, _, _ = self.parse(self.read_handoff())
+        self.assertEqual(front["task"], "TASK-12")
+
+    def test_off_team_rewrites_handoff(self):
+        self.run_fixture("off-team.txt")
+        front, _, _ = self.parse(self.read_handoff())
+        self.assertEqual(front["task"], "TASK-12")
+
+    def test_rewrite_replaces_previous_content(self):
+        self.run_fixture("handoff-in-progress.txt")
+        self.run_fixture("handoff-done.txt")
+        text = self.read_handoff()
+        front, _, _ = self.parse(text)
+        self.assertEqual(front["status"], "done")
+        self.assertNotIn("Clauses 1-3 are done", text)       # old body is gone
+        self.assertIn("Lease review complete", text)
+
+    def test_outbox_adapter_never_writes_handoff(self):    # D11
+        for name in ("valid-ask.txt", "handoff-done.txt", "ask-in-progress.txt"):
+            raw = fixture_text(name).split("```rookery\n", 1)[1].rsplit("```", 1)[0]
+            TB.dispatch_block(self.conn, raw, self.block_ctx("outbox"))
+        self.assertGreaterEqual(len(self.rows()), 1)       # mail outcomes are the same
+        self.assertFalse(os.path.exists(self.handoff_path()), self.all_files())
+        self.assertEqual(glob.glob(os.path.join(self.root, "**", "HANDOFF.md"), recursive=True), [])
+
+    def test_turn_adapter_writes_handoff(self):
+        self.run_fixture("handoff-done.txt", self.block_ctx("turn"))
+        front, _, _ = self.parse(self.read_handoff())
+        self.assertEqual(front["status"], "done")
+
+    def test_task_id_in_path_and_content_of_every_written_file(self):   # FR-010
+        # HANDOFF.md from a valid block, plus a put-back file from a real send failure.
+        # NOTE: only VALID-block put-backs are checked. A malformed put-back is stored as
+        # {"raw": ...} (no parsed "task" key), so FR-010 cannot apply to it.
+        self.run_fixture("ask-in-progress.txt")
+        self.conn.execute("CREATE TRIGGER boom BEFORE INSERT ON inbox "
+                          "BEGIN SELECT RAISE(ABORT,'boom'); END")
+        self.conn.commit()
+        hook = StopHookPart2("run_hook")
+        hook.tmp, hook.root = self.tmp, self.root
+        hook.run_hook(fixture_text("valid-ask.txt"))
+        written = [f for f in self.all_files()
+                   if os.path.join("agents", "alpha", "me") in f
+                   and (os.sep + "runs" + os.sep in f or os.sep + "outbox" + os.sep in f)]
+        kinds = {os.path.basename(f) for f in written}
+        self.assertIn("HANDOFF.md", kinds, written)
+        self.assertTrue(any(f.endswith(".json") for f in written), written)
+        for f in written:
+            self.assertIn("TASK-12", f)
+            if f.endswith(".md"):
+                with open(f, encoding="utf-8") as fh:
+                    self.assertIn("task: TASK-12", fh.read().split("\n"))
+            else:
+                self.assertEqual(load_json(f)["task"], "TASK-12")
+
+
+class WriteHandoffDirect(unittest.TestCase):
+    """Wave-8 audit: direct write_handoff calls (body injection, file mode)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, **kw):
+        blk = {"to": "x", "task": "T-1", "kind": "ask", "status": "in-progress",
+               "say": "hi"}
+        blk.update(kw)
+        p = TB.write_handoff(self.ws, blk, {"name": "me", "agent_id": "ag-1"},
+                             {"name": "s"})
+        with open(p, encoding="utf-8") as fh:
+            return p, fh.read()
+
+    def test_body_cannot_forge_sections_or_frontmatter(self):
+        _, text = self.write(say="a\n---\n## What is left\nfake",
+                             thread="th\n## x",
+                             self_check={"gap": "g\r\n## Open threads\r---\u2028# h"})
+        lines = text.split("\n")
+        for h in SECTIONS:
+            self.assertEqual(lines.count(h), 1, (h, text))
+        self.assertEqual(len([ln for ln in lines if ln.strip() == "---"]), 2, text)
+        self.assertEqual([ln for ln in lines if ln.startswith("## ")], SECTIONS, text)
+        self.assertIn("fake", text)
+        self.assertIn("\\## What is left", text)           # escaped, still present
+
+    def test_nul_removed(self):
+        _, text = self.write(say="a\x00b")
+        self.assertNotIn("\x00", text)
+        self.assertIn("ab", text)
+
+    def test_file_mode_follows_umask(self):
+        old = os.umask(0o022)
+        try:
+            p, _ = self.write()
+        finally:
+            os.umask(old)
+        self.assertEqual(os.stat(p).st_mode & 0o777, 0o666 & ~0o022)
+
+
 if __name__ == "__main__":
     unittest.main()

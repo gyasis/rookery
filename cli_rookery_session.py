@@ -3,7 +3,6 @@
 Register with: cli_rookery_session.add_parser(subparsers)
 Contract: specs/001-rookery-init-turn-block/contracts/cli-and-hooks.md
 Exit codes: 0 ok, 2 bad input or not found, 3 no current session, 4 database busy.
-Not yet here (T026): `session new --from`, `identity link`.
 """
 
 import json
@@ -97,9 +96,42 @@ def cmd_session_new(args):
         binds.append((kind, value))
 
     def go(conn):
-        s = _row(ri.new_session(conn, name=args.name, binds=tuple(binds)))
-        out = {"session_id": s["session_id"], "name": s["name"], "copied": []}
-        _out(args, out, f"Rookery session {s['name']} ({s['session_id']}) started.")
+        old = _need_session(conn, args.from_session) if args.from_session else None
+        if old is None:
+            s = _row(ri.new_session(conn, name=args.name, binds=tuple(binds)))
+            copied, failed = [], []
+            n_carried = 0
+        else:
+            import turn_block
+            try:
+                root = turn_block.project_root(os.path.basename(os.getcwd()))
+            except ValueError:
+                _die("Cannot find the project folder to copy HANDOFF.md files into: the "
+                     "current folder name is not a safe project name. Set ROOKERY_ROOT or "
+                     "run from the project folder. No session was created.")
+            try:
+                srow, made, copied, failed = ri.new_session_from(
+                    conn, old["session_id"], args.name, tuple(binds), root)
+            except (ValueError, sqlite3.Error):
+                raise                    # _run maps these (busy -> 4, else 2)
+            except RuntimeError as e:
+                _die(f"Could not carry over from {old['name']}: {e} No session was created.")
+            s = _row(srow)
+            n_carried = len(made)
+        out = {"session_id": s["session_id"], "name": s["name"], "copied": copied}
+        if old:
+            out["failed"] = failed
+        human = f"Rookery session {s['name']} ({s['session_id']}) started."
+        if old:
+            human += (f"\nCarried over {n_carried} agent name(s) from {old['name']}; "
+                      f"copied {len(copied)} HANDOFF.md file(s).")
+            if failed:
+                human += (f"\n{len(failed)} HANDOFF.md copy(ies) failed; the session and "
+                          "its agent names were still created (exit 0).")
+        _out(args, out, human)
+        for f in failed:
+            print(f"warning: could not copy HANDOFF.md for {f['name']} "
+                  f"(task {f['task']}): {f['reason']}", file=sys.stderr)
 
     _run(args, go)
 
@@ -215,6 +247,19 @@ def cmd_identity_bind(args):
     _run(args, go)
 
 
+def cmd_identity_link(args):
+    import rookery_identity as ri
+
+    def go(conn):
+        s, i = _env_identity(conn)
+        r = ri.link_previous(conn, i["agent_id"], args.previous)
+        _out(args, {"agent_id": r["agent_id"], "name": r["name"],
+                    "previous_id": r["previous_id"], "session_id": s["session_id"]},
+             f"{r['name']} ({r['agent_id']}) now follows {r['previous_id']}.")
+
+    _run(args, go)
+
+
 # ---------------------------------------------------------------- parser
 
 
@@ -230,6 +275,8 @@ def add_parser(subparsers):
 
     p = ss.add_parser("new", help="Start a Rookery session.")
     p.add_argument("--name", help="Session name (default: the session ID).")
+    p.add_argument("--from", dest="from_session", metavar="SESSION",
+                   help="Carry over agent names and newest HANDOFF.md from SESSION.")
     p.add_argument("--bind", action="append", metavar="KIND:VALUE",
                    help="Add a session binding, e.g. herdr-workspace:w1. Repeatable.")
     _json_flag(p)
@@ -270,3 +317,8 @@ def add_parser(subparsers):
     p.add_argument("binding", metavar="KIND:VALUE")
     _json_flag(p)
     p.set_defaults(func=cmd_identity_bind)
+
+    p = si.add_parser("link", help="Set the previous identity of my identity.")
+    p.add_argument("--previous", required=True, metavar="AGENT_ID")
+    _json_flag(p)
+    p.set_defaults(func=cmd_identity_link)

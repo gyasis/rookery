@@ -608,3 +608,87 @@ def _dispatch_block(conn, raw, ctx):
             except Exception as werr:
                 reason += f" (could not keep the block: {werr})"
         return _finish(ctx, block, outcome, reason=reason)
+
+
+def _one_line(value) -> str:
+    """Collapse any whitespace run (incl. newlines) so a value stays on one list line."""
+    return " ".join(str(value).replace("\x00", "").split())
+
+
+_LINE_BREAKS = re.compile("\r\n|\r|\u2028|\u2029")
+
+
+def _body(value) -> str:
+    """Make free text safe for a HANDOFF.md body: drop NUL, normalise every line break
+    to \\n, and backslash-escape a line that would read as a heading or a '---' fence."""
+    text = _LINE_BREAKS.sub("\n", str(value).replace("\x00", ""))
+    out = []
+    for ln in text.split("\n"):
+        t = ln.lstrip()
+        out.append("\\" + ln if t.startswith("#") or t.startswith("---") else ln)
+    return "\n".join(out)
+
+
+def _umask() -> int:
+    old = os.umask(0)
+    os.umask(old)
+    return old
+
+
+def write_handoff(ws: str, block: dict, identity: dict, session: dict) -> str:
+    """Rewrite <ws>/runs/<task>/HANDOFF.md from a valid block (RQ-1.7, D11).
+
+    Atomic: temp file in the same folder, fsync, os.replace. Returns the path.
+    Body text (say, gap) has NUL removed, line breaks normalised, and any line that
+    starts with '#' or '---' backslash-escaped, so it cannot forge a section or the
+    frontmatter fences. thread, to and kind are collapsed to one line.
+    """
+    task = _check_name("task", block.get("task"))
+    name = _check_name("agent", identity["name"])
+    agent_id = _check_name("agent_id", str(identity["agent_id"]))
+    session_name = _check_name("session", session["name"])
+    status = block.get("status")
+    if status not in ("done", "in-progress"):
+        raise ValueError(f"bad handoff status: {status!r}")
+
+    state = []
+    for art in block.get("artifacts") or []:
+        line = f"- {_one_line(art['path'])}"
+        if art.get("note"):
+            line += f" — {_one_line(art['note'])}"
+        state.append(line)
+    for path in block.get("read") or []:
+        state.append(f"- {_one_line(path)} — read")
+    gap = (block.get("self_check") or {}).get("gap")
+    thread = block.get("thread")
+    updated = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    text = "\n".join([
+        "---", "type: Handoff", f"task: {task}", f"agent: {name}", f"agent_id: {agent_id}",
+        f"session: {session_name}", f"updated: {updated}", f"status: {status}", "---",
+        "## Last thing I did", _body(block["say"]),
+        "## State now (what exists, with paths)", "\n".join(state) if state else "Nothing stated.",
+        "## What is left", _body(gap) if isinstance(gap, str) and gap.strip() else "Nothing stated.",
+        "## Open threads",
+        (f"{_one_line(thread)} with {_one_line(block['to'])} ({_one_line(block['kind'])})"
+         if thread else "None."),
+    ]) + "\n"
+
+    d = os.path.join(ws, "runs", task)
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "HANDOFF.md")
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-", suffix=".md")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o666 & ~_umask())     # mkstemp makes 0600; match other files
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path

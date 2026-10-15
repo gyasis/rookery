@@ -1,0 +1,29 @@
+I have started the lease review and need the lawyer's view on two clauses before I can finish.
+
+```rookery
+{
+  "to": "law-counsel",
+  "task": "TASK-12",
+  "kind": "ask",
+  "say": "Does clause 4 of the lease allow subletting without consent, and does the notice rule in clause 7 apply?",
+  "status": "in-progress",
+  "thread": "lease-review",
+  "read": [
+    "docs/lease.md",
+    "notes/clause4.md"
+  ],
+  "artifacts": [
+    {
+      "path": "docs/lease.md",
+      "note": "Lease draft under review"
+    },
+    {
+      "path": "notes/clause4.md",
+      "note": "My notes on the subletting clause"
+    }
+  ],
+  "self_check": {
+    "gap": "Clause 7 notice period is not yet checked against the lease definitions."
+  }
+}
+```

@@ -484,5 +484,250 @@ class CliSessionIdentity(unittest.TestCase):
             self.assertIn(w, r.stdout)
 
 
+class CarryOver(unittest.TestCase):
+    """T023 (FR-036, RQ-1.26): `session new --from` and `identity link --previous`.
+
+    Assumption: the carry-over log line is any line in <root>/logs/turn-block.jsonl
+    that mentions the new session (id or name) and the copied path/task; the event
+    name is not checked."""
+
+    CLI = CliSessionIdentity.CLI
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = os.path.join(self.tmp.name, "co.db")
+        self.root = os.path.join(self.tmp.name, "root")
+        os.makedirs(self.root)
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("ROOKERY_")}
+        self.env.update(ROOKERY_DB=self.db, HOME=self.tmp.name, ROOKERY_ROOT=self.root)
+
+        self.alpha = self.cli("session", "new", "--name", "alpha", "--json")
+        self.me = self.cli("identity", "new", "me", "--session", "alpha", "--json")
+        self.law = self.cli("identity", "new", "law-counsel", "--session", "alpha", "--json")
+        aenv = dict(self.env, ROOKERY_SESSION="alpha", ROOKERY_NODE="me")
+        self.cli("identity", "bind", "herdr-pane:p1", "--json", env=aenv)
+
+        base = os.path.join(self.root, "agents", "alpha")
+        self.write(base, "me/runs/TASK-1/HANDOFF.md", "old handoff", mtime=1000000)
+        self.write(base, "me/runs/TASK-2/HANDOFF.md", "new handoff", mtime=2000000)
+        self.write(base, "law-counsel/runs/TASK-3/HANDOFF.md", "law handoff", mtime=1500000)
+        self.write(base, "me/state/turn.json", "{}")
+
+        import rookery as R
+        c = R.connect(self.db)
+        R.send(c, "x", self.me["agent_id"], "hello", hold=False,
+               session_id=self.alpha["session_id"])
+        c.close()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, base, rel, text, mtime=None):
+        path = os.path.join(base, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        if mtime:
+            os.utime(path, (mtime, mtime))
+
+    def cli(self, *args, env=None, code=0):
+        import subprocess
+        r = subprocess.run([sys.executable, self.CLI, *args], env=env or self.env,
+                           cwd=self.tmp.name, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, code, r.stderr + r.stdout)
+        return json.loads(r.stdout) if code == 0 else r
+
+    def q(self, sql, *a):
+        c = sqlite3.connect(self.db)
+        try:
+            return c.execute(sql, a).fetchall()
+        finally:
+            c.close()
+
+    def inbox_counts(self):
+        return dict(self.q("SELECT session_id, COUNT(*) FROM inbox GROUP BY session_id"))
+
+    def beta(self):
+        return self.cli("session", "new", "--name", "beta", "--from", "alpha", "--json")
+
+    def idents(self, sid):
+        return {r[0]: r for r in self.q(
+            "SELECT name, agent_id, previous_id FROM identities WHERE session_id=?", sid)}
+
+    def test_from_creates_identity_per_name_with_previous_id(self):
+        b = self.beta()
+        ids = self.idents(b["session_id"])
+        self.assertEqual(set(ids), {"me", "law-counsel"})
+        self.assertEqual(ids["me"][2], self.me["agent_id"])
+        self.assertEqual(ids["law-counsel"][2], self.law["agent_id"])
+
+    def test_from_copies_newest_handoff_only_and_reports_copied(self):
+        b = self.beta()
+        base = os.path.join(self.root, "agents", "beta")
+        got = os.path.join(base, "me", "runs", "TASK-2", "HANDOFF.md")
+        self.assertTrue(os.path.isfile(got))
+        with open(got) as f:
+            self.assertEqual(f.read(), "new handoff")
+        self.assertFalse(os.path.exists(os.path.join(base, "me", "runs", "TASK-1")))
+        self.assertEqual(open(os.path.join(base, "law-counsel", "runs", "TASK-3",
+                                           "HANDOFF.md")).read(), "law handoff")
+        self.assertEqual(len(b["copied"]), 2, b)
+        blob = json.dumps(b["copied"])
+        self.assertIn("TASK-2", blob)
+        self.assertIn("TASK-3", blob)
+        self.assertNotIn("TASK-1", blob)
+
+    def test_from_logs_each_copy(self):
+        b = self.beta()
+        p = os.path.join(self.root, "logs", "turn-block.jsonl")
+        self.assertTrue(os.path.exists(p))
+        with open(p) as f:
+            lines = [ln for ln in f if b["session_id"] in ln or '"beta"' in ln]
+        for task in ("TASK-2", "TASK-3"):
+            self.assertEqual(len([ln for ln in lines if task in ln]), 1, (task, lines))
+        self.assertFalse([ln for ln in lines if "TASK-1" in ln])
+
+    def test_from_copies_no_mail_state_or_binding(self):
+        before = self.inbox_counts()
+        b = self.beta()
+        sid = b["session_id"]
+        self.assertEqual(self.inbox_counts(), before)
+        self.assertNotIn(sid, before)
+        base = os.path.join(self.root, "agents", "beta")
+        for name in os.listdir(base):
+            self.assertFalse(os.path.exists(os.path.join(base, name, "state")), name)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM bindings WHERE session_id=? "
+                                "AND owner_type='identity'", sid)[0][0], 0)
+        # the old session keeps its binding
+        self.assertEqual(self.q("SELECT COUNT(*) FROM bindings WHERE session_id=? "
+                                "AND owner_type='identity'", self.alpha["session_id"])[0][0], 1)
+
+    def test_identity_link_previous_sets_id_and_moves_no_mail(self):
+        b = self.beta()
+        before = self.inbox_counts()
+        env = dict(self.env, ROOKERY_SESSION="beta", ROOKERY_NODE="me")
+        out = self.cli("identity", "link", "--previous", self.law["agent_id"], "--json", env=env)
+        self.assertIn(self.law["agent_id"], json.dumps(out))
+        self.assertEqual(self.idents(b["session_id"])["me"][2], self.law["agent_id"])
+        self.assertEqual(self.inbox_counts(), before)
+
+    def test_identity_link_unknown_previous_exits_2(self):
+        self.beta()
+        env = dict(self.env, ROOKERY_SESSION="beta", ROOKERY_NODE="me")
+        self.cli("identity", "link", "--previous", "no-such-agent", "--json", env=env, code=2)
+
+    # ---- wave-8 audit fixes ------------------------------------------------
+    def no_session(self, name):
+        return self.q("SELECT COUNT(*) FROM rookery_sessions WHERE name=?", name)[0][0] == 0
+
+    def test_from_is_atomic_when_identity_insert_aborts(self):
+        c = sqlite3.connect(self.db)
+        c.execute("CREATE TRIGGER boom BEFORE INSERT ON identities WHEN NEW.previous_id "
+                  "IS NOT NULL BEGIN SELECT RAISE(ABORT,'boom'); END")
+        c.commit()
+        c.close()
+        r = self.cli("session", "new", "--name", "s3", "--from", "alpha", "--json", code=2)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertTrue(r.stderr.strip())
+        self.assertTrue(self.no_session("s3"))
+        c = sqlite3.connect(self.db)
+        c.execute("DROP TRIGGER boom")
+        c.commit()
+        c.close()
+        out = self.cli("session", "new", "--name", "s3", "--from", "alpha", "--json")
+        self.assertEqual(len(self.idents(out["session_id"])), 2)
+
+    def test_from_unknown_creates_no_session(self):
+        self.cli("session", "new", "--name", "s9", "--from", "nope", "--json", code=2)
+        self.assertTrue(self.no_session("s9"))
+
+    def test_from_empty_session(self):
+        self.cli("session", "new", "--name", "empty", "--json")
+        b = self.cli("session", "new", "--name", "s2", "--from", "empty", "--json")
+        self.assertEqual(b["copied"], [])
+
+    def test_from_unresolvable_root_exits_2_before_creating(self):
+        cwd = os.path.join(self.tmp.name, "my project")
+        os.makedirs(cwd)
+        env = {k: v for k, v in self.env.items() if k != "ROOKERY_ROOT"}
+        import subprocess
+        r = subprocess.run([sys.executable, self.CLI, "session", "new", "--name", "s4",
+                            "--from", "alpha", "--json"], env=env, cwd=cwd,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2, r.stderr + r.stdout)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertTrue(self.no_session("s4"))
+
+    def beta_dir(self, *p):
+        return os.path.join(self.root, "agents", "beta", *p)
+
+    def no_tmp_left(self):
+        left = []
+        for d, _, fs in os.walk(os.path.join(self.root, "agents", "beta")):
+            left += [f for f in fs if f.endswith(".tmp") and not os.path.islink(
+                os.path.join(d, f))]
+        self.assertEqual(left, [])
+
+    def test_failed_copy_reported_and_no_tmp_left(self):
+        os.makedirs(self.beta_dir("me", "runs", "TASK-2", "HANDOFF.md"))
+        b = self.beta()
+        self.assertEqual([f["name"] for f in b["failed"]], ["me"], b)
+        self.assertEqual(b["failed"][0]["task"], "TASK-2")
+        self.assertTrue(b["failed"][0]["reason"])
+        self.assertEqual([c["name"] for c in b["copied"]], ["law-counsel"])
+        self.no_tmp_left()
+
+    def test_existing_destination_not_overwritten(self):
+        os.makedirs(self.beta_dir("me", "runs", "TASK-2"))
+        with open(self.beta_dir("me", "runs", "TASK-2", "HANDOFF.md"), "w") as f:
+            f.write("mine")
+        b = self.beta()
+        self.assertEqual(open(self.beta_dir("me", "runs", "TASK-2", "HANDOFF.md")).read(),
+                         "mine")
+        f = [x for x in b["failed"] if x["name"] == "me"]
+        self.assertEqual(f[0]["reason"], "exists", b)
+
+    def test_planted_tmp_symlink_not_followed(self):
+        victim = os.path.join(self.tmp.name, "victim.txt")
+        with open(victim, "w") as f:
+            f.write("keep")
+        os.makedirs(self.beta_dir("me", "runs", "TASK-2"))
+        os.symlink(victim, self.beta_dir("me", "runs", "TASK-2", "HANDOFF.md.tmp"))
+        self.beta()
+        self.assertEqual(open(victim).read(), "keep")
+
+    def test_symlinked_old_workspace_is_skipped(self):
+        out = os.path.join(self.tmp.name, "elsewhere")
+        self.write(out, "runs/TASK-9/HANDOFF.md", "stolen")
+        import shutil
+        shutil.rmtree(os.path.join(self.root, "agents", "alpha", "me"))
+        os.symlink(out, os.path.join(self.root, "agents", "alpha", "me"))
+        b = self.beta()
+        self.assertEqual([c["name"] for c in b["copied"]], ["law-counsel"], b)
+        self.assertFalse(os.path.exists(self.beta_dir("me", "runs", "TASK-9")))
+
+    def test_copied_file_mode_follows_umask(self):
+        b = self.beta()
+        um = os.umask(0)
+        os.umask(um)
+        mode = os.stat(b["copied"][0]["path"]).st_mode & 0o777
+        self.assertEqual(mode, 0o666 & ~um)
+
+    def test_link_previous_rejects_cycles(self):
+        self.cli("session", "new", "--name", "cyc", "--json")
+        ids = {n: self.cli("identity", "new", n, "--session", "cyc", "--json")["agent_id"]
+               for n in ("a", "b", "c")}
+
+        def link(node, prev, code=0):
+            env = dict(self.env, ROOKERY_SESSION="cyc", ROOKERY_NODE=node)
+            return self.cli("identity", "link", "--previous", ids[prev], "--json",
+                            env=env, code=code)
+        link("a", "b")
+        r = link("b", "a", code=2)
+        self.assertNotIn("Traceback", r.stderr)
+        link("b", "c")
+        link("c", "a", code=2)
+
+
 if __name__ == "__main__":
     unittest.main()
