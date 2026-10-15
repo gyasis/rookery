@@ -375,7 +375,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
   3. Read the file and call `dispatch_block()` with the adapter `outbox`.
   4. Move the file to `sent/` or `failed/` as `<TASK-ID>-<file name>`, with a `.result.json`. Never put a file back.
   5. Log each outcome to the `postmaster` stream.
-- [ ] T047 [US5] Run this after T043, T044, T045, T046. Run `python3 -m unittest test_turn_block test_outbox -v`. All cases must pass.
+- [x] T047 [US5] Run this after T043, T044, T045, T046. Run `python3 -m unittest test_turn_block test_outbox -v`. All cases must pass.
 
 **Checkpoint**: all five stories work.
 
