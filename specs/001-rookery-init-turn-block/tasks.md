@@ -271,7 +271,7 @@ byte-identical files.
 
   Run `ste-lint rookery_section.md --max-score 2.0 --glossary ste-glossary.txt`. It must pass.
 - [x] T030 [US3] Write `upsert_section(path, text)` in `cli_init.py` (D13, the Spec Kit rule). It creates the file, or inserts or replaces the text between `<!-- ROOKERY START -->` and `<!-- ROOKERY END -->`. It returns the action. It writes only when the content changes, through `write_json_atomic()`'s temporary-file rule, under the init lock of T031.
-- [ ] T031 [US3] Write `merge_hooks(path, project)` in `cli_init.py` (D13):
+- [x] T031 [US3] Write `merge_hooks(path, project)` in `cli_init.py` (D13):
   - Parse the file first. On a parse error, raise an error with the line and the column, and write nothing.
   - For each event, find a handler whose `command` starts with `rookery hook `. Equal: no change. Different: replace it in place. Absent: append `{"hooks": [{"type": "command", "command": "rookery hook <event> --project <project>"}]}`.
   - Keep the key order and the indent of the old file.

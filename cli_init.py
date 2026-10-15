@@ -5,10 +5,13 @@ Standard library only.
 """
 import contextlib
 import fcntl
+import json
 import os
 import re
 import stat
 import tempfile
+
+import turn_block
 
 START_MARKER = "<!-- ROOKERY START -->"
 END_MARKER = "<!-- ROOKERY END -->"
@@ -84,7 +87,7 @@ def write_text_atomic(path, content, mode=None):
                 um = os.umask(0)
                 os.umask(um)
                 mode = 0o666 & ~um
-        fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-", suffix=".md")
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-", suffix=os.path.splitext(path)[1])
         with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape",
                        newline="") as fh:
             fh.write(content)
@@ -202,3 +205,166 @@ def upsert_section(path, text):
     whole init; this function takes no lock.
     """
     return _upsert(path, text)
+
+
+# ---- settings.json hook merge (T031) -------------------------------------------------
+
+HOOK_EVENTS = (("SessionStart", "session-start"), ("UserPromptSubmit", "prompt"),
+               ("Stop", "stop"))
+_CMD_PREFIX = "rookery hook "
+_OURS = re.compile(r"(?:\S*/)?rookery hook (session-start|prompt|stop) "
+                   r"--project ([A-Za-z0-9._-]{1,64})")
+
+
+def _is_rookery(handler):
+    """True only for a handler this tool wrote: type "command" (or absent) and a
+    command that, stripped, is exactly `[path/]rookery hook <sub> --project <name>`."""
+    return (isinstance(handler, dict) and handler.get("type", "command") == "command"
+            and isinstance(handler.get("command"), str)
+            and _OURS.fullmatch(handler["command"].strip()) is not None)
+
+
+def _detect_indent(text):
+    """Indent of the first indented line: "\t" or the count of leading spaces; default 2."""
+    for line in text.split("\n"):
+        if line[:1] == "\t":
+            return "\t"
+        stripped = line.lstrip(" ")
+        if stripped.strip() and stripped != line:
+            return len(line) - len(stripped)
+    return 2
+
+
+def _merge_event(path, hooks, event, cmd):
+    """Merge one event into the hooks dict; return "added" | "updated" | "unchanged"."""
+    groups = hooks.get(event)
+    if groups is None and event not in hooks:
+        hooks[event] = [{"hooks": [{"type": "command", "command": cmd}]}]
+        return "added"
+    if not isinstance(groups, list):
+        raise InitError(f"{path}: hooks.{event} is not a list; fix the file by hand, "
+                        f"nothing was written")
+    for i, g in enumerate(groups):
+        if not isinstance(g, dict) or not isinstance(g.get("hooks"), list):
+            raise InitError(f"{path}: hooks.{event}[{i}] is not an object with a "
+                            f"\"hooks\" list; fix the file by hand, nothing was written")
+    first = None   # the first rookery handler
+    changed = False
+    for g in list(groups):
+        removed = False
+        for h in list(g["hooks"]):
+            if not _is_rookery(h):
+                continue
+            if first is None:
+                first = h
+                if h["command"] != cmd:
+                    h["command"] = cmd
+                    changed = True
+            else:
+                g["hooks"].remove(h)   # duplicate: it would fire the hook twice
+                changed = removed = True
+        if removed and not g["hooks"]:
+            groups.remove(g)
+    if first is None:
+        groups.append({"hooks": [{"type": "command", "command": cmd}]})
+        return "added"
+    return "updated" if changed else "unchanged"
+
+
+def _merge_hooks(path, project):
+    try:
+        with open(path, "r", encoding="utf-8", errors="surrogateescape",
+                  newline="") as fh:
+            old = fh.read()
+    except FileNotFoundError:
+        old = None
+    except OSError as exc:
+        raise _oserr(path, exc)
+
+    bom = ""
+    nl = "\n"
+    if old is not None:
+        if old.startswith("\ufeff"):
+            bom, old = "\ufeff", old[1:]
+        if "\r\n" in old:
+            nl = "\r\n"
+    if old is None or not old.strip():
+        data, indent, tail = {}, 2, "\n"
+    else:
+        def bad(why):
+            return InitError(f"settings file {path} is not valid JSON: {why}. "
+                             f"Fix the file, then run init again.")
+
+        def pairs(items):
+            d = {}
+            for k, v in items:
+                if k in d:
+                    raise bad(f"duplicate key {k!r} would be silently dropped")
+                d[k] = v
+            return d
+
+        def const(name):
+            raise bad(f"{name} is not allowed in JSON")
+
+        def num(text):
+            f = float(text)
+            if f in (float("inf"), float("-inf")):
+                raise bad(f"number {text} is out of range")
+            return f
+        try:
+            data = json.loads(old, object_pairs_hook=pairs, parse_constant=const,
+                              parse_float=num)
+        except json.JSONDecodeError as exc:
+            raise InitError(f"settings file {path} is not valid JSON: line {exc.lineno} "
+                            f"column {exc.colno}: {exc.msg}. Fix the file, then run init "
+                            f"again.")
+        if not isinstance(data, dict):
+            raise InitError(f"{path}: the settings file must hold one JSON object; "
+                            f"fix the file by hand, nothing was written")
+        indent = _detect_indent(old)
+        tail = "\n" if old.endswith("\n") else ""
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise InitError(f"{path}: \"hooks\" is not an object; fix the file by hand, "
+                        f"nothing was written")
+    result = {"added": [], "updated": [], "unchanged": []}
+    for event, sub in HOOK_EVENTS:
+        cmd = f"{_CMD_PREFIX}{sub} --project {project}"
+        result[_merge_event(path, hooks, event, cmd)].append(event)
+    if old is None or result["added"] or result["updated"]:
+        out = json.dumps(data, indent=indent, ensure_ascii=False) + tail
+        write_text_atomic(path, bom + (out.replace("\n", nl) if nl != "\n" else out))
+    return result
+
+
+def merge_hooks(path, project, root=None):
+    """Merge the three Rookery hooks into a Claude Code settings.json (D13).
+
+    A handler is ours only if its command, stripped, fully matches
+    `[path/]rookery hook (session-start|prompt|stop) --project NAME` (type "command"
+    or absent); any other command, e.g. one with `&& other`, is the user's and is
+    never modified or removed. An ours-handler with another subcommand or project is
+    rewritten in place (a project rename).
+    Events: SessionStart -> `rookery hook session-start --project P`, UserPromptSubmit
+    -> `... prompt ...`, Stop -> `... stop ...`. Returns {"added", "updated",
+    "unchanged"}: lists of event names. Per event: no ours-handler -> append a new
+    group; the first ours-handler is updated in place (same position) when its command
+    differs; later ours-handlers in the same event are removed as duplicates (a group they leave empty is dropped) and the event
+    counts as "updated".
+    A missing, empty or whitespace-only file is treated as `{}`; a missing file is created (2-space indent, trailing newline), with the .claude/
+    folder. An existing file keeps its key order, its indent (first indented line:
+    tab or space count; default 2), its trailing-newline state, CRLF line endings
+    and a UTF-8 BOM. LIMIT: a changed
+    file is re-serialised with json.dumps, so other cosmetic formatting (compact
+    arrays, \\u escapes, blank lines) is normalised; an unchanged merge writes nothing,
+    so the bytes and mtime stay as they were.
+    Raises InitError, writing nothing, for: unsafe project name; invalid JSON (message
+    has the path, line, column and the contract sentence), including duplicate keys,
+    NaN/Infinity and numbers that overflow to infinity; non-object JSON, `hooks` not an object, an event value not a list, or a group without a
+    `hooks` list. With root given, runs under init_lock(root) (re-entrant)."""
+    if not turn_block.is_safe_name(project):
+        raise InitError(f"unsafe project name: {project!r} (use 1-64 of A-Z a-z 0-9 . _ -)")
+    if root is None:
+        return _merge_hooks(path, project)
+    with init_lock(root):
+        return _merge_hooks(path, project)
