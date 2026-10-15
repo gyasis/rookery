@@ -383,11 +383,11 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
 
 ## Phase 8: Polish and cross-cutting concerns
 
-- [ ] T048 Add `turn_block.py`, `rookery_identity.py`, `cli_init.py`, `cli_hook.py` and `cli_rookery_session.py` to `_PY_MODULES` in `bootstrap.py`. Add `rookery_section.md` and `rookery_config.default.json` to `_DATA_FILES` (D14). Run `python3 bootstrap.py`. Then run `rookery init --help` and `rookery hook stop --help` from a folder outside the repo.
-- [ ] T049 Prove the migration on a COPY of the live database (quickstart §2). Copy `~/Documents/code/rookery/rookery.db` to `/tmp/rookery-copy.db`. Run `ROOKERY_DB=/tmp/rookery-copy.db python3 test_sessions_migration.py`. Then run `rk peek --as <old node>` on the copy. Put the output in the PR.
-- [ ] T050 [P] Add a timing case to `test_hooks.py`. With 10,000 inbox rows, each hook must finish in less than 1 s (the performance goal of the plan).
-- [ ] T051 [P] Write `CHANGELOG.md` with a 0.7.0 entry for this phase.
-- [ ] T052 [P] Add a short section "rookery init and sessions" to `README.md`, with the commands of quickstart §3.
+- [x] T048 Add `turn_block.py`, `rookery_identity.py`, `cli_init.py`, `cli_hook.py` and `cli_rookery_session.py` to `_PY_MODULES` in `bootstrap.py`. Add `rookery_section.md` and `rookery_config.default.json` to `_DATA_FILES` (D14). Run `python3 bootstrap.py`. Then run `rookery init --help` and `rookery hook stop --help` from a folder outside the repo.
+- [x] T049 Prove the migration on a COPY of the live database (quickstart §2). Copy `~/Documents/code/rookery/rookery.db` to `/tmp/rookery-copy.db`. Run `ROOKERY_DB=/tmp/rookery-copy.db python3 test_sessions_migration.py`. Then run `rk peek --as <old node>` on the copy. Put the output in the PR.
+- [x] T050 [P] Add a timing case to `test_hooks.py`. With 10,000 inbox rows, each hook must finish in less than 1 s (the performance goal of the plan).
+- [x] T051 [P] Write `CHANGELOG.md` with a 0.7.0 entry for this phase.
+- [x] T052 [P] Add a short section "rookery init and sessions" to `README.md`, with the commands of quickstart §3.
 - [ ] T053 Lint all prose of this phase (RQ-1.19, FR-024). Collect each bounce note, notice and error text from `turn_block.py`, `cli_hook.py`, `cli_init.py` and `cli_rookery_session.py` into one file in the scratch folder. Run `ste-lint FILE --max-score 2.0 --glossary ste-glossary.txt` on that file and on these files: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, `tasks.md`, `contracts/cli-and-hooks.md`, `rookery_section.md`, `CHANGELOG.md` and the `README.md` section. Also lint the OKF files that this PR changes (constitution VIII covers requirement files and docs): `okf/requirements/rookery-0-7.md`, `okf/design/rookery-stays-in-context.md` and `okf/risks/register.md` (after T057). Fix each failure.
 - [ ] T054 Run this after T048, T049, T050, T051, T052. Run the full suite: `python3 -m unittest test_turn_block test_init test_hooks test_identity test_outbox test_wake -v` and `python3 test_held_quarantine.py`. All cases must pass.
 - [ ] T055 Run `spec-pane cover` for this feature. Each of RQ-1.1 to RQ-1.27 must appear in `spec.md` and `tasks.md` (SC-007).

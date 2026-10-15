@@ -284,6 +284,41 @@ agents drive these from Bash. Same mailroom underneath either way.
 A **background subagent** + these tools = it talks to other agents
 asynchronously while you keep working in the main context.
 
+## rookery init and sessions
+
+Install Rookery into a project, then start a Rookery session:
+
+```bash
+cd ~/Documents/code/<project>
+rookery init --json                     # CLAUDE.md section + 3 merged hooks
+rookery init --json                     # run again: every action reads "unchanged"
+rookery session new --name alpha --json # Rookery generates the session ID
+```
+
+Start each agent in a new pane:
+
+```bash
+ROOKERY_SESSION=alpha ROOKERY_NODE=researcher claude
+```
+
+You can also bind the session to a herdr workspace one time:
+
+```bash
+rookery session new --name alpha --bind herdr-workspace:<id>
+```
+
+Then each new pane in that workspace joins `alpha`. A pane that was open before `rookery init` does not join.
+
+Start the postmaster one time, from the Rookery repository:
+
+```bash
+python3 postmaster.py
+```
+
+Without `--nodes`, it runs only the outbox scan and the idle wake.
+
+Note: do not run `rookery turn` for a turn in a Claude Code session that has the Rookery hooks installed. The Stop hook already sends the block of that turn, so `rookery turn` sends it a second time. Use `rookery turn` for agents that have no hooks, such as Codex.
+
 ## Federation — multiple mailrooms (`node@mailroom`)
 
 Run several independent mailrooms (one per machine / trust domain) and relay

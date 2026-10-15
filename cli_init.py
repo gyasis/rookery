@@ -413,7 +413,15 @@ def _section_text(root, project):
         with open(path, encoding="utf-8") as fh:
             tpl = fh.read()
     except OSError as exc:
-        raise _oserr(path, exc)
+        # Inside the zipapp open() cannot reach a path in the archive: use the loader,
+        # as rookery._load_schema() does.
+        loader = globals().get("__loader__")
+        if loader is None or not hasattr(loader, "get_data"):
+            raise _oserr(path, exc)
+        try:
+            tpl = loader.get_data(path).decode("utf-8")
+        except OSError as exc2:
+            raise _oserr(path, exc2)
     return tpl.replace("{root}", root).replace("{project}", project)
 
 
@@ -440,9 +448,10 @@ def main(args):
             # Check the context file first, then write settings (the write most likely
             # to fail), then the context file: a failure never half-installs Rookery.
             check_section(ctx)
+            text = _section_text(root, project)   # load before any write
             settings = merge_hooks(sp, project) if claude else None
             try:
-                action = upsert_section(ctx, _section_text(root, project))
+                action = upsert_section(ctx, text)
             except InitError as exc:
                 if settings and (settings["added"] or settings["updated"]):
                     raise InitError(f"{sp} was updated, but {ctx} was not: {exc}") from exc

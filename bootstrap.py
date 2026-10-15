@@ -43,10 +43,18 @@ _PY_MODULES = [
     "bootstrap.py",
     "policy_hardened.py",
     "policy_example.py",
+    # rookery init and the turn block (phase 1, research D14)
+    "turn_block.py",
+    "rookery_identity.py",
+    "cli_init.py",
+    "cli_hook.py",
+    "cli_rookery_session.py",
 ]
 
 _DATA_FILES = [
     "schema.sql",
+    "rookery_section.md",
+    "rookery_config.default.json",
 ]
 
 _MAIN_PY = """\

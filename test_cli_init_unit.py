@@ -496,3 +496,27 @@ class TestMergeHooks(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestZipapp(unittest.TestCase):
+    """T048: the installed zipapp must find its data files (no plain paths inside the archive)."""
+
+    def test_init_from_zipapp_writes_section(self):
+        import bootstrap
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as t:
+            pyz = bootstrap.build_pyz(os.path.join(t, "rookery.pyz"))
+            proj, home, root = (os.path.join(t, n) for n in ("proj", "home", "root"))
+            for d in (proj, home, root):
+                os.makedirs(d)
+            env = {"PATH": "/usr/bin:/bin", "HOME": home, "ROOKERY_ROOT": root,
+                   "ROOKERY_DB": os.path.join(t, "r.db")}
+            r = subprocess.run([sys.executable, pyz, "init", "--dir", proj, "--project", "demo",
+                                "--json"], env=env, cwd=t, capture_output=True, text=True,
+                               timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            with open(os.path.join(proj, "CLAUDE.md"), encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertIn("rookery inbox", text)
+            self.assertIn(root, text)

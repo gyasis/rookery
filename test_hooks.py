@@ -14,7 +14,9 @@ import os
 import sqlite3
 import subprocess
 import sys
+import statistics
 import tempfile
+import time
 import unittest
 
 import rookery as R
@@ -523,3 +525,60 @@ class SessionStartHardening(Base):
             if p.poll() is None:
                 p.kill()
                 p.wait()
+
+
+class HookTiming(Base):
+    """T050: with 10,000 inbox rows each hook finishes in under 1 s (plan performance goal).
+
+    Each hook runs 3 times end-to-end (subprocess wall clock). The MEDIAN must be < 1.0 s:
+    it guards against one-off scheduler noise while still enforcing the goal.
+    """
+    GOAL = 1.0
+    RUNS = 3
+
+    def seed(self):
+        t = R.now()
+        sid = self.alpha["session_id"]
+        me, others = self.me["agent_id"], [self.researcher["agent_id"], self.swe["agent_id"]]
+        rows = []
+        for i in range(9000):       # done, mostly to other recipients, some to me
+            rows.append((others[i % 2], me if i % 10 == 0 else others[(i + 1) % 2],
+                         json.dumps({"kind": "ask", "task": f"TASK-{i % 40}", "say": "x"}),
+                         f"TASK-{i % 40}", "done", 1, t - i, sid))
+        for i in range(500):        # pending for me, several senders and tasks
+            rows.append((others[i % 2], me, json.dumps({"kind": "ask", "task": f"TASK-{i % 7}", "say": "y"}),
+                         f"TASK-{i % 7}", "pending", 0, t - i, sid))
+        for i in range(300):        # held
+            rows.append((others[i % 2], me, "{}", "TASK-H", "held", 0, t - i, sid))
+        for i in range(200):        # quarantined
+            rows.append((others[i % 2], me, "{}", "TASK-Q", "quarantined", 0, t - i, sid))
+        self.conn.executemany(
+            "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at, session_id) "
+            "VALUES(?,?,?,?,?,?,?,?)", rows)
+        self.conn.commit()
+        n = self.conn.execute("SELECT COUNT(*) FROM inbox").fetchone()[0]
+        self.assertEqual(n, 10000)
+
+    def median_time(self, name, payload):
+        times = []
+        for _ in range(self.RUNS):
+            t0 = time.monotonic()
+            self.hook(name, payload)
+            times.append(time.monotonic() - t0)
+        return statistics.median(times), times
+
+    def test_each_hook_under_one_second_with_10000_rows(self):
+        self.seed()
+        with open(os.path.join(HERE, "fixtures", "turns", "valid-ask.txt")) as fh:
+            block = fh.read()
+        cases = (("session-start", {"source": "startup", "session_id": "c1"}),
+                 ("prompt", {"session_id": "c1", "prompt": "hello"}),
+                 ("stop", {"session_id": "c1", "last_assistant_message": block}))
+        results = {}
+        for name, payload in cases:
+            results[name] = self.median_time(name, payload)
+        report = "; ".join(f"{n}: median {m:.3f}s runs {[round(x, 3) for x in ts]}"
+                           for n, (m, ts) in results.items())
+        print("\nHookTiming (10,000 rows): " + report)
+        for name, (m, _ts) in results.items():
+            self.assertLess(m, self.GOAL, f"{name} too slow. {report}")
