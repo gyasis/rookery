@@ -428,12 +428,13 @@ def _put_back(ctx, block, raw, failed: bool) -> str | None:
     return path
 
 
-def _finish(ctx, block, outcome, msg_id=None, reason=None):
+def _finish(ctx, block, outcome, msg_id=None, reason=None, handoff_error=None):
     sender = ctx["identity"]
+    extra = {"handoff_error": handoff_error} if handoff_error else {}
     log_event(ctx["root"], adapter=ctx.get("adapter"), session=ctx["session"]["session_id"],
               agent_id=sender["agent_id"], name=sender["name"],
               task=(block or {}).get("task") if isinstance(block, dict) else None,
-              outcome=outcome, msg_id=msg_id, reason=reason)
+              outcome=outcome, msg_id=msg_id, reason=reason, **extra)
     return {"outcome": outcome, "msg_id": msg_id, "reason": reason}
 
 
@@ -548,6 +549,11 @@ def _dispatch_block(conn, raw, ctx):
 
     sender = ctx["identity"]
     sid = ctx["session"]["session_id"]
+    herr = None   # a HANDOFF.md write failure is logged, never blocks mail
+
+    def done(block, outcome, msg_id=None, reason=None):
+        return _finish(ctx, block, outcome, msg_id, reason, handoff_error=herr)
+
     try:
         if block is None:
             to = None
@@ -558,7 +564,14 @@ def _dispatch_block(conn, raw, ctx):
             recipient = to[:MAX_RAW_TO_CHARS] if isinstance(to, str) and to else "rookery"
             body = _cap_raw(raw)
             msg_id = _hold_and_quarantine(conn, ctx, recipient, body, None, "malformed", note)
-            return _finish(ctx, None, "quarantined", msg_id, "malformed")
+            return done(None, "quarantined", msg_id, "malformed")
+
+        if keep:   # FR-009: end-of-turn adapters only; before any DB work, outside any transaction
+            try:
+                write_handoff(workspace(root, ctx["session"]["name"], sender["name"]),
+                              block, sender, ctx["session"])
+            except Exception as hexc:
+                herr = f"{type(hexc).__name__}: {hexc}"
 
         to, task = block["to"], block["task"]
         compact = json.dumps(block, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
@@ -573,7 +586,7 @@ def _dispatch_block(conn, raw, ctx):
                 note = (f'The agent "{_show(to)}" is in another session. Send to an agent '
                         "in your own session, then send the block again.")
                 msg_id = _hold_and_quarantine(conn, ctx, to, compact, task, "off-team", note)
-                return _finish(ctx, block, "quarantined", msg_id, "off-team")
+                return done(block, "quarantined", msg_id, "off-team")
             names = [r[0] for r in conn.execute(
                 "SELECT name FROM identities WHERE session_id=? AND name<>? ORDER BY created_at, rowid",
                 (sid, sender["name"]))]
@@ -586,15 +599,15 @@ def _dispatch_block(conn, raw, ctx):
             note += " Fix \"to\", then send the block again."
             msg_id = _hold_and_quarantine(conn, ctx, to, compact, task, "wrong-recipient",
                                           note, suggest=suggest)
-            return _finish(ctx, block, "quarantined", msg_id, "wrong-recipient")
+            return done(block, "quarantined", msg_id, "wrong-recipient")
 
         if block["kind"] == "handoff" and block["status"] == "in-progress":
-            return _finish(ctx, block, "handoff-pending",
-                           reason="handoff is still in-progress; nothing sent")
+            return done(block, "handoff-pending",
+                        reason="handoff is still in-progress; nothing sent")
 
         msg_id = rookery.send(conn, sender["agent_id"], recipient[0], compact,
                               topic=task, session_id=sid)
-        return _finish(ctx, block, "sent", msg_id)
+        return done(block, "sent", msg_id)
     except Exception as exc:     # send/quarantine failed: log, keep the block, never raise
         try:
             conn.rollback()
@@ -607,7 +620,7 @@ def _dispatch_block(conn, raw, ctx):
                 _put_back(ctx, block, raw, failed=False)
             except Exception as werr:
                 reason += f" (could not keep the block: {werr})"
-        return _finish(ctx, block, outcome, reason=reason)
+        return done(block, outcome, reason=reason)
 
 
 def _one_line(value) -> str:

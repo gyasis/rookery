@@ -858,6 +858,17 @@ class HandoffFile(Base):
         c["adapter"] = adapter
         return c
 
+    def test_handoff_write_failure_still_sends_and_logs_once(self):
+        # A HANDOFF.md that cannot be written never blocks mail (T025): put a
+        # directory where the file must go, so os.replace fails.
+        os.makedirs(self.handoff_path())
+        res = self.run_fixture("valid-ask.txt")
+        self.assertEqual(res["outcome"], "sent")
+        self.assertEqual(len(self.rows()), 1)
+        lines = self.outcome_lines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("handoff_error", lines[0])
+
     def test_handoff_in_progress_writes_in_progress(self):
         res = self.run_fixture("handoff-in-progress.txt")
         self.assertEqual(res["outcome"], "handoff-pending")
