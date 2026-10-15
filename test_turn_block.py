@@ -17,6 +17,7 @@ import glob
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,11 @@ NEXT_STEP = re.compile(r"\b(again|Fix|Put|Add|Use|Give|Ask|Shorten|Remove|Send)\
 def fixture_text(name):
     with open(os.path.join(FIXTURES, name), encoding="utf-8") as fh:
         return fh.read()
+
+
+def load_json(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 def dispatch(conn, text, ctx):
@@ -403,6 +409,242 @@ class KeepUnresolved(Base):
         self.assertEqual(glob.glob(os.path.join(self.root, "x*")), [])
         self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["no-identity"])
         self.assertFalse(self.outcome_lines()[0]["kept"])
+
+
+class StopHookPart2(Base):
+    """T015 (RQ-1.4, D1, D16): `rookery hook stop --project p` as a subprocess.
+
+    The part-1 fixture table is driven through the hook. send() failure is made REAL
+    with a TRIGGER on inbox (BEFORE INSERT -> RAISE(ABORT,'boom')); the db-busy case
+    holds a write lock from this process on a second connection."""
+
+    CLI = os.path.join(HERE, "rookery_cli.py")
+
+    def run_hook(self, message="__omit__", env_extra=None, session=True, node="me", timeout=30):
+        env = dict(os.environ)
+        for k in ("ROOKERY_URL", "ROOKERY_HOLD", "ROOKERY_SESSION", "ROOKERY_NODE"):
+            env.pop(k, None)
+        # a real pane/terminal binding in the caller's env must not resolve an identity
+        for var in (RI.load_config(persist=False).get("session_binding_sources") or {}):
+            env.pop(var, None)
+        if session:
+            env["ROOKERY_SESSION"] = "alpha"
+            if node:
+                env["ROOKERY_NODE"] = node
+        env.update(env_extra or {})
+        data = {"hook_event_name": "Stop", "session_id": "claude-test", "cwd": self.tmp.name}
+        if message != "__omit__":
+            data["last_assistant_message"] = message
+        out = subprocess.run([sys.executable, self.CLI, "hook", "stop", "--project", "p"],
+                             input=json.dumps(data), capture_output=True, text=True,
+                             env=env, cwd=HERE, timeout=timeout)
+        self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "", ""))
+        return out
+
+    def reset(self):
+        self.conn.execute("DELETE FROM inbox")
+        self.conn.commit()
+        p = os.path.join(self.root, "logs", "turn-block.jsonl")
+        if os.path.exists(p):
+            open(p, "w").close()
+
+    def outbox_files(self):
+        return glob.glob(os.path.join(self.root, "agents", "alpha", "me", "outbox", "TASK-12-*.json"))
+
+    def unresolved_files(self):
+        return glob.glob(os.path.join(self.root, "unresolved", "*.json"))
+
+    def test_fixture_table_through_hook(self):
+        for name, (outcome, nrows) in FIXTURE_TABLE.items():
+            with self.subTest(fixture=name):
+                self.reset()
+                self.run_hook(fixture_text(name))
+                self.assertEqual(len(self.rows()), nrows)
+                self.assertEqual([x["outcome"] for x in self.outcome_lines()], [outcome])
+
+    def test_malformed_and_routing_through_hook(self):
+        for name, word in MALFORMED.items():
+            with self.subTest(fixture=name):
+                self.reset()
+                self.run_hook(fixture_text(name))
+                orig, bounce = self.split()
+                self.assertEqual((orig["status"], orig["reason"]), ("quarantined", "malformed"))
+                self.assertIn(word, orig["note"] or "")
+                self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["quarantined"])
+        for name, reason in (("wrong-recipient.txt", "wrong-recipient"), ("off-team.txt", "off-team")):
+            with self.subTest(fixture=name):
+                self.reset()
+                self.run_hook(fixture_text(name))
+                orig, _ = self.split()
+                self.assertEqual((orig["status"], orig["reason"]), ("quarantined", reason))
+                self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["quarantined"])
+
+    def test_no_message_field(self):
+        self.run_hook()                      # Stop JSON without last_assistant_message
+        self.assertEqual(self.rows(), [])
+        self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["no-message-field"])
+        self.assertEqual(self.outbox_files(), [])
+
+    def test_send_error_goes_to_outbox(self):
+        """Method: TRIGGER BEFORE INSERT ON inbox raises ABORT, so rookery.send() really raises."""
+        self.conn.execute("CREATE TRIGGER boom BEFORE INSERT ON inbox "
+                          "BEGIN SELECT RAISE(ABORT,'boom'); END")
+        self.conn.commit()
+        self.run_hook(fixture_text("valid-ask.txt"))
+        self.assertEqual(self.rows(), [])
+        files = self.outbox_files()
+        self.assertEqual(len(files), 1, self.all_files())
+        block = load_json(files[0])
+        self.assertEqual((block["to"], block["task"]), ("law-counsel", "TASK-12"))
+        self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["send-failed"])
+
+    def _db_busy(self, begin):
+        import time
+        self.reset()
+        locker = sqlite3.connect(os.environ["ROOKERY_DB"], timeout=1, isolation_level=None)
+        try:
+            locker.execute(begin)
+            t0 = time.monotonic()
+            self.run_hook(fixture_text("valid-ask.txt"))
+            elapsed = time.monotonic() - t0
+        finally:
+            try:
+                locker.execute("ROLLBACK")
+            finally:
+                locker.close()
+        self.assertLess(elapsed, 3.0)
+        self.assertEqual(self.rows(), [])
+        self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["db-busy"])
+        files = self.outbox_files()
+        self.assertEqual(len(files), 1, self.all_files())
+        self.assertEqual(load_json(files[0])["task"], "TASK-12")
+
+    def test_db_busy_write_lock_immediate(self):
+        self._db_busy("BEGIN IMMEDIATE")
+
+    def test_stdout_empty_without_and_with_unread_mail(self):
+        out = self.run_hook(fixture_text("valid-ask.txt"))
+        self.assertEqual(out.stdout, "")
+        # unread mail for `me` (pending row from law-counsel), then another Stop
+        R.send(self.conn, self.lc["agent_id"], self.me["agent_id"], "unread note", topic="TASK-9",
+               session_id=self.alpha["session_id"])
+        pending = [r for r in self.rows() if r["recipient"] == self.me["agent_id"] and r["status"] == "pending"]
+        self.assertTrue(pending, self.rows())
+        out = self.run_hook(fixture_text("no-block.txt"))
+        self.assertEqual((out.stdout, out.stderr), ("", ""))
+
+    def test_session_without_identity_keeps_block_unresolved(self):
+        ids_before = [dict(r) for r in self.conn.execute("SELECT * FROM identities ORDER BY agent_id")]
+        self.run_hook(fixture_text("valid-ask.txt"), node=None)
+        self.assertEqual(self.rows(), [])
+        files = self.unresolved_files()
+        self.assertEqual(len(files), 1, self.all_files())
+        self.assertRegex(os.path.basename(files[0]), r"^TASK-12-.+\.json$")
+        self.assertEqual(load_json(files[0])["task"], "TASK-12")
+        self.assertEqual([x["outcome"] for x in self.outcome_lines()], ["no-identity"])
+        ids_after = [dict(r) for r in self.conn.execute("SELECT * FROM identities ORDER BY agent_id")]
+        self.assertEqual(ids_after, ids_before)
+
+
+class ValidateEdgeCases(unittest.TestCase):
+    """Direct validate() checks: surrogates, control chars, rule order, kinds."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = self._tmp.name
+
+    BASE = {"to": "law-counsel", "task": "TASK-12", "kind": "ask", "say": "hello", "status": "done"}
+
+    def v(self, raw):
+        return TB.validate(raw, self.root)
+
+    def vd(self, **over):
+        d = dict(self.BASE)
+        d.update(over)
+        return self.v(json.dumps(d))
+
+    def assertSafeNote(self, note):
+        self.assertIsInstance(note, str)
+        note.encode("utf-8")
+        sqlite3.connect(":memory:").execute("select ?", (note,))
+
+    def test_base_is_valid(self):
+        self.assertEqual(self.vd()[1], None)
+
+    def test_lone_surrogate_key(self):
+        block, note = self.v('{"\\ud800":1}')
+        self.assertIsNone(block)
+        self.assertIn("The block is not valid JSON: ", note)
+        self.assertIn("lone surrogate", note)
+        self.assertTrue(note.endswith("Fix the JSON, then send the block again."))
+        self.assertSafeNote(note)
+
+    def test_lone_surrogate_values(self):
+        base = json.dumps(self.BASE)
+        for raw in (base.replace('"hello"', '"\\ud800"'),
+                    base[:-1] + ', "thread": "\\udc00"}'):
+            block, note = self.v(raw)
+            self.assertIsNone(block, raw)
+            self.assertIn("The block is not valid JSON: ", note)
+            self.assertSafeNote(note)
+
+    def test_surrogate_in_nested_artifact(self):
+        raw = json.dumps(self.BASE)[:-1] + ', "artifacts": [{"path": "a\\ud800"}]}'
+        block, note = self.v(raw)
+        self.assertIsNone(block)
+        self.assertIn("lone surrogate", note)
+
+    def test_show_strips_controls(self):
+        raw = json.dumps(dict(self.BASE, **{"\x1b[31m\nEVIL\u2028\u0085\x7f\x9f": 1}))
+        block, note = self.v(raw)
+        self.assertIsNone(block)
+        self.assertIn("is not allowed in a block", note)
+        for ch in note:
+            o = ord(ch)
+            self.assertFalse(o < 32 or 0x7f <= o <= 0x9f or ch in "\u2028\u2029", repr(ch))
+        self.assertSafeNote(note)
+
+    def test_show_is_bounded(self):
+        block, note = self.v(json.dumps(dict(self.BASE, **{"\x1b" * 500: 1})))
+        self.assertLess(len(note), 400)
+
+    def test_to_value_beats_say_type(self):
+        block, note = self.vd(to="bad name!", say=5)
+        self.assertIsNone(block)
+        self.assertIn('The field "to" value', note)
+        self.assertIn("not a safe name", note)
+
+    def test_veto_beats_status_type(self):
+        block, note = self.vd(kind="veto", status=5)
+        self.assertIsNone(block)
+        self.assertIn('The kind "veto" is for the system only', note)
+
+    def test_missing_beats_bad_type(self):
+        d = dict(self.BASE, say=5)
+        del d["status"]
+        block, note = self.v(json.dumps(d))
+        self.assertIn('The field "status" is missing', note)
+
+    def test_type_errors_in_own_rule(self):
+        self.assertIn('The field "to" must be a string', self.vd(to=5)[1])
+        self.assertIn('The field "task" must be a string', self.vd(task=5)[1])
+        self.assertIn('The field "kind" must be a string', self.vd(kind=5)[1])
+        self.assertIn('The field "status" must be a string', self.vd(status=5)[1])
+        self.assertIn('The field "say" must be a string', self.vd(say=5)[1])
+
+    def test_kind_veto_contract_text(self):
+        self.assertEqual(self.vd(kind="veto")[1],
+            'The kind "veto" is for the system only. Use ask, answer, decline, handoff, '
+            "status or recruit, then send the block again.")
+
+    def test_kind_takeover_system_only(self):
+        self.assertIn('The kind "takeover" is for the system only.', self.vd(kind="takeover")[1])
+
+    def test_kind_unknown(self):
+        self.assertEqual(self.vd(kind="banana")[1],
+            'The kind "banana" is not a kind. Use ask, answer, decline, handoff, '
+            "status or recruit, then send the block again.")
 
 
 if __name__ == "__main__":

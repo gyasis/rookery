@@ -169,3 +169,222 @@ def find_last_block(text):
         elif fence[2]:
             body.append(line)
     return last   # an unclosed trailing fence is dropped
+
+
+# --- Block validation (T017; research D12, FR-002 to FR-004) -----------------
+# Size limits, research D12. Source: the screener envelope limit is ~2,050
+# tokens for tev1 (register R16; okf/design/screener-chain.md). The envelope
+# also holds scope cards and acceptance criteria; at about 4 characters per
+# token, 4,096 bytes is about 1,000 tokens, half of the envelope. These are
+# input-size limits on agent mail, not model token caps (constitution IV).
+MAX_BLOCK_BYTES = 4096   # compact JSON: separators (",", ":"), sort_keys, ensure_ascii=False, UTF-8
+MAX_SAY_CHARS = 1200
+MAX_READ_CHARS = 256
+MAX_THREAD_CHARS = 128
+
+_FIELDS = {"to", "task", "kind", "say", "status", "thread", "read", "self_check", "artifacts"}
+_REQUIRED = ("to", "task", "kind", "say", "status")
+AGENT_KINDS = ("ask", "answer", "decline", "handoff", "status", "recruit")
+SYSTEM_KINDS = ("veto", "takeover", "bounce")
+_STATUSES = ("done", "in-progress")
+_SELF_CHECK = {"task_complete": bool, "gap": str, "gap_in_my_scope": bool, "evidence": str}
+_ARTIFACT = {"path": str, "note": str}
+
+
+class _Reject(Exception):
+    pass
+
+
+def _reject_constant(name):
+    raise ValueError(f"the constant {name} is not allowed")
+
+
+def _no_dupes(pairs):
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            raise ValueError(f'the key "{k}" appears twice')
+        out[k] = v
+    return out
+
+
+def _show(value, limit=60) -> str:
+    s = str(value)
+    out, size = [], 0
+    for ch in s:
+        if size >= limit:
+            out.append("...")
+            break
+        o = ord(ch)
+        if o < 32 or 0x7F <= o <= 0x9F or ch in "\u2028\u2029" or 0xD800 <= o <= 0xDFFF:
+            out.append({"\r": "\\r", "\n": "\\n", "\0": "\\0"}.get(
+                ch, "\\x%02x" % o if o < 0x100 else "\\u%04x" % o))
+        else:
+            out.append(ch)
+        size += len(out[-1])
+    return "".join(out)
+
+
+def _bad_string(obj):
+    """First string (key or value) that is not UTF-8 encodable, else None. Iterative."""
+    stack = [obj]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, str):
+            try:
+                x.encode("utf-8")
+            except UnicodeEncodeError:
+                return x
+        elif isinstance(x, dict):
+            for k, v in x.items():
+                stack.append(k)
+                stack.append(v)
+        elif isinstance(x, list):
+            stack.extend(x)
+    return None
+
+
+def _read_note(entry, root) -> str | None:
+    """None if the read entry is fine, else the note for it."""
+    if not isinstance(entry, str):
+        return 'Each "read" entry must be a string path. Fix the entry, then send the block again.'
+    if not entry or "\n" in entry or "\r" in entry or "\0" in entry:
+        return (f'The read entry "{_show(entry)}" must be one line of text. '
+                'Give one path per entry, then send the block again.')
+    if len(entry) > MAX_READ_CHARS:
+        return (f'The read entry "{_show(entry)}" has {len(entry)} characters. The limit is '
+                f'{MAX_READ_CHARS}. Give a shorter path, then send the block again.')
+    if ".." in re.split(r"[/\\]", entry):
+        return (f'The read entry "{_show(entry)}" has a ".." part. Give the path without "..", '
+                'then send the block again.')
+    where = root if root else "the Rookery root"
+    bad = (f'The read entry "{_show(entry)}" is not a path inside {where}. '
+           f'Put the file inside {where} and give its path.')
+    if not root:
+        return bad if os.path.isabs(entry) else None
+    try:
+        real_root = os.path.realpath(root)
+        target = os.path.realpath(entry if os.path.isabs(entry) else os.path.join(real_root, entry))
+        return None if os.path.commonpath([real_root, target]) == real_root else bad
+    except (ValueError, OSError):
+        return bad
+
+
+def _typed_note(field, value, spec) -> str | None:
+    """Check an object against {name: type}; None if fine."""
+    if not isinstance(value, dict):
+        return f'The field "{field}" must be an object. Fix "{field}", then send the block again.'
+    for k, v in value.items():
+        if k not in spec:
+            return (f'The field "{field}" has an unknown key "{_show(k)}". Remove it, '
+                    'then send the block again.')
+        if not isinstance(v, spec[k]):
+            return (f'The key "{k}" in "{field}" must be a {spec[k].__name__}. '
+                    'Fix it, then send the block again.')
+    return None
+
+
+def validate(raw, root):
+    """Validate one block body (D12, FR-002 to FR-004).
+
+    Returns (block, None) or (None, note). Never raises. The first rule that
+    fails wins; each note names the rule and the next step (constitution VI).
+    Compact size = len(json.dumps(obj, separators=(",", ":"), sort_keys=True,
+    ensure_ascii=False).encode("utf-8")). '' is malformed, not "no block".
+    """
+    try:
+        return _validate(raw, root)
+    except Exception as exc:   # last line of defence: a hook must not crash
+        return None, (f"The block could not be checked ({type(exc).__name__}). "
+                      "Fix the block, then send it again.")
+
+
+def _validate(raw, root):
+    # 1. one JSON object
+    try:
+        if not isinstance(raw, str):
+            raise ValueError("the block is not text")
+        obj = json.loads(raw, parse_constant=_reject_constant, object_pairs_hook=_no_dupes)
+    except (ValueError, RecursionError) as exc:
+        return None, f"The block is not valid JSON: {_show(exc, 120)}. Fix the JSON, then send the block again."
+    if not isinstance(obj, dict):
+        return None, ("The block is not valid JSON: it must be one object, not "
+                      f"{type(obj).__name__}. Fix the JSON, then send the block again.")
+    if _bad_string(obj) is not None:
+        return None, ("The block is not valid JSON: the text has an invalid character "
+                      "(a lone surrogate). Fix the JSON, then send the block again.")
+    # 2. size
+    size = len(json.dumps(obj, separators=(",", ":"), sort_keys=True,
+                          ensure_ascii=False).encode("utf-8", "surrogatepass"))
+    if size > MAX_BLOCK_BYTES:
+        return None, (f"The block has {size:,} bytes. The limit is {MAX_BLOCK_BYTES:,} bytes. "
+                      'Put long text in a file and add its path to "read".')
+    # 3. unknown field
+    for k in obj:
+        if k not in _FIELDS:
+            return None, (f'The field "{_show(k)}" is not allowed in a block. Remove the field "{_show(k)}", '
+                          "then send the block again.")
+    # 4. required
+    for k in _REQUIRED:
+        if k not in obj:
+            return None, (f'The field "{k}" is missing. Add "{k}"'
+                          + (" with the name of an agent in your session" if k == "to" else "")
+                          + ", then send the block again.")
+    # 5. safe names
+    for k in ("to", "task"):
+        if not isinstance(obj[k], str):
+            return None, f'The field "{k}" must be a string. Fix "{k}", then send the block again.'
+        if not is_safe_name(obj[k]):
+            return None, (f'The field "{k}" value "{_show(obj[k])}" is not a safe name. Use 1 to 64 '
+                          "characters from A-Z a-z 0-9 . _ - (not . or ..), then send the block again.")
+    # 6. kind
+    if not isinstance(obj["kind"], str):
+        return None, 'The field "kind" must be a string. Fix "kind", then send the block again.'
+    if obj["kind"] not in AGENT_KINDS:
+        tail = (" Use " + ", ".join(AGENT_KINDS[:-2]) + ", " + AGENT_KINDS[-2] + " or "
+                + AGENT_KINDS[-1] + ", then send the block again.")
+        if obj["kind"] in SYSTEM_KINDS:
+            return None, f'The kind "{_show(obj["kind"])}" is for the system only.' + tail
+        return None, f'The kind "{_show(obj["kind"])}" is not a kind.' + tail
+    # 7. status
+    if not isinstance(obj["status"], str):
+        return None, 'The field "status" must be a string. Fix "status", then send the block again.'
+    if obj["status"] not in _STATUSES:
+        return None, (f'The status "{_show(obj["status"])}" is not allowed. Use done or in-progress '
+                      "for status, then send the block again.")
+    # 8. say
+    if not isinstance(obj["say"], str):
+        return None, 'The field "say" must be a string. Fix "say", then send the block again.'
+    n = len(obj["say"])
+    if not 1 <= n <= MAX_SAY_CHARS:
+        return None, (f'The field "say" has {n:,} characters. It needs 1 to {MAX_SAY_CHARS:,}. '
+                      'Shorten "say" or put long text in a file and add its path to "read", '
+                      "then send the block again.")
+    # 9. read
+    if "read" in obj:
+        if not isinstance(obj["read"], list):
+            return None, 'The field "read" must be a list of paths. Fix "read", then send the block again.'
+        for entry in obj["read"]:
+            note = _read_note(entry, root)
+            if note:
+                return None, note
+    # 10. other types
+    if "thread" in obj and (not isinstance(obj["thread"], str) or len(obj["thread"]) > MAX_THREAD_CHARS):
+        return None, (f'The field "thread" must be a string of at most {MAX_THREAD_CHARS} characters. '
+                      'Fix "thread", then send the block again.')
+    if "self_check" in obj:
+        note = _typed_note("self_check", obj["self_check"], _SELF_CHECK)
+        if note:
+            return None, note
+    if "artifacts" in obj:
+        arts = obj["artifacts"]
+        if not isinstance(arts, list):
+            return None, 'The field "artifacts" must be a list. Fix "artifacts", then send the block again.'
+        for a in arts:
+            note = _typed_note("artifacts", a, _ARTIFACT)
+            if note:
+                return None, note
+            if "path" not in a:
+                return None, ('Each entry in "artifacts" needs a "path". Add "path", '
+                              "then send the block again.")
+    return obj, None

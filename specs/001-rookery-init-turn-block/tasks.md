@@ -152,7 +152,7 @@ and 1 bounce (R6).
   - With `ROOKERY_URL` set, no row appears. The block goes to `outbox/failed/<TASK-ID>-<ts>.json`, and the log reads `remote-unsupported`.
   - Without a session, no row and no file appear.
   - Each fixture writes exactly one `log_event()` line with its outcome (FR-022).
-- [ ] T015 [US1] Write part 2 of `test_turn_block.py` (RQ-1.4, D1, D16). Run `rookery hook stop --project p` as a subprocess. Give it Stop JSON on stdin with `last_assistant_message`, `session_id` and `cwd`. Check these items:
+- [x] T015 [US1] Write part 2 of `test_turn_block.py` (RQ-1.4, D1, D16). Run `rookery hook stop --project p` as a subprocess. Give it Stop JSON on stdin with `last_assistant_message`, `session_id` and `cwd`. Check these items:
   - The outcomes are the same as in part 1.
   - Without `last_assistant_message`, the hook logs `no-message-field` and sends nothing.
   - When `rookery.send()` raises an error, the hook writes the block to `outbox/<TASK-ID>-<ts>.json` and exits 0.
@@ -166,7 +166,7 @@ and 1 bounce (R6).
   - An opening fence has 3 or more backticks or tildes and the info string `rookery` after trim.
   - The closing fence uses the same character and is at least as long.
   - Keep the last complete block. Ignore an unclosed fence.
-- [ ] T017 [US1] Write `validate(raw, root)` in `turn_block.py` (D12, FR-002 to FR-004, [schema](contracts/turn-block.schema.json)). It returns `(block, None)` or `(None, note)`. Use the note texts of the contract. Check in this order:
+- [x] T017 [US1] Write `validate(raw, root)` in `turn_block.py` (D12, FR-002 to FR-004, [schema](contracts/turn-block.schema.json)). It returns `(block, None)` or `(None, note)`. Use the note texts of the contract. Check in this order:
   1. The text is one JSON object.
   2. The compact size is 4,096 bytes or less.
   3. No top-level field is unknown. This rejects `call`.
