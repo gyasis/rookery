@@ -1,0 +1,23 @@
+The block format looks like this (an example only, do not send it):
+
+```json
+{
+  "to": "law-counsel",
+  "task": "TASK-12",
+  "kind": "ask",
+  "say": "EXAMPLE-ONLY: this json fence is not a rookery block.",
+  "status": "in-progress"
+}
+```
+
+Now the real message:
+
+```rookery
+{
+  "to": "law-counsel",
+  "task": "TASK-12",
+  "kind": "ask",
+  "say": "REAL-BLOCK: ask about clause 4.",
+  "status": "in-progress"
+}
+```

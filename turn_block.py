@@ -133,3 +133,39 @@ def write_json_atomic(path: str, obj) -> None:
         except OSError:
             pass
         raise
+
+
+_FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def find_last_block(text):
+    """Return the body of the last complete ```rookery fence in text, or None (D2).
+
+    CommonMark fence rules: an opening fence is 3+ backticks or tildes, up to 3
+    spaces of indent. A closing fence uses the same character, is at least as
+    long, and has only whitespace after it. Every fence is tracked, not only
+    rookery ones, so fence-looking lines inside another fence are content.
+    """
+    if not text:
+        return None
+    last = None
+    fence = None      # (char, length, is_rookery) while inside a fence
+    body: list = []
+    for line in re.split(r"\r\n|\n|\r", text):
+        m = _FENCE_LINE.match(line)
+        if fence is None:
+            if not m:
+                continue
+            run, info = m.group(1), m.group(2).strip()
+            if run[0] == "`" and "`" in info:
+                continue   # not a fence: backtick info string holds a backtick
+            fence = (run[0], len(run), info == "rookery")
+            body = []
+        elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] \
+                and not m.group(2).strip():
+            if fence[2]:
+                last = "\n".join(body)
+            fence = None
+        elif fence[2]:
+            body.append(line)
+    return last   # an unclosed trailing fence is dropped

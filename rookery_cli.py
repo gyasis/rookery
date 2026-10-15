@@ -8,12 +8,14 @@ rookery_cli.py approve [--url]  [--token]
 
 import argparse
 import os
+import sys
 
 from cli_approve import cmd_approve
 from cli_known_hosts import cmd_known_hosts_forget, cmd_known_hosts_list
 from cli_serve import cmd_serve
 from cli_up import cmd_up
 import cli_rookery_session
+import cli_hook
 
 # ---------------------------------------------------------------------------
 # Argument parser
@@ -86,6 +88,9 @@ def build_parser():
     # --- session / identity ---
     cli_rookery_session.add_parser(sub)
 
+    # --- hooks ---
+    cli_hook.add_parser(sub)
+
     # --- known-hosts ---
     p_kh = sub.add_parser(
         "known-hosts", help="Manage trusted peers (~/.rookery/known_hosts)."
@@ -113,7 +118,14 @@ def build_parser():
 
 def main():
     ap = build_parser()
-    args = ap.parse_args()
+    if sys.argv[1:2] == ["hook"]:           # hooks never exit non-zero or print usage
+        ap.error = cli_hook._raise_arg_error
+        try:
+            args = ap.parse_args()
+        except cli_hook.HookArgError:
+            return
+    else:
+        args = ap.parse_args()
     args.func(args)
 
 
