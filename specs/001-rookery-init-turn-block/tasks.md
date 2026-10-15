@@ -245,7 +245,7 @@ byte-identical files.
 
 ### Tests first
 
-- [ ] T028 [US3] Write `test_init.py` (RQ-1.10, RQ-1.11, FR-012 to FR-014, SC-004). Work in a temporary folder. Check these cases:
+- [x] T028 [US3] Write `test_init.py` (RQ-1.10, RQ-1.11, FR-012 to FR-014, SC-004). Work in a temporary folder. Check these cases:
   - Without `CLAUDE.md`, init creates it with only the section. The action is `created`.
   - With text and no markers, init appends the section, and the other bytes stay identical. The action is `inserted`.
   - With an old section, only the text between the markers changes. The action is `replaced`.
@@ -261,7 +261,7 @@ byte-identical files.
 
 ### Implementation
 
-- [ ] T029 [P] [US3] Write `rookery_section.md` (FR-010, FR-012, FR-031). Use only the fields `{project}` and `{root}`. Put no agent name in it. The text states these rules:
+- [x] T029 [P] [US3] Write `rookery_section.md` (FR-010, FR-012, FR-031). Use only the fields `{project}` and `{root}`. Put no agent name in it. The text states these rules:
   - The rules apply only when Rookery gives you an identity at session start.
   - End a final message with one `rookery` block. Show one example in a `json` fence, and list the fields.
   - Put example blocks in a different fence language.
@@ -270,7 +270,7 @@ byte-identical files.
   - Put long text in a file under `{root}`, and list its path in `read`.
 
   Run `ste-lint rookery_section.md --max-score 2.0 --glossary ste-glossary.txt`. It must pass.
-- [ ] T030 [US3] Write `upsert_section(path, text)` in `cli_init.py` (D13, the Spec Kit rule). It creates the file, or inserts or replaces the text between `<!-- ROOKERY START -->` and `<!-- ROOKERY END -->`. It returns the action. It writes only when the content changes, through `write_json_atomic()`'s temporary-file rule, under the init lock of T031.
+- [x] T030 [US3] Write `upsert_section(path, text)` in `cli_init.py` (D13, the Spec Kit rule). It creates the file, or inserts or replaces the text between `<!-- ROOKERY START -->` and `<!-- ROOKERY END -->`. It returns the action. It writes only when the content changes, through `write_json_atomic()`'s temporary-file rule, under the init lock of T031.
 - [ ] T031 [US3] Write `merge_hooks(path, project)` in `cli_init.py` (D13):
   - Parse the file first. On a parse error, raise an error with the line and the column, and write nothing.
   - For each event, find a handler whose `command` starts with `rookery hook `. Equal: no change. Different: replace it in place. Absent: append `{"hooks": [{"type": "command", "command": "rookery hook <event> --project <project>"}]}`.
