@@ -9,6 +9,7 @@ import logging.handlers
 import os
 import re
 import sqlite3
+import stat
 import tempfile
 import time
 import unicodedata
@@ -394,6 +395,8 @@ def _validate(raw, root):
 # --- Dispatch (T018; research D3, D4, D17, D22, FR-007, FR-035) --------------
 import datetime
 import difflib
+import fcntl
+import hashlib
 import secrets
 
 
@@ -786,7 +789,12 @@ def format_unread_line(summary):
 
 
 def format_failed_line(item) -> str:
-    """Contract line for one failed block (D23)."""
+    """Contract line for one failed block (D23). An interrupted block may well have been
+    delivered, so its line warns against a blind resend instead of saying "fix the cause"."""
+    if item.get("reason") == "interrupted":
+        return (f"[rookery] Your block for {notice_field(item.get('task') or 'no-task')} may have "
+                f"been sent before an interruption. It is kept in {notice_field(item['path'], 200)}. "
+                "Check with the recipient or the mailroom before you send it again.")
     return (f"[rookery] Your block for {notice_field(item.get('task') or 'no-task')} failed "
             f"({notice_field(item.get('reason') or 'unknown')}). It is kept in "
             f"{notice_field(item['path'], 200)}. "
@@ -860,6 +868,8 @@ def new_failed_blocks(root, session_name, agent_name) -> list:
                     shown = block if os.path.exists(block) else path
                     # The notice names the outcome (contract: "failed (send-failed)").
                     outcome = data.get("outcome")
+                    if outcome == "handoff-pending":
+                        continue     # filed under failed/ but nothing failed and nothing to fix
                     reason = outcome if isinstance(outcome, str) and outcome else (
                         reason if isinstance(reason, str) and reason else "failed")
                 else:
@@ -892,3 +902,236 @@ def mark_failed_seen(root, session_name, agent_name, files) -> None:
 
     seen = {k for k in seen if alive(k)}
     write_json_atomic(path, sorted(seen))
+
+
+# ---- outbox scan (T046, research D3, D11) -------------------------------------------------
+
+MAX_OUTBOX_BYTES = 1_048_576   # an outbox file larger than this is never read (failed: oversize)
+_INTERRUPTED = "interrupted: check the mailroom before you send again"
+
+
+def _outbox_dir(root, session, name) -> str:
+    return os.path.join(root, "postmaster", "outbox", session, name)
+
+
+def _clean(name) -> str:
+    """A folder-safe stand-in for an unsafe name (kept under outbox/_unsafe/)."""
+    s = re.sub(r"[^A-Za-z0-9._-]", "_", str(name))[:60]
+    return "_" if s in ("", ".", "..") else s
+
+
+_MAX_PARKED_NAME = 200   # bytes; keeps <name>.result.json (and a collision suffix) under NAME_MAX
+_SCAN_SETTLE = 2.0       # seconds an outbox file must be untouched before it is claimed
+_warned = set()          # (kind, root) already logged by this process
+
+
+def _warn_once(kind, root, **fields):
+    if (kind, root) not in _warned:
+        _warned.add((kind, root))
+        log_event(root, "postmaster", outcome=kind, **fields)
+
+
+def _park(folder, subdir, fname, src, result) -> str | None:
+    """Rename src into <folder>/<subdir>/<fname> (a short suffix on a name collision, never an
+    overwrite) and write <dest>.result.json beside it. Returns the new path, or None when the
+    rename failed (the file then stays where it was, so the next scan sees it again)."""
+    dest_dir = os.path.join(folder, subdir)
+    os.makedirs(dest_dir, exist_ok=True)
+    if len(fname.encode("utf-8")) + len(".result.json") > _MAX_PARKED_NAME:
+        head = fname.encode("utf-8")[:100].decode("utf-8", "ignore")
+        fname = f"{head}-{hashlib.sha1(fname.encode('utf-8')).hexdigest()[:8]}.json"
+    dest = os.path.join(dest_dir, fname)
+    while os.path.lexists(dest) or os.path.lexists(dest + ".result.json"):
+        dest = os.path.join(dest_dir, f"{fname}.{secrets.token_hex(3)}")
+    os.rename(src, dest)
+    try:
+        write_json_atomic(dest + ".result.json", result)
+    except Exception as exc:
+        log_event(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(folder)))),
+                  "postmaster", outcome="outbox-result-error", reason=str(exc), file=dest)
+    return dest
+
+
+def _regular_files(folder):
+    """Names of the regular, non-hidden *.json files directly in folder (no symlinks)."""
+    try:
+        with os.scandir(folder) as it:
+            return sorted(e.name for e in it
+                          if e.name.endswith(".json") and not e.name.startswith(".")
+                          and e.is_file(follow_symlinks=False))
+    except OSError:
+        return []
+
+
+def _read_capped(path):
+    """(text, None) for a regular file within MAX_OUTBOX_BYTES, else (None, reason)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError as exc:
+        return None, f"unreadable: {exc}"
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            return None, "not a regular file"
+        data = fh.read(MAX_OUTBOX_BYTES + 1)
+    if len(data) > MAX_OUTBOX_BYTES:
+        return None, "oversize"
+    return data.decode("utf-8", "replace"), None
+
+
+def _outbox_raw(text):
+    """A put-back of a malformed block is {"raw": "<text>"}: dispatch that text. Anything
+    else is dispatched as-is (dispatch_block validates it)."""
+    try:
+        obj = json.loads(text)
+    except ValueError:
+        return text
+    if isinstance(obj, dict) and set(obj) == {"raw"} and isinstance(obj["raw"], str):
+        return obj["raw"]
+    return text
+
+
+def _task_of(raw):
+    try:
+        t = json.loads(raw).get("task")
+    except Exception:
+        return None
+    return t if is_safe_name(t) else None
+
+
+def scan_outbox(conn, root, now=None) -> int:
+    """One pass over <root>/agents/<session>/<name>/outbox/*.json (D3, D11). Writes only under
+    <root>/postmaster/outbox/<session>/<name>/; the claim rename is the hand-over. Returns the
+    number of files handled (claimed or failed). Never raises per file; never puts a file back.
+
+    1. A file in sending/ (a crash mid-send) moves to failed/ as `interrupted`; never resent.
+    2. Each outbox file is claimed with os.rename into sending/.
+    3. dispatch_block(adapter="outbox") (no HANDOFF.md).
+    4. -> sent/ when the outcome is `sent`; failed/ for any other outcome (quarantined,
+       send-failed, db-busy, remote-unsupported, handoff-pending, ...). `<TASK-ID>-<file>` plus
+       <that>.result.json {task, outcome, msg_id, reason}.
+    5. One line per file in the postmaster log.
+    """
+    base = os.path.join(root, "postmaster", "outbox")
+    try:
+        os.makedirs(base, exist_ok=True)
+        lock_fd = os.open(os.path.join(base, ".scan.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        log_event(root, "postmaster", outcome="outbox-error", reason=f"scan lock: {exc}")
+        return 0
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            _warn_once("scan-skipped-locked", root)
+            return 0
+        return _scan_locked(conn, root, base, time.time() if now is None else now)
+    finally:
+        os.close(lock_fd)      # closing releases the flock
+
+
+def _scan_locked(conn, root, base, now) -> int:
+    handled = 0
+    # 1. restart rule
+    for sess in _subdirs(base):
+        for name in _subdirs(os.path.join(base, sess)):
+            folder = os.path.join(base, sess, name)
+            sending = os.path.join(folder, "sending")
+            try:
+                names = sorted(os.listdir(sending))
+            except OSError:
+                continue
+            for fname in names:
+                if fname.startswith("."):
+                    continue
+                src = os.path.join(sending, fname)
+                try:
+                    task = _task_of(_read_capped(src)[0] or "")
+                    res = {"task": task, "outcome": "interrupted", "msg_id": None,
+                           "reason": _INTERRUPTED, "note": _INTERRUPTED}
+                    _park(folder, "failed", f"{task or 'no-task'}-{fname}", src, res)
+                    log_event(root, "postmaster", scan="outbox", session=sess, name=name, task=task,
+                              outcome="interrupted", reason=_INTERRUPTED, file=fname)
+                    handled += 1
+                except Exception as exc:
+                    log_event(root, "postmaster", outcome="outbox-error", session=sess, name=name,
+                              reason=f"{type(exc).__name__}: {exc}", file=fname)
+    # 2-5. new files
+    agents = os.path.join(root, "agents")
+    for sess in _subdirs(agents):
+        for name in _subdirs(os.path.join(agents, sess)):
+            box = os.path.join(agents, sess, name, "outbox")
+            if os.path.islink(box):
+                _warn_once("outbox-symlink-skipped", root, session=sess, name=name)
+                continue
+            for fname in _regular_files(box):
+                try:
+                    if now - os.lstat(os.path.join(box, fname)).st_mtime < _SCAN_SETTLE:
+                        continue         # maybe still being written; a later scan takes it
+                    if _handle_file(conn, root, sess, name, os.path.join(box, fname), fname):
+                        handled += 1
+                except Exception as exc:
+                    log_event(root, "postmaster", outcome="outbox-error", session=sess, name=name,
+                              reason=f"{type(exc).__name__}: {exc}", file=fname)
+    return handled
+
+
+def _subdirs(path):
+    try:
+        with os.scandir(path) as it:
+            return sorted(e.name for e in it if e.is_dir(follow_symlinks=False))
+    except OSError:
+        return []
+
+
+def _handle_file(conn, root, sess, name, path, fname) -> bool:
+    safe = is_safe_name(sess) and is_safe_name(name)
+    folder = (_outbox_dir(root, sess, name) if safe
+              else _outbox_dir(root, "_unsafe", f"{_clean(sess)}__{_clean(name)}"))
+    sdir = os.path.join(folder, "sending")
+    os.makedirs(sdir, exist_ok=True)
+    claimed = os.path.join(sdir, fname)
+    if os.path.lexists(claimed):
+        claimed = os.path.join(sdir, f"{fname}.{secrets.token_hex(3)}")
+    try:
+        os.rename(path, claimed)         # the claim: the file leaves the agent's workspace
+    except OSError as exc:
+        log_event(root, "postmaster", outcome="claim-failed", session=sess, name=name,
+                  reason=str(exc), file=fname)
+        return False
+
+    def fail(reason, task=None, outcome=None):
+        res = {"task": task, "outcome": outcome or reason, "msg_id": None, "reason": reason}
+        _park(folder, "failed", f"{task or 'no-task'}-{fname}", claimed, res)
+        log_event(root, "postmaster", scan="outbox", session=sess, name=name, task=task,
+                  outcome=res["outcome"], reason=reason, file=fname)
+        return True
+
+    if not safe:
+        return fail("unsafe-name")
+    if os.path.islink(claimed) or not os.path.isfile(claimed):
+        return fail("not a regular file", outcome="send-failed")
+    sess_row = conn.execute("SELECT * FROM rookery_sessions WHERE name=?", (sess,)).fetchone()
+    if sess_row is None:
+        return fail("no-identity")
+    if sess_row["state"] != "open":
+        return fail("session-ended")
+    ident = conn.execute("SELECT * FROM identities WHERE session_id=? AND name=?",
+                         (sess_row["session_id"], name)).fetchone()
+    if ident is None:
+        return fail("no-identity")
+    text, err = _read_capped(claimed)
+    if err:
+        return fail(err, outcome="oversize" if err == "oversize" else "send-failed")
+    raw = _outbox_raw(text)
+    ctx = {"root": root, "adapter": "outbox", "session": dict(sess_row), "identity": dict(ident)}
+    res = dispatch_block(conn, raw, ctx)
+    task = _task_of(raw)
+    outcome = res.get("outcome")
+    result = {"task": task, "outcome": outcome, "msg_id": res.get("msg_id"),
+              "reason": res.get("reason")}
+    _park(folder, "sent" if outcome == "sent" else "failed", f"{task or 'no-task'}-{fname}",
+          claimed, result)
+    log_event(root, "postmaster", scan="outbox", session=sess, agent_id=ident["agent_id"],
+              name=name, task=task, outcome=outcome, msg_id=res.get("msg_id"),
+              reason=res.get("reason"), file=fname)
+    return True

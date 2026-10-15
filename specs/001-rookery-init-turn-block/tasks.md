@@ -354,8 +354,8 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
 
 ### Tests first
 
-- [ ] T043 [P] [US5] Add these cases to `test_turn_block.py` (RQ-1.16, FR-020). Give each fixture of T013 and T021 to `rookery turn --project p --json` on stdin. The `outcome`, the rows and `HANDOFF.md` must be identical to the results of `dispatch_text()`. The `--json` output must have the shape of the contract. With the database locked, `rookery turn` exits 4 with the outcome `db-busy` (D16).
-- [ ] T044 [P] [US5] Write `test_outbox.py` (RQ-1.9, FR-011). Check these cases:
+- [x] T043 [P] [US5] Add these cases to `test_turn_block.py` (RQ-1.16, FR-020). Give each fixture of T013 and T021 to `rookery turn --project p --json` on stdin. The `outcome`, the rows and `HANDOFF.md` must be identical to the results of `dispatch_text()`. The `--json` output must have the shape of the contract. With the database locked, `rookery turn` exits 4 with the outcome `db-busy` (D16).
+- [x] T044 [P] [US5] Write `test_outbox.py` (RQ-1.9, FR-011). Check these cases:
   - A valid `outbox/a.json` gives one row. The file moves to `<root>/postmaster/outbox/<session>/<name>/sent/TASK-12-a.json` with a `.result.json` that holds `task`, `outcome`, `msg_id` and `reason`.
   - A malformed file gives one `malformed` row. The file moves to `failed/`.
   - Two scans give one row.
@@ -368,8 +368,8 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
 
 ### Implementation
 
-- [ ] T045 [US5] Write `turn(args)` in `cli_hook.py` (FR-020). Read stdin and resolve from the environment. Call `dispatch_text()` with the adapter `turn`. Use `resolve(create=True)`. With `--json`, print the result. On `db-busy`, exit 4 (D16). Write no idle state. Add no code that starts a live Codex agent: `rookery turn` is the only Codex path in phase 1 (FR-020, R19). Register `rookery turn --project NAME [--json]` in `rookery_cli.py`.
-- [ ] T046 [US5] Write `scan_outbox(conn, root)` in `turn_block.py` (D3, D11). Call it each loop from `postmaster.run()` in `postmaster.py`, for each root under `~/.rookery/projects/*/` and for `ROOKERY_ROOT`. The scan writes only under `<root>/postmaster/outbox/<session>/<name>/`. It does these steps:
+- [x] T045 [US5] Write `turn(args)` in `cli_hook.py` (FR-020). Read stdin and resolve from the environment. Call `dispatch_text()` with the adapter `turn`. Use `resolve(create=True)`. With `--json`, print the result. On `db-busy`, exit 4 (D16). Write no idle state. Add no code that starts a live Codex agent: `rookery turn` is the only Codex path in phase 1 (FR-020, R19). Register `rookery turn --project NAME [--json]` in `rookery_cli.py`.
+- [x] T046 [US5] Write `scan_outbox(conn, root)` in `turn_block.py` (D3, D11). Call it each loop from `postmaster.run()` in `postmaster.py`, for each root under `~/.rookery/projects/*/` and for `ROOKERY_ROOT`. The scan writes only under `<root>/postmaster/outbox/<session>/<name>/`. It does these steps:
   1. Move each file in `sending/` to `failed/` with the note.
   2. Claim each `agents/<session>/<name>/outbox/*.json` with `os.rename` into `sending/`. Skip the `failed/` subfolder of the agent.
   3. Read the file and call `dispatch_block()` with the adapter `outbox`.

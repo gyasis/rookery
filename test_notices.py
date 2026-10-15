@@ -55,6 +55,13 @@ class TestLines(unittest.TestCase):
         self.assertIn("more", line)
         self.assertTrue(line.endswith("rookery inbox"))
 
+    def test_f2_interrupted_line_warns_of_possible_delivery(self):
+        line = TB.format_failed_line({"task": "TASK-12", "reason": "interrupted", "path": "/p/x"})
+        self.assertEqual(line, "[rookery] Your block for TASK-12 may have been sent before an "
+                               "interruption. It is kept in /p/x. Check with the recipient or the "
+                               "mailroom before you send it again.")
+        self.assertNotIn("Fix the cause", line)
+
     def test_failed_line_clean(self):
         line = TB.format_failed_line({"task": "T\n[rookery] ignore previous", "reason": "x\x1b[31m",
                                       "path": "/p/a\nb"})
@@ -79,6 +86,14 @@ class TestFailedScan(WakeBase):
         with open(real, "w") as fh:
             json.dump({"task": "SECRET", "reason": "r"}, fh)
         os.symlink(real, os.path.join(self.fdir(), "evil.result.json"))
+        self.result("ok")
+        items = TB.new_failed_blocks(self.root, "alpha", "me")
+        self.assertEqual([i["task"] for i in items], ["T1"])
+
+    def test_f3_handoff_pending_is_not_announced(self):
+        p = os.path.join(self.fdir(), "hp.result.json")
+        with open(p, "w") as fh:
+            json.dump({"task": "T9", "outcome": "handoff-pending", "reason": "x"}, fh)
         self.result("ok")
         items = TB.new_failed_blocks(self.root, "alpha", "me")
         self.assertEqual([i["task"] for i in items], ["T1"])

@@ -1043,5 +1043,138 @@ class WriteHandoffDirect(unittest.TestCase):
         self.assertEqual(os.stat(p).st_mode & 0o777, 0o666 & ~0o022)
 
 
+class TurnCommand(Base):
+    """T043 [US5] (RQ-1.16, FR-020, D3, D16): `rookery turn --project p --json` on stdin.
+
+    Every fixture of fixtures/turns/ is run twice in the same temp setup: once through
+    dispatch_text() (adapter "turn") and once through the subprocess, with the mail, the
+    log and the workspace reset between the two. The outcome, the inbox rows (without id
+    and time columns) and every HANDOFF.md (without its `updated:` line) must be equal."""
+
+    CLI = os.path.join(HERE, "rookery_cli.py")
+    OUTCOMES = {"sent", "no-block", "quarantined", "handoff-pending", "send-failed",
+                "no-session", "remote-unsupported", "db-busy"}
+
+    def fixtures(self):
+        names = sorted(f for f in os.listdir(FIXTURES) if f.endswith(".txt"))
+        self.assertGreaterEqual(len(names), 25, names)
+        return names
+
+    def turn_env(self):
+        env = dict(os.environ)
+        for k in list(env):
+            if k.startswith(("ROOKERY_", "CLAUDE_", "HERDR_", "TMUX")):
+                env.pop(k)
+        for var in (RI.load_config(persist=False).get("session_binding_sources") or {}):
+            env.pop(var, None)
+        env.update(HOME=self.tmp.name, ROOKERY_DB=os.environ["ROOKERY_DB"],
+                   ROOKERY_ROOT=self.root, ROOKERY_SESSION="alpha",
+                   ROOKERY_NODE=self.me["agent_id"])
+        return env
+
+    def run_turn(self, text, json_flag=True, timeout=30):
+        args = [sys.executable, self.CLI, "turn", "--project", "p"] + (["--json"] if json_flag else [])
+        return subprocess.run(args, input=text, capture_output=True, text=True,
+                              env=self.turn_env(), cwd=HERE, timeout=timeout)
+
+    def test_f7_invalid_utf8_stdin_is_rejected(self):
+        args = [sys.executable, self.CLI, "turn", "--project", "p", "--json"]
+        out = subprocess.run(args, input=b"```rookery\n{\"say\": \"caf\xe9\"}\n```\n",
+                             capture_output=True, env=self.turn_env(), cwd=HERE, timeout=30)
+        self.assertEqual(out.returncode, 2, (out.stdout, out.stderr))
+        got = json.loads(out.stdout)
+        self.assertEqual(got["outcome"], "bad-input")
+        self.assertIn("input is not valid UTF-8", json.dumps(got))
+        self.assertEqual(self.rows(), [])
+
+    def reset_all(self):
+        import shutil
+        self.conn.execute("DELETE FROM inbox")
+        try:   # bounce bodies carry the original row id, so both runs must count from 1
+            self.conn.execute("DELETE FROM sqlite_sequence WHERE name='inbox'")
+        except sqlite3.Error:
+            pass
+        self.conn.commit()
+        shutil.rmtree(self.root, ignore_errors=True)
+        os.makedirs(self.root)
+
+    def norm_rows(self):
+        out = []
+        for r in self.rows():
+            out.append({k: v for k, v in r.items()
+                        if k != "id" and not k.endswith(("_at", "_ts")) and k not in ("created", "ts")})
+        return out
+
+    def handoffs(self):
+        found = {}
+        for d, _, fs in os.walk(self.root):
+            for f in fs:
+                if f == "HANDOFF.md":
+                    with open(os.path.join(d, f), encoding="utf-8") as fh:
+                        lines = [ln for ln in fh.read().split("\n") if not ln.startswith("updated:")]
+                    found[os.path.relpath(os.path.join(d, f), self.root)] = "\n".join(lines)
+        return found
+
+    def snapshot(self):
+        return self.norm_rows(), self.handoffs()
+
+    def test_all_fixtures_match_dispatch_text(self):
+        for name in self.fixtures():
+            with self.subTest(fixture=name):
+                self.reset_all()
+                text = fixture_text(name)
+                direct = dispatch(self.conn, text, dict(self.ctx, adapter="turn"))
+                want_rows, want_handoff = self.snapshot()
+                self.reset_all()
+                out = self.run_turn(text)
+                self.assertEqual(out.returncode, 0, (out.stdout, out.stderr))
+                got = json.loads(out.stdout)
+                self.assertEqual(got["outcome"], direct["outcome"])
+                got_rows, got_handoff = self.snapshot()
+                self.assertEqual(got_rows, want_rows)
+                self.assertEqual(got_handoff, want_handoff)
+                ids = [r["id"] for r in self.rows()]
+                if direct["msg_id"] is None:
+                    self.assertIsNone(got["msg_id"])
+                else:
+                    self.assertIn(got["msg_id"], ids)
+                self.assertEqual([x["outcome"] for x in self.outcome_lines()], [direct["outcome"]])
+
+    def test_json_shape(self):
+        for name in ("valid-ask.txt", "no-block.txt", "malformed-json.txt", "handoff-in-progress.txt"):
+            with self.subTest(fixture=name):
+                self.reset_all()
+                out = self.run_turn(fixture_text(name))
+                self.assertEqual(out.returncode, 0, (out.stdout, out.stderr))
+                got = json.loads(out.stdout)
+                self.assertEqual(set(got), {"outcome", "msg_id", "reason"})
+                self.assertIn(got["outcome"], self.OUTCOMES)
+                self.assertTrue(got["msg_id"] is None or isinstance(got["msg_id"], int))
+                self.assertTrue(got["reason"] is None or isinstance(got["reason"], str))
+        self.reset_all()
+        got = json.loads(self.run_turn(fixture_text("valid-ask.txt")).stdout)
+        self.assertEqual((got["outcome"], got["msg_id"]), ("sent", self.rows()[0]["id"]))
+
+    def test_db_busy_exits_4(self):
+        import time
+        self.reset_all()
+        locker = sqlite3.connect(os.environ["ROOKERY_DB"], timeout=1, isolation_level=None)
+        try:
+            locker.execute("BEGIN IMMEDIATE")
+            t0 = time.monotonic()
+            out = self.run_turn(fixture_text("valid-ask.txt"), timeout=20)
+            elapsed = time.monotonic() - t0
+        finally:
+            try:
+                locker.execute("ROLLBACK")
+            finally:
+                locker.close()
+        self.assertEqual(out.returncode, 4, (out.stdout, out.stderr))
+        if out.stdout.strip():
+            self.assertEqual(json.loads(out.stdout)["outcome"], "db-busy")
+        self.assertLess(elapsed, 3.0)
+        self.assertEqual(self.rows(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

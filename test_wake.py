@@ -348,5 +348,34 @@ class TestNoRosterProcess(WakeBase):
             self._stop(proc)
 
 
+class TestOutboxRoots(unittest.TestCase):
+    def test_roots_deduplicated(self):
+        saved = dict(os.environ)
+        try:
+            with tempfile.TemporaryDirectory() as home:
+                os.environ.clear()
+                os.environ.update(saved)
+                for k in [k for k in os.environ if k.startswith("ROOKERY_")]:
+                    os.environ.pop(k)
+                os.environ["HOME"] = home
+                base = os.path.join(home, ".rookery", "projects")
+                has = os.path.join(base, "has")
+                os.makedirs(os.path.join(has, "agents"))
+                os.makedirs(os.path.join(base, "without"))
+                os.symlink(has, os.path.join(base, "link"))
+                extra = os.path.join(home, "extra")
+                os.makedirs(extra)
+                env_root = os.path.join(home, "envroot")
+                os.makedirs(env_root)
+                os.environ["ROOKERY_ROOT"] = env_root
+                self.assertEqual(PM.outbox_roots(extra), [extra, env_root, has])
+                os.environ["ROOKERY_ROOT"] = has + "/"      # same project via env: not repeated
+                self.assertEqual(PM.outbox_roots(has), [has])
+                self.assertEqual(PM.outbox_roots(None), [has + "/"])
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+
+
 if __name__ == "__main__":
     unittest.main()

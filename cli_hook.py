@@ -394,6 +394,121 @@ def prompt(args):
                   outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
 
 
+_TURN_MAX_BYTES = 1024 * 1024   # stdin cap for `rookery turn`
+_NO_SESSION_MSG = ("No current Rookery session. Set ROOKERY_SESSION or start in a pane "
+                   "with a session binding.")
+
+
+def _turn_exit(args, code, outcome, reason, msg_id=None, human=None):
+    """Print the result and exit. --json: one object on stdout. Errors (code != 0)
+    also put one line on stderr. Without --json: one human line."""
+    if code != 0:
+        print(human or reason, file=sys.stderr)
+    if getattr(args, "json", False):
+        print(json.dumps({"outcome": outcome, "msg_id": msg_id, "reason": reason}))
+    elif code == 0:
+        print(human or (f"{outcome}: {reason}" if reason else outcome))
+    sys.exit(code)
+
+
+def _turn_keep_busy(root, text):
+    """D16: resolve hit a lock. A read does not wait in WAL mode, so resolve read-only;
+    with an identity, put the valid block back in outbox/. True when it was kept."""
+    try:
+        import turn_block
+        import rookery_identity
+        raw = turn_block.find_last_block(text)
+        if raw is None:
+            return False
+        block, _note = turn_block.validate(raw, root)
+        conn = turn_block.open_db()
+        try:
+            resolved = rookery_identity.resolve(conn, os.environ, {}, root, create=False)
+        finally:
+            conn.close()
+        if resolved is None or resolved[1] is None:
+            return False
+        ctx = {"root": root, "session": resolved[0], "identity": resolved[1], "adapter": "turn"}
+        turn_block._put_back(ctx, block, raw, failed=False)
+        turn_block.log_event(root, adapter="turn", session=resolved[0]["session_id"],
+                             agent_id=resolved[1]["agent_id"], outcome="db-busy",
+                             reason="resolve hit a lock; block kept in outbox")
+        return True
+    except Exception:
+        return False
+
+
+def turn(args):
+    """`rookery turn --project NAME [--json]` (FR-020, D3, D16, D20). stdin = the raw
+    text of one headless turn. Same dispatch_text() as the Stop hook, adapter `turn`;
+    writes no idle state. Exit: 0 done, 2 bad input, 3 no/ended session, 4 db-busy."""
+    try:
+        import turn_block
+        import rookery_identity
+
+        raw = sys.stdin.buffer.read(_TURN_MAX_BYTES + 1)
+        if len(raw) > _TURN_MAX_BYTES:
+            _turn_exit(args, 2, "bad-input", "input too large",
+                       human=f"Input too large. The limit is {_TURN_MAX_BYTES} bytes. "
+                             "Send only the final message of the turn.")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            _turn_exit(args, 2, "bad-input", "input is not valid UTF-8",
+                       human="Input is not valid UTF-8. Nothing was sent.")
+        if not text.strip():
+            _turn_exit(args, 2, "bad-input", "empty stdin",
+                       human="Empty input. Pipe the text of the turn into rookery turn.")
+        if _no_session_possible(turn_block, rookery_identity):
+            _turn_exit(args, 3, "no-session", "no session", human=_NO_SESSION_MSG)
+        root = turn_block.project_root(args.project)
+        try:
+            conn = turn_block.open_db()
+            try:
+                ended = rookery_identity.find_session(
+                    conn, os.environ, rookery_identity.load_config(persist=False))
+                if ended is not None and ended["state"] != "open":
+                    turn_block.log_event(root, adapter="turn", session=ended["session_id"],
+                                         outcome="session-ended")
+                    _turn_exit(args, 3, "no-session", "session-ended",
+                               human=f"The Rookery session \"{ended['name']}\" has ended. "
+                                     "Start a new one with: rookery session new")
+                resolved = rookery_identity.resolve(
+                    conn, os.environ, {}, root, create=True)
+                if resolved is None:
+                    _turn_exit(args, 3, "no-session", "no session", human=_NO_SESSION_MSG)
+                session, identity, _bindings = resolved
+                if identity is None:
+                    _turn_exit(args, 2, "bad-input", "no identity",
+                               human="No agent identity found. Set ROOKERY_NODE to an "
+                                     "agent name in the session.")
+                ctx = {"root": root, "session": session, "identity": identity,
+                       "adapter": "turn"}
+                res = turn_block.dispatch_text(conn, text, ctx)
+            finally:
+                conn.close()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "locked" in msg or "busy" in msg:
+                kept = _turn_keep_busy(root, text)
+                _turn_exit(args, 4, "db-busy", str(exc),
+                           human="The database is busy. "
+                                 + ("The block is back in your outbox. " if kept else "")
+                                 + "Run rookery turn again with the same text.")
+            raise
+        outcome = res.get("outcome")
+        if outcome == "db-busy":
+            _turn_exit(args, 4, outcome, res.get("reason"), res.get("msg_id"),
+                       human="The database is busy. The block is back in your outbox. "
+                             "Run rookery turn again with the same text.")
+        _turn_exit(args, 0, outcome, res.get("reason"), res.get("msg_id"))
+    except SystemExit:
+        raise
+    except Exception as exc:
+        _turn_exit(args, 2, "error", f"{type(exc).__name__}: {exc}",
+                   human=f"rookery turn failed: {type(exc).__name__}: {exc}")
+
+
 def add_parser(sub):
     p = sub.add_parser("hook", help="Claude Code hook entry points (silent, exit 0).")
     p.error = _raise_arg_error
@@ -404,3 +519,9 @@ def add_parser(sub):
         hp.error = _raise_arg_error
         hp.add_argument("--project", required=True, help="Rookery project name")
         hp.set_defaults(func=fn)
+
+    tp = sub.add_parser(
+        "turn", help="Send the block in a headless turn's text (stdin). Exit 3 no session, 4 db busy.")
+    tp.add_argument("--project", required=True, help="Rookery project name")
+    tp.add_argument("--json", action="store_true", help="Print one JSON object.")
+    tp.set_defaults(func=turn)

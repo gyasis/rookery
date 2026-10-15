@@ -240,6 +240,37 @@ def _write_pushed(root, agent_id, pending_ids, announced):
         {"last_id": max(pending_ids, default=0), "pushed_ids": sorted(announced)})
 
 
+def outbox_roots(root=None):
+    """Every root to scan: each ~/.rookery/projects/*/ that has agents/, ROOKERY_ROOT and the
+    given root, de-duplicated by realpath."""
+    cands = [root, os.environ.get("ROOKERY_ROOT")]
+    base = os.path.expanduser("~/.rookery/projects")
+    try:
+        cands += [e.path for e in os.scandir(base)
+                  if e.is_dir(follow_symlinks=False) and os.path.isdir(os.path.join(e.path, "agents"))]
+    except OSError:
+        pass
+    seen, out = set(), []
+    for c in cands:
+        if not c:
+            continue
+        real = os.path.realpath(c)
+        if real not in seen:
+            seen.add(real)
+            out.append(c)
+    return out
+
+
+def scan_outbox_roots(conn, root=None):
+    """The outbox scan over every root; one root failing is logged and skipped."""
+    for r in outbox_roots(root):
+        try:
+            turn_block.scan_outbox(conn, r)
+        except Exception as exc:
+            turn_block.log_event(r, "postmaster", outcome="outbox-scan-error",
+                                 reason=f"{type(exc).__name__}: {exc}")
+
+
 def run_identities_only(root, poll):
     """No --nodes (D10, FR-018): skip every roster step; run only the outbox scan and the wake step."""
     wake_conn = turn_block.open_db()      # same db_path() as the hooks (D6)
@@ -247,7 +278,7 @@ def run_identities_only(root, poll):
     log("online. no roster: outbox scan + identity wake step only.")
     try:
         while True:
-            # TODO(T046): outbox scan runs here (before the wake step); not implemented yet.
+            scan_outbox_roots(wake_conn, root)
             try:
                 wake_identities(wake_conn, root, rookery_identity.load_config(persist=False),
                                 skip_logged=skip_logged, backoff=backoff)
@@ -349,8 +380,9 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                                   allowed_tools, model, mcp)
                 woke_at[n] = time.time()
 
-            # 5. push a notice into idle identities with unread mail (D10)
+            # 5. outbox scan, then push a notice into idle identities with unread mail (D10)
             if wake_conn is not None:
+                scan_outbox_roots(wake_conn, root)
                 try:
                     wake_identities(wake_conn, root, rookery_identity.load_config(persist=False),
                                     skip_logged=skip_logged, backoff=backoff)
