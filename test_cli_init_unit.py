@@ -520,3 +520,20 @@ class TestZipapp(unittest.TestCase):
                 text = fh.read()
             self.assertIn("rookery inbox", text)
             self.assertIn(root, text)
+
+    def test_zipapp_run_by_relative_path_reads_data_files(self):
+        # `./rookery ...`: the loader's archive path is relative while __file__ is absolute.
+        import bootstrap
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as t:
+            bootstrap.build_pyz(os.path.join(t, "rookery"))
+            proj, home, root = (os.path.join(t, n) for n in ("proj", "home", "root"))
+            for d in (proj, home, root):
+                os.makedirs(d)
+            env = {"PATH": "/usr/bin:/bin", "HOME": home, "ROOKERY_ROOT": root,
+                   "ROOKERY_DB": os.path.join(t, "r.db")}
+            for args in (["session", "list"], ["init", "--dir", proj, "--project", "demo"]):
+                r = subprocess.run([sys.executable, "./rookery", *args], env=env, cwd=t,
+                                   capture_output=True, text=True, timeout=60)
+                self.assertEqual(r.returncode, 0, r.stderr)

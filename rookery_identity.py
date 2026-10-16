@@ -60,7 +60,8 @@ def _read_default_config() -> str:
     except OSError:
         loader = globals().get("__loader__")
         if loader is not None and hasattr(loader, "get_data"):
-            return loader.get_data(_DEFAULT_CONFIG_PATH).decode("utf-8")
+            return loader.get_data(os.path.join(getattr(loader, "archive", _HERE),
+                                   os.path.basename(_DEFAULT_CONFIG_PATH))).decode("utf-8")
         raise
 
 

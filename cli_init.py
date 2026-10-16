@@ -419,7 +419,8 @@ def _section_text(root, project):
         if loader is None or not hasattr(loader, "get_data"):
             raise _oserr(path, exc)
         try:
-            tpl = loader.get_data(path).decode("utf-8")
+            tpl = loader.get_data(os.path.join(getattr(loader, "archive", _HERE),
+                                              "rookery_section.md")).decode("utf-8")
         except OSError as exc2:
             raise _oserr(path, exc2)
     return tpl.replace("{root}", root).replace("{project}", project)

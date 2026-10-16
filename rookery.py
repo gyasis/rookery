@@ -40,7 +40,9 @@ def _load_schema() -> str:
     except OSError:
         loader = globals().get("__loader__")
         if loader is not None and hasattr(loader, "get_data"):
-            return loader.get_data(_SCHEMA_PATH).decode("utf-8")
+            # zipimport wants the path under loader.archive, which may be relative (./rookery)
+            return loader.get_data(os.path.join(getattr(loader, "archive", _HERE),
+                                                "schema.sql")).decode("utf-8")
         raise
 
 
