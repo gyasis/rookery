@@ -7,7 +7,8 @@ revision: 2 (sessions, identities, bindings)
 
 # Contract: CLI commands and hook I/O
 
-Every command exits 0 on success. Each command that changes state prints one JSON object on stdout
+Every command exits 0 on success. Exit 2: bad input, not found, or a refusal (for example
+`session end legacy`). Exit 1: `ack` skipped an ID. Exit 3: no current session, or an ended session (CLI and `rookery turn`; the hooks always exit 0). Exit 4: database busy. Each command that changes state prints one JSON object on stdout
 when it gets `--json` (constitution VI). Database: `ROOKERY_DB`, else
 `~/Documents/code/rookery/rookery.db` (research D6). "Resolve" means research D20.
 
@@ -29,6 +30,8 @@ rookery init [--harness claude|codex|pi|omp] [--project NAME] [--dir PATH] [--js
   `{"ok": true, "context_file": {"path": "...", "action": "created|inserted|replaced|unchanged"},
   "settings": {"path": "...", "added": ["Stop"], "updated": [], "unchanged": ["SessionStart"]},
   "project": "..."}`
+- `settings` is `null` for harnesses with no hook settings file (`codex`, `pi`, `omp`). Those agents get
+  mail through `rookery turn` or the postmaster push.
 - Human output ends with: `Open agent sessions do not join. Start a new Rookery session with new panes
   and agents: rookery session new --name <name>.`
 - Init writes no file in `--dir` other than the context file and `.claude/settings.json` (FR-023). Its
@@ -48,6 +51,8 @@ rookery session end SESSION [--json]
 - `--from` creates one identity per agent name of the old session, with `previous_id`, and copies the
   newest `HANDOFF.md` of each. It never copies mail, idle state or bindings.
 - `--bind` adds session bindings, for example `--bind herdr-workspace:w1`.
+- `end legacy` refuses: stderr `The legacy session holds the mail from before sessions existed. Rookery
+  cannot end it.`, exit 2.
 
 ## `rookery identity` (FR-029, FR-036, RQ-1.20, RQ-1.26)
 
@@ -58,6 +63,11 @@ rookery identity link --previous AGENT_ID [--json] # on the resolved identity
 rookery identity show [--json]                     # who am I
 rookery identity list [--session SESSION] [--json]
 ```
+
+- `new`, `bind` and `link` refuse an ended session: stderr `The Rookery session "<name>" has ended. Rookery
+  adds no agent to an ended session. Start a new one with: rookery session new`, exit 3 (the code of
+  `rookery turn` for an ended session). `show`, `list`, `inbox`, `peek` and `ack` still work.
+- The hooks and `rookery turn` also create and join nothing in an ended session (FR-032).
 
 ## `rookery inbox`, `rookery peek` and `rookery ack` (FR-031, RQ-1.13, RQ-1.14, RQ-1.22)
 
@@ -84,7 +94,8 @@ rookery hook session-start --project NAME
 ```
 
 - stdin: the Claude Code SessionStart JSON (`source`, `session_id`, `cwd`, ...).
-- Resolve. No session: print nothing, write nothing, exit 0.
+- Resolve. No session: print nothing, write at most one log line (`no-session` or `unknown-session`),
+  exit 0. With no Rookery environment, write nothing (SC-010).
 - Effects: `register_node(agent_id, kind="pane", lifecycle="persistent")`. Appends
   `export ROOKERY_SESSION=<session_id>` and `export ROOKERY_NODE=<agent_id>` to `$CLAUDE_ENV_FILE` when it
   exists.
@@ -106,7 +117,10 @@ rookery hook session-start --project NAME
 ## `rookery hook stop` (FR-005 to FR-009, FR-017, RQ-1.4, RQ-1.5, RQ-1.6, RQ-1.7, RQ-1.14)
 
 - stdin: the Claude Code Stop JSON. The hook reads `last_assistant_message` (research D1).
-- No session: nothing, exit 0.
+- No session: print nothing, write at most one log line (`no-session` or `unknown-session`), exit 0.
+  With no Rookery environment, write nothing (SC-010).
+- Ended session: send nothing, write no idle state. Keep a valid block under the identity's
+  `outbox/failed/`, log `session-ended`, exit 0.
 - Resolve read-only (research D16). A session but no identity: keep a valid block in
   `<root>/unresolved/<TASK-ID>-<ts>.json`, log `no-identity`, exit 0.
 - Step 1: `dispatch_text()` on the message (outcome table in data-model.md).

@@ -31,7 +31,7 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-Gates from `.specify/memory/constitution.md` (v1.2.0). Mark each PASS, or justify under
+Gates from `.specify/memory/constitution.md` (v1.2.1). Mark each PASS, or justify under
 Complexity Tracking:
 
 - [ ] **I. Mailroom is the record** — SQLite is the source of truth; files are generated mirrors;

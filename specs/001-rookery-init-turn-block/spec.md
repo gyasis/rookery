@@ -63,6 +63,30 @@ is phase 3; phase 1 only stamps the session ID.
   only to an idle agent (FR-018). An identity with no wake binding gets no push in phase 1. Its mail waits
   for the prompt notice or `rookery inbox`.
 
+### Session 2026-10-16
+
+- Q: Should `rookery inbox` mark mail read? → A: No. `rookery inbox` shows mail and changes nothing.
+  `rookery ack ID…` marks it read. A truncated pipe lost mail (FR-031).
+- Q: May an agent create or join an identity in an ended session? → A: No. Every create and join path
+  refuses an ended session. The CLI (`rookery identity new | bind | link`) and `rookery turn` print a message
+  on stderr and exit 3. The hooks print nothing, log `session-ended` and exit 0. `resolve()` raises an
+  error. Reading mail stays allowed (FR-032).
+- Q: May the user end the `legacy` session? → A: No. `rookery session end legacy` refuses with a message
+  and exit 2. The `legacy` session holds the mail from before sessions (FR-032, FR-034).
+- Q: May a hook write anything when no session matches? → A: At most one log line. The hook prints nothing.
+  It writes one `no-session` or `unknown-session` log line and no other file. With no Rookery environment,
+  it writes nothing (FR-015, SC-010).
+- Q: May an agent send mail to itself? → A: Yes. Rookery does not block it. The mail follows the normal
+  send path.
+- Q: When does a block go to the outbox? → A: Only after a failed send. A turn first sends the mail
+  directly. If the process dies between the parse and the send, the block is lost (FR-005).
+- Q: May carry-over write into a successor's folder, against "one writer per folder"? → A: Yes, once.
+  Carry-over writes `HANDOFF.md` into the successor identity's folder at the link. This is an exception
+  to constitution principle VII (constitution 1.2.1).
+- Q: What is `settings` in `rookery init --json` for a harness with no hook settings file? → A: `null`.
+  Codex, pi and omp have no such file. Their agents get mail through `rookery turn` or the postmaster
+  push.
+
 ## User Scenarios & Testing *(mandatory)*
 
 Actors: **the user** (one person running the user's own agents in herdr/tmux panes) and **Rookery** (mailroom +
@@ -230,6 +254,10 @@ malformed file with reason `malformed`. Restarting the watcher does not resend.
   after the turn ends. An interrupted turn has no Stop event, so the agent stays busy. Until its next turn
   ends, the prompt notice is the only signal.
 - Two `rookery init` runs at once on the same project → the files end valid and complete (no half-written file).
+- An agent mails itself (`to` is its own name) → Rookery sends the mail like any other. It lands in the
+  agent's own inbox. Rookery does not block it.
+- An agent tries to join or create an identity in an ended session → Rookery creates nothing. The CLI
+  and `rookery turn` exit 3. A hook prints nothing, logs `session-ended` and exits 0 (FR-032). The user ends the `legacy` session → Rookery refuses with exit 2 (FR-032).
 - Context file absent → init creates it containing only the managed section.
 - Harness is Codex / pi / omp → init writes the section into `AGENTS.md`. Init touches no Claude settings.
 - Two agent sessions in one project and one Rookery session → each presents its own bindings, so each
@@ -274,6 +302,8 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
 
 - **FR-005** (RQ-1.4): At the end of each turn, a pure-code step (no model) MUST parse the LAST `rookery`
   block of the turn's final message. No block → Rookery sends nothing and creates or changes no mail record.
+  The step sends a valid block directly. It writes the block to the identity's `outbox/` only after a send
+  fails. Known window: if the process dies between the parse and the send, Rookery loses the block.
 - **FR-006** (RQ-1.5): Rookery MUST record a malformed block as a mail row with status `quarantined`, reason
   `malformed` and `decided_by` naming the parser. Rookery MUST send the sender a JSON bounce saying what was wrong.
   Rookery MUST NOT drop the block.
@@ -337,7 +367,9 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
 **Staying in context**
 
 - **FR-015** (RQ-1.12): The session-start hook MUST resolve and register the identity (FR-027). It MUST also inject the
-  identity's newest `HANDOFF.md` and a summary of its unread mail when either exists.
+  identity's newest `HANDOFF.md` and a summary of its unread mail when either exists. With no matching
+  session, the hook prints nothing and writes at most one log line (`no-session` or `unknown-session`),
+  and no other file. With no Rookery environment, it writes nothing (SC-010).
 - **FR-016** (RQ-1.13): The prompt-submit hook MUST inject one short notice ("N unread from X about TASK-…")
   ONLY when unread mail or a new failed block (FR-037) exists. With neither it MUST emit zero bytes. It MUST NOT paste mail bodies and
   MUST NOT mark mail read.
@@ -386,7 +418,14 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   session ID and never reuse it. `rookery session new [--name N] | list | show | end` MUST manage sessions,
   with `--json` output. Without `--name`, the name is the session ID. Rookery never reuses a session
   name, also after the session ends. A session MAY have bindings, as an identity does (FR-026). An ended session stays in
-  the database with its identities and mail.
+  the database with its identities and mail. Rookery MUST refuse every path that creates or joins an
+  identity in an ended session (the hooks, `rookery turn`, `resolve()`, `rookery identity new | bind |
+  link`). The refusal prints a message on stderr and exits 3 in the CLI, the same code as `rookery turn`
+  for a session that has ended. Reading mail (`inbox`, `peek`, `ack`) of an identity in an ended session
+  stays allowed. `rookery session end legacy` MUST refuse with a message and exit 2: the `legacy` session
+  holds the mail from before sessions.
+  Rookery sends no block from an ended session. The block fails with reason `session-ended`. The Stop hook keeps the
+  block under the identity's `outbox/failed/`, logs `session-ended` and exits 0, as the outbox scan does.
 - **FR-025** (RQ-1.20, RQ-1.25, R8): Each agent in a Rookery session MUST have an identity with a stable ID
   and a name. Rookery generates the ID and never reuses it, so each new session gives each agent a new ID.
   A name MUST be unique inside its session. The same name MAY exist in other sessions as a different
@@ -404,7 +443,7 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   1. `ROOKERY_SESSION` names a Rookery session by name or by ID, or
   2. a session binding that the agent session presents matches a Rookery session.
   3. When neither gives a session, every hook MUST do nothing: no output, no registration, no state file.
-     Rookery logs `no-session`. This makes Rookery opt-in per Rookery session.
+     Rookery logs one line, `no-session` (or `unknown-session`), and nothing else. This makes Rookery opt-in per Rookery session.
   Then, the identity inside that Rookery session:
   1. `ROOKERY_NODE` names an identity by name or by ID. A new name creates the identity with that name.
      An unknown ID does not resolve. Rookery logs it and continues with step 2.
@@ -433,6 +472,8 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   creates MUST record `previous_id`: the ID of the identity with the same name in the old session. So the
   history of an agent stays traceable across sessions. `rookery identity link --previous <id>` MUST set
   the same link by hand. A link never moves or merges mail.
+  Carry-over is the one exception to "one writer per folder" (constitution VII): it MAY write `HANDOFF.md`
+  into the successor identity's folder, once, at the link.
 - **FR-035** (RQ-1.27): Phase 1 supports only a local mailroom. When `ROOKERY_URL` exists, each adapter MUST
   send nothing, MUST keep each block in `outbox/failed/` with the reason `remote-unsupported`, and MUST log
   it.

@@ -3,7 +3,7 @@ type: Research
 task: 001-rookery-init-turn-block
 feature: rookery init and the rookery turn block
 updated: 2026-10-15
-revision: 2 (after clarify session 2026-10-15 and constitution v1.2.0)
+revision: 2 (after clarify session 2026-10-15 and constitution v1.2.1)
 ---
 
 # Research: `rookery init` and the rookery turn block

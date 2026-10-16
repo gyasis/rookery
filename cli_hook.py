@@ -59,7 +59,7 @@ def stop(args):
         import rookery_identity
 
         if _no_session_possible(turn_block, rookery_identity):
-            return                          # no session: print nothing, write nothing
+            return                          # no Rookery environment: write nothing (SC-010)
         root = turn_block.project_root(args.project)
         hook_input, bad = _read_input()
         text = hook_input.get("last_assistant_message")
@@ -71,9 +71,12 @@ def stop(args):
             resolved = rookery_identity.resolve(
                 conn, os.environ, hook_input, root, create=False)
             if resolved is None:
-                return                      # no session: print nothing, write nothing
+                return                      # resolve logged at most one line
             session, identity, _bindings = resolved
             text = hook_input.get("last_assistant_message")
+            if session["state"] != "open":
+                _keep_ended(turn_block, root, session, identity, text)
+                return                      # sends nothing, no idle write, no drain
             if not isinstance(text, str):
                 turn_block.log_event(
                     root, adapter="stop", session=session["session_id"],
@@ -104,6 +107,25 @@ def stop(args):
         _safe_log(root, outcome="db-busy" if busy else "hook-error", reason=str(exc))
     except Exception as exc:                # D16: log and exit 0
         _safe_log(root, outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
+
+
+def _keep_ended(turn_block, root, session, identity, text):
+    """Stop in an ended session: send nothing. Keep a valid block under outbox/failed
+    (as the outbox scan does for `session-ended`) and log `session-ended` once."""
+    if identity is None:
+        _keep_unresolved(turn_block, root, session, text if isinstance(text, str) else "",
+                         outcome="session-ended", reason="the session has ended")
+        return
+    kept = None
+    if isinstance(text, str):
+        raw = turn_block.find_last_block(text)
+        if raw is not None:
+            block, _note = turn_block.validate(raw, root)
+            ctx = {"root": root, "session": session, "identity": identity}
+            kept = turn_block._put_back(ctx, block, raw, failed=True)
+    turn_block.log_event(root, adapter="stop", session=session["session_id"],
+                         agent_id=identity["agent_id"], outcome="session-ended",
+                         reason="the session has ended", kept=kept is not None)
 
 
 def _write_idle(turn_block, root, session, identity):
@@ -259,7 +281,7 @@ def session_start(args):
         import rookery
 
         if _no_session_possible(turn_block, rookery_identity):
-            return                          # no session: print nothing, write nothing
+            return                          # no Rookery environment: write nothing (SC-010)
         root = turn_block.project_root(args.project)
         hook_input, bad = _read_input()
         if bad:
@@ -272,8 +294,14 @@ def session_start(args):
                 turn_block.log_event(root, adapter="session-start",
                                      session=ended["session_id"], outcome="session-ended")
                 return                      # the session is over: create and print nothing
-            events, resolved = _resolve_buffered(
-                turn_block, rookery_identity, conn, hook_input, root)
+            try:
+                events, resolved = _resolve_buffered(
+                    turn_block, rookery_identity, conn, hook_input, root)
+            except rookery_identity.SessionEnded:       # ended between the check and the lock
+                turn_block.log_event(root, adapter="session-start",
+                                     session=ended["session_id"] if ended else None,
+                                     outcome="session-ended")
+                return
             if resolved is None:
                 _flush_events(turn_block, root, events)
                 return
@@ -336,7 +364,7 @@ def prompt(args):
         import rookery
 
         if _no_session_possible(turn_block, rookery_identity):
-            return                          # no session: print nothing, write nothing
+            return                          # no Rookery environment: write nothing (SC-010)
         root = turn_block.project_root(args.project)
         hook_input, bad = _read_input()
         if bad:
@@ -473,8 +501,12 @@ def turn(args):
                     _turn_exit(args, 3, "no-session", "session-ended",
                                human=f"The Rookery session \"{ended['name']}\" has ended. "
                                      "Start a new one with: rookery session new")
-                resolved = rookery_identity.resolve(
-                    conn, os.environ, {}, root, create=True)
+                try:
+                    resolved = rookery_identity.resolve(
+                        conn, os.environ, {}, root, create=True)
+                except rookery_identity.SessionEnded as exc:   # ended between check and lock
+                    turn_block.log_event(root, adapter="turn", outcome="session-ended")
+                    _turn_exit(args, 3, "no-session", "session-ended", human=str(exc))
                 if resolved is None:
                     _turn_exit(args, 3, "no-session", "no session", human=_NO_SESSION_MSG)
                 session, identity, _bindings = resolved

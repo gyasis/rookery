@@ -2,7 +2,8 @@
 
 Register with: cli_rookery_session.add_parser(subparsers)
 Contract: specs/001-rookery-init-turn-block/contracts/cli-and-hooks.md
-Exit codes: 0 ok, 2 bad input or not found, 3 no current session, 4 database busy.
+Exit codes: 0 ok, 2 bad input or not found, 3 no current session or an ended session
+(the same code as `rookery turn`), 4 database busy.
 """
 
 import json
@@ -49,8 +50,11 @@ def _run(args, fn):
             _die(f"database is busy: {e}", EXIT_BUSY)
         import turn_block
         _die(f"cannot open database at {turn_block.db_path()}: {e}", EXIT_BAD)
+    import rookery_identity
     try:
         return fn(conn)
+    except rookery_identity.SessionEnded as e:
+        _die(str(e), EXIT_NO_SESSION)
     except ValueError as e:
         _die(str(e))
     except sqlite3.IntegrityError as e:

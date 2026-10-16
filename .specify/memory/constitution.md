@@ -1,7 +1,8 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.1.0 → 1.2.0 (MINOR). This amendment adds Principle IX.
+Version change: 1.2.0 → 1.2.1 (PATCH). Principle VII gets one exception: carry-over (user, 2026-10-16).
+Earlier: 1.1.0 → 1.2.0 (MINOR). That amendment added Principle IX.
 
 Principles:
   I-VIII: no change.
@@ -76,6 +77,7 @@ automatically until there is proof that it is stable.
 All agent machinery lives under `ROOKERY_ROOT=~/.rookery/projects/<project>/`. A host repo gets only a
 managed `ROOKERY` section. Rookery merges its hooks with the existing hooks (dev-kid, the user's) and
 never overwrites them. Each folder has one writer. An agent writes only in its own workspace or worktree.
+Exception: carry-over MAY write `HANDOFF.md` into the successor identity's folder, once, at the link.
 *Source: [folder layout](/design/folder-layout.md), [turn block](/design/turn-block.md).*
 
 ### VIII. Plain technical English
@@ -124,4 +126,4 @@ major change. An added principle is a minor change. A wording change is a patch.
 (`~/Documents/code/inter-agent-comms/okf/`) holds the design. This file holds the rules for building that
 design.
 
-**Version**: 1.2.0 | **Ratified**: 2026-10-15 | **Last Amended**: 2026-10-15
+**Version**: 1.2.1 | **Ratified**: 2026-10-15 | **Last Amended**: 2026-10-16

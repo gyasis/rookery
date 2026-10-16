@@ -113,6 +113,26 @@ def _parse_bind(b):
     return str(kind), str(value)
 
 
+class SessionEnded(ValueError):
+    """A create or join path met an ended session (Q1, 2026-10-16). CLI exit 3."""
+
+
+def _begin(conn):
+    """Take the write lock before the ended check, so an end cannot slip in between
+    the check and the write. The public writers commit at the end, so they commit
+    first (as resolve does). Call it only from a function that commits or rolls back."""
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+
+
+def _need_open(session):
+    if session["state"] != "open":
+        raise SessionEnded(
+            f"The Rookery session \"{session['name']}\" has ended. Rookery adds no agent to "
+            "an ended session. Start a new one with: rookery session new")
+
+
 # --- sessions (D18) --------------------------------------------------------
 def new_session(conn, name=None, binds=()) -> dict:
     """Create an open session; return its row dict
@@ -183,6 +203,9 @@ def end_session(conn, name_or_id) -> dict:
     s = get_session(conn, name_or_id)
     if s is None:
         raise ValueError(f"No Rookery session {name_or_id!r}.")
+    if s["session_id"] == "legacy":
+        raise ValueError("The legacy session holds the mail from before sessions existed. "
+                         "Rookery cannot end it.")
     if s["state"] != "ended":
         conn.execute("UPDATE rookery_sessions SET state='ended', ended_at=? "
                      "WHERE session_id=?", (_now_iso(), s["session_id"]))
@@ -197,9 +220,10 @@ def new_identity(conn, session_id, name, previous_id=None) -> dict:
 
     session_id is a session ID (a name is also accepted and resolved). ValueError
     for a bad name, an unknown session, or a name already used in that session."""
+    _begin(conn)
     try:
         row = _new_identity(conn, session_id, name, previous_id)
-    except ValueError:
+    except BaseException:
         conn.rollback()
         raise
     conn.commit()
@@ -214,6 +238,7 @@ def _new_identity(conn, session_id, name, previous_id=None) -> dict:
     s = get_session(conn, session_id)
     if s is None:
         raise ValueError(f"No Rookery session {session_id!r}.")
+    _need_open(s)
     sid = s["session_id"]
     if _one(conn, "SELECT 1 FROM identities WHERE session_id=? AND name=?", (sid, name)):
         raise ValueError(f"The agent name {name!r} is already used in session "
@@ -310,7 +335,15 @@ def bind(conn, session_id, agent_id, kind, value, root=None) -> str:
     """Give (kind, value) to agent_id inside session_id. A value held by another
     identity of that session moves to agent_id and 'binding-moved' is logged.
     Returns 'bound', 'moved' or 'unchanged'. Commits. root: log root (no log if None)."""
-    result, holder = _bind(conn, session_id, agent_id, kind, value)
+    _begin(conn)
+    try:
+        s = get_session(conn, session_id)
+        if s is not None:
+            _need_open(s)
+        result, holder = _bind(conn, session_id, agent_id, kind, value)
+    except BaseException:
+        conn.rollback()
+        raise
     conn.commit()
     _log_bind(root, result, holder, session_id, agent_id, kind, value)
     return result
@@ -379,13 +412,16 @@ def resolve(conn, env, hook_input, root, create=True):
         if env.get("ROOKERY_SESSION"):
             _log(root, event="unknown-session",
                  reason=f"ROOKERY_SESSION={env['ROOKERY_SESSION']!r} not found")
-        _log(root, event="no-session", reason="no ROOKERY_SESSION and no session binding matched")
+        else:
+            _log(root, event="no-session",
+                 reason="no ROOKERY_SESSION and no session binding matched")
         return None
     if not create:
         return _resolve_identity(conn, env, hook_input, root, config, session, False)
     conn.commit()                       # end any implicit transaction; BEGIN needs none open
     conn.execute("BEGIN IMMEDIATE")     # busy_timeout applies; check + insert are atomic
     try:
+        _need_open(get_session(conn, session["session_id"]))   # re-read inside the lock
         out = _resolve_identity(conn, env, hook_input, root, config, session, True)
     except BaseException:
         conn.rollback()
@@ -616,9 +652,19 @@ def new_session_from(conn, old, name, binds, root):
 def link_previous(conn, agent_id, previous_id) -> dict:
     """Set previous_id on an identity by hand (D21). previous_id must be an existing
     agent ID, not the identity itself. Moves nothing else. Returns the updated row."""
+    _begin(conn)
+    try:
+        return _link_previous(conn, agent_id, previous_id)
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _link_previous(conn, agent_id, previous_id) -> dict:
     cur = get_identity(conn, agent_id)
     if cur is None:
         raise ValueError(f"No identity {agent_id!r}.")
+    _need_open(get_session(conn, cur["session_id"]))
     prev = _one(conn, "SELECT agent_id FROM identities WHERE agent_id=?", (previous_id,))
     if prev is None:
         raise ValueError(f"No identity {previous_id!r} to link to. "

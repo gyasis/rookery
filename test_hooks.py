@@ -18,6 +18,10 @@ import statistics
 import tempfile
 import time
 import unittest
+import unittest.mock as mock
+import io
+import contextlib
+import cli_hook
 
 import rookery as R
 import rookery_identity as RI
@@ -147,6 +151,24 @@ class NoSessionTests(Base):
         found = [os.path.join(d, f) for d, _, fs in os.walk(self.root)
                  for f in fs if f == "turn.json"]
         self.assertEqual(found, [])
+
+    def test_no_session_match_logs_exactly_one_line_and_writes_no_other_file(self):
+        """Q3 (2026-10-16): print nothing; write only one `no-session` log line."""
+        for name in ("session-start", "prompt", "stop"):
+            import shutil
+            shutil.rmtree(self.root)
+            os.makedirs(self.root)
+            env = self.env(session=False, node=False, HERDR_WORKSPACE_ID="w-unmatched")
+            before = self.snapshot()
+            out = self.hook(name, {"source": "startup", "session_id": "c1",
+                                   "last_assistant_message": "x"}, env=env)
+            self.assertEqual(out, "", name)
+            self.assertEqual(self.snapshot(), before, name)
+            files = sorted(os.path.relpath(os.path.join(d, f), self.root)
+                           for d, _, fs in os.walk(self.root) for f in fs)
+            self.assertEqual(files, [os.path.join("logs", "turn-block.jsonl")], name)
+            lines = self.log_lines()
+            self.assertEqual([x.get("event") for x in lines], ["no-session"], (name, lines))
 
 
 class SessionStartTests(Base):
@@ -590,3 +612,90 @@ class HookTiming(Base):
         print("\nHookTiming (10,000 rows): " + report)
         for name, (m, _ts) in results.items():
             self.assertLess(m, self.GOAL, f"{name} too slow. {report}")
+
+
+class NoSessionLogLines(Base):
+    """F2: no Rookery env -> write nothing (SC-010); else at most one log line."""
+
+    def _run(self, name, env):
+        import shutil
+        shutil.rmtree(self.root)
+        os.makedirs(self.root)
+        out = self.hook(name, {"source": "startup", "session_id": "c1",
+                               "last_assistant_message": "x"}, env=env)
+        self.assertEqual(out, "", name)
+        files = sorted(os.path.relpath(os.path.join(d, f), self.root)
+                       for d, _, fs in os.walk(self.root) for f in fs)
+        return files, [x.get("event") for x in self.log_lines()]
+
+    def test_no_environment_writes_nothing(self):
+        for name in ("session-start", "prompt", "stop"):
+            files, events = self._run(name, self.env(session=False, node=False))
+            self.assertEqual((files, events), ([], []), name)
+
+    def test_unknown_session_logs_exactly_one_line(self):
+        for name in ("session-start", "prompt", "stop"):
+            files, events = self._run(name, self.env(node=False, ROOKERY_SESSION="nope"))
+            self.assertEqual(events, ["unknown-session"], name)
+            self.assertEqual(files, [os.path.join("logs", "turn-block.jsonl")], name)
+
+    def test_unmatched_binding_logs_exactly_one_no_session_line(self):
+        for name in ("session-start", "prompt", "stop"):
+            files, events = self._run(name, self.env(
+                session=False, node=False, HERDR_WORKSPACE_ID="w-unmatched"))
+            self.assertEqual(events, ["no-session"], name)
+            self.assertEqual(files, [os.path.join("logs", "turn-block.jsonl")], name)
+
+
+class EndedSessionStop(Base):
+    """F1: the Stop hook sends nothing from an ended session and keeps the block."""
+
+    BLOCK = ("done.\n```rookery\n" + json.dumps({
+        "to": "researcher", "task": "TASK-12", "kind": "ask", "say": "hello",
+        "status": "in-progress"}) + "\n```\n")
+
+    def test_stop_in_ended_session_keeps_block_and_sends_nothing(self):
+        RI.end_session(self.conn, "alpha")
+        before = self.snapshot()
+        out = self.hook("stop", {"last_assistant_message": self.BLOCK})
+        self.assertEqual(out, "")
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(os.path.exists(self.turn_file()))
+        failed = os.path.join(self.ws(), "outbox", "failed")
+        self.assertEqual(len(os.listdir(failed)), 1)
+        ev = [x for x in self.log_lines() if x.get("outcome") == "session-ended"]
+        self.assertEqual(len(ev), 1, self.log_lines())
+        self.assertEqual(ev[0].get("adapter"), "stop")
+
+
+class RaceSessionEnded(Base):
+    """F3: resolve(create=True) raises SessionEnded after the pre-check passed."""
+
+    def _boom(self, *a, **k):
+        raise RI.SessionEnded("The Rookery session \"alpha\" has ended.")
+
+    def test_session_start_logs_and_prints_nothing(self):
+        args = type("A", (), {"project": "p"})()
+        with mock.patch.dict(os.environ, {"ROOKERY_SESSION": "alpha"}), \
+                mock.patch.object(RI, "resolve", self._boom), \
+                mock.patch("sys.stdin", io.StringIO("{}")), \
+                contextlib.redirect_stdout(io.StringIO()) as so:
+            cli_hook.session_start(args)
+        self.assertEqual(so.getvalue(), "")
+        ev = [x for x in self.log_lines() if x.get("outcome") == "session-ended"]
+        self.assertEqual(len(ev), 1, self.log_lines())
+        self.assertFalse([x for x in self.log_lines() if x.get("outcome") == "hook-error"])
+
+    def test_turn_exits_3(self):
+        args = type("A", (), {"project": "p", "json": True})()
+        stdin = type("S", (), {"buffer": io.BytesIO(b"hello")})()
+        with mock.patch.dict(os.environ, {"ROOKERY_SESSION": "alpha"}), \
+                mock.patch.object(RI, "resolve", self._boom), \
+                mock.patch("sys.stdin", stdin), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                self.assertRaises(SystemExit) as cm:
+            cli_hook.turn(args)
+        self.assertEqual(cm.exception.code, 3)
+        ev = [x for x in self.log_lines() if x.get("outcome") == "session-ended"]
+        self.assertEqual(len(ev), 1, self.log_lines())

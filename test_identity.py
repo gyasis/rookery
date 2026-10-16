@@ -249,6 +249,11 @@ class ReadOnly(IdentityBase):
         self.assertFalse(os.path.exists(cfg))
         self.assertIn("no-session", self.log_text())
 
+    def test_unknown_session_logs_one_line_only(self):
+        self.assertIsNone(self.resolve({"ROOKERY_SESSION": "nope"}))
+        lines = [json.loads(x) for x in self.log_text().splitlines()]
+        self.assertEqual([x["event"] for x in lines], ["unknown-session"])
+
     def test_load_config_persist_false_returns_default_without_writing(self):
         cfg = RI.load_config(persist=False)
         self.assertIn("identity_binding_sources", cfg)
@@ -731,3 +736,148 @@ class CarryOver(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EndedSessionRefusesJoin(IdentityBase):
+    """Q1 (2026-10-16): no path creates or joins an identity in an ended session."""
+
+    def setUp(self):
+        super().setUp()
+        self.s = RI.new_session(self.conn, name="old")
+        self.bob = RI.new_identity(self.conn, self.s["session_id"], "bob")
+        RI.end_session(self.conn, "old")
+        self.env = {"ROOKERY_SESSION": "old", "ROOKERY_NODE": "ghost"}
+
+    def test_new_identity_refused(self):
+        before = self.snapshot()
+        with self.assertRaises(RI.SessionEnded):
+            RI.new_identity(self.conn, self.s["session_id"], "carol")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_resolve_create_refused_and_writes_nothing(self):
+        before = self.snapshot()
+        with self.assertRaises(RI.SessionEnded):
+            self.resolve(self.env, create=True)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_resolve_read_only_still_works(self):
+        s, i, _ = self.resolve({"ROOKERY_SESSION": "old", "ROOKERY_NODE": self.bob["agent_id"]},
+                               create=False)
+        self.assertEqual(i["name"], "bob")
+
+    def test_bind_refused(self):
+        before = self.snapshot()
+        with self.assertRaises(RI.SessionEnded):
+            RI.bind(self.conn, self.s["session_id"], self.bob["agent_id"], "herdr-pane", "p1")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_link_previous_refused(self):
+        other = RI.new_session(self.conn, name="other")
+        o = RI.new_identity(self.conn, other["session_id"], "zed")
+        with self.assertRaises(RI.SessionEnded):
+            RI.link_previous(self.conn, self.bob["agent_id"], o["agent_id"])
+
+    def test_carry_over_from_ended_session_still_works(self):
+        _s, made, _c, _f = RI.new_session_from(self.conn, "old", "fresh", (), self.root)
+        self.assertEqual([m["name"] for m in made], ["bob"])
+
+
+class EndedCheckIsLocked(IdentityBase):
+    """F4: the ended check runs inside BEGIN IMMEDIATE (no TOCTOU)."""
+
+    def _first_statements(self, fn):
+        seen = []
+        self.conn.commit()
+        self.conn.set_trace_callback(seen.append)
+        try:
+            fn()
+        finally:
+            self.conn.set_trace_callback(None)
+        return seen
+
+    def _assert_begin_first(self, seen):
+        begin = next(i for i, s in enumerate(seen) if s.strip().upper().startswith("BEGIN IMMEDIATE"))
+        sel = next(i for i, s in enumerate(seen) if "rookery_sessions" in s)
+        self.assertLess(begin, sel, seen)
+
+    def test_new_identity(self):
+        s = RI.new_session(self.conn, name="a")
+        self._assert_begin_first(self._first_statements(
+            lambda: RI.new_identity(self.conn, s["session_id"], "bob")))
+
+    def test_bind(self):
+        s = RI.new_session(self.conn, name="a")
+        i = RI.new_identity(self.conn, s["session_id"], "bob")
+        self._assert_begin_first(self._first_statements(
+            lambda: RI.bind(self.conn, s["session_id"], i["agent_id"], "k", "v")))
+
+    def test_link_previous(self):
+        s = RI.new_session(self.conn, name="a")
+        i = RI.new_identity(self.conn, s["session_id"], "bob")
+        j = RI.new_identity(self.conn, s["session_id"], "amy")
+        self._assert_begin_first(self._first_statements(
+            lambda: RI.link_previous(self.conn, i["agent_id"], j["agent_id"])))
+
+    def test_ended_refusal_leaves_no_open_transaction(self):
+        s = RI.new_session(self.conn, name="a")
+        RI.end_session(self.conn, "a")
+        with self.assertRaises(RI.SessionEnded):
+            RI.new_identity(self.conn, s["session_id"], "bob")
+        self.assertFalse(self.conn.in_transaction)
+
+
+class LegacyCannotEnd(IdentityBase):
+    def test_end_legacy_refused(self):
+        with self.assertRaises(ValueError) as cm:
+            RI.end_session(self.conn, "legacy")
+        self.assertIn("legacy", str(cm.exception))
+        self.assertEqual(RI.get_session(self.conn, "legacy")["state"], "open")
+
+
+class CliEndedSession(CliSessionIdentity):
+    """Runs only the new tests (parent tests are skipped by name filter below)."""
+
+    def _ended(self):
+        self.cli("session", "new", "--name", "alpha", "--json")
+        self.cli("identity", "new", "bob", "--session", "alpha", "--json")
+        self.cli("session", "end", "alpha", "--json")
+
+    def test_identity_new_in_ended_exits_3(self):
+        self._ended()
+        r = self.cli("identity", "new", "carol", "--session", "alpha", code=3)
+        self.assertIn("ended", r.stderr)
+        self.assertIn('"alpha"', r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_identity_new_env_session_ended_exits_3(self):
+        self._ended()
+        env = dict(self.env, ROOKERY_SESSION="alpha")
+        r = self.cli("identity", "new", "carol", env=env, code=3)
+        self.assertIn("ended", r.stderr)
+
+    def test_identity_bind_and_link_in_ended_exit_3(self):
+        self._ended()
+        env = dict(self.env, ROOKERY_SESSION="alpha", ROOKERY_NODE="bob")
+        r = self.cli("identity", "bind", "herdr-pane:p1", env=env, code=3)
+        self.assertIn("ended", r.stderr)
+        r = self.cli("identity", "link", "--previous", "ag-0000000000", env=env, code=3)
+        self.assertIn("ended", r.stderr)
+
+    def test_identity_show_and_list_still_work(self):
+        self._ended()
+        env = dict(self.env, ROOKERY_SESSION="alpha", ROOKERY_NODE="bob")
+        self.assertEqual(self.cli("identity", "show", "--json", env=env)["name"], "bob")
+        self.assertEqual(len(self.cli("identity", "list", "--session", "alpha",
+                                      "--json")["identities"]), 1)
+
+    def test_session_end_legacy_exits_2(self):
+        self.cli("session", "new", "--name", "alpha", "--json")   # creates the legacy row
+        r = self.cli("session", "end", "legacy", code=2)
+        self.assertIn("legacy", r.stderr)
+        self.assertEqual(self.cli("session", "show", "legacy", "--json")["session"]["state"],
+                         "open")
+
+
+for _n in [n for n in dir(CliSessionIdentity) if n.startswith("test_")]:
+    if not hasattr(CliEndedSession.__dict__.get(_n), "__call__"):
+        setattr(CliEndedSession, _n, None)

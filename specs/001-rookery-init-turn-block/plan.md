@@ -2,7 +2,7 @@
 
 **Branch**: `001-rookery-init-turn-block` | **Date**: 2026-10-15 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `specs/001-rookery-init-turn-block/spec.md`
-**Revision**: 3. It re-plans after the clarify session of 2026-10-15, constitution v1.2.0 and two analyze passes.
+**Revision**: 3. It re-plans after the clarify session of 2026-10-15, constitution v1.2.1 and two analyze passes.
 
 ## Summary
 
@@ -45,7 +45,7 @@ never crashes the session (FR-022); local mailroom only (FR-035).
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-Gates from `.specify/memory/constitution.md` (v1.2.0):
+Gates from `.specify/memory/constitution.md` (v1.2.1):
 
 - [x] **I. Mailroom is the record**: mail, sessions, identities and bindings live in SQLite. The schema
       change is additive, and its test runs on a COPY of the live database. The design deletes nothing: an ended
@@ -65,7 +65,8 @@ Gates from `.specify/memory/constitution.md` (v1.2.0):
       (with identity events and each inbox read), and `postmaster.jsonl` for the postmaster. `--json` on every new command. The outbox scan and the wake step run inside the existing
       postmaster.
 - [x] **VII. Agents' world out of the human's**: the host repo gets only the managed section and the
-      merged hook groups. Workspaces, state and logs are under the Rookery root.
+      merged hook groups. Workspaces, state and logs are under the Rookery root. One exception (constitution
+      1.2.1): carry-over writes `HANDOFF.md` into the successor identity's folder, once, at the link.
 - [x] **VIII. Plain technical English**: all prose of this phase passes `ste-lint --max-score 2.0`.
 - [x] **IX. Rookery native**: Rookery generates every session ID and agent ID. Herdr, tmux and harness
       session IDs are binding kinds and wake-command entries in `~/.rookery/config.json`, not code.
