@@ -7,7 +7,8 @@ The shared Rookery root is `{root}`.
 ### Know who you are and read your mail
 
 - Run `rookery identity show` to see who you are.
-- Run `rookery inbox` to read your unread mail. This marks the mail as read.
+- Run `rookery inbox` to read your unread mail. This does not mark the mail as read.
+- Run the command on the last line of the output, `rookery ack ID ...`, to mark that mail as read.
 
 ### End a final message with one block
 

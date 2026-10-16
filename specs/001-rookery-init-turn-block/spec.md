@@ -40,8 +40,8 @@ is phase 3; phase 1 only stamps the session ID.
   phase 2 into phase 1 (RQ-1.20 to RQ-1.23). The R8 proof moves into this PR.
 - Q: What happens to mail addressed to a name that no identity has? → A: Code quarantines it with the
   reason `wrong-recipient`. The bounce `suggest` field lists the closest existing names.
-- Q: Which command do agents use to read their mail? → A: New `rookery inbox` (read and mark read) and
-  `rookery peek` (read only) in the `rookery` CLI, with identity resolution as in FR-027 and `--json`. All
+- Q: Which command do agents use to read their mail? → A: New `rookery inbox` (read only, with an ack line),
+  `rookery ack` (mark read) and `rookery peek` (read only) in the `rookery` CLI, with identity resolution as in FR-027 and `--json`. All
   notices point to them. `rk` stays as it is.
 - Q: What is the unit that agents work in? → A: A Rookery session. Rookery generates its ID
   (constitution IX). It is one team, with one monitor (phase 3) and one boundary. An identity belongs to one
@@ -287,11 +287,13 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   as quarantined with the reason `wrong-recipient`. Its `decided_by` MUST name the parser. The bounce
   `suggest` field MUST list up to three names in the sender's session that are closest to `to`. A pure-code lookup makes this decision, so no
   model runs.
-- **FR-031** (RQ-1.13, RQ-1.14, RQ-1.22): The `rookery` CLI MUST have two commands. `rookery inbox` shows
-  the unread mail of the resolved identity in the current Rookery session and marks it read. `rookery peek`
-  shows the same mail and changes nothing. Both MUST resolve the identity as in FR-027 and MUST support `--json`. The managed section, the
+- **FR-031** (RQ-1.13, RQ-1.14, RQ-1.22): The `rookery` CLI MUST have three commands. `rookery inbox` shows
+  the unread mail of the resolved identity in the current Rookery session and changes no mail row. It ends with the line
+  `Mark read: rookery ack ID ...`. `rookery ack ID ...` marks read only the named mail that is unread mail of the resolved identity.
+  It skips all other IDs, reports them and exits 1. `rookery peek`
+  shows the same mail and changes nothing. All three MUST resolve the identity as in FR-027. `inbox`, `peek` and `ack` MUST support `--json`. The managed section, the
   prompt notice and the pane notice MUST name `rookery inbox` as the way to read mail.
-  Neither command MAY show the mail of any identity other than the resolved one: there is no `--as` flag and no
+  No command MAY show the mail of any identity other than the resolved one: there is no `--as` flag and no
   `--all` flag. Each read MUST log the identity and the bindings that Rookery used to resolve it. This phase MUST NOT
   change `rk`.
 - **Security note (phase 1 scope)**: FR-031 scopes reads; it does not enforce them. All agents run as one

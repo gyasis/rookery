@@ -309,61 +309,49 @@ def _mail_text(s, i, msgs):
     return "\n".join(lines)
 
 
+def _ack_cmd(ids):
+    return "rookery ack " + " ".join(str(n) for n in ids)
+
+
+def _write_or_exit(text, code=1):
+    """Write to stdout. A closed pipe exits with `code` and no traceback."""
+    try:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+    except OSError:                         # BrokenPipeError is an OSError
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
+        sys.exit(code)
+
+
 def _mail(args, read):
-    import rookery
+    """`inbox` and `peek` show unread mail and change no mail row. `inbox` adds the ack line."""
     import turn_block
 
     root = _mail_root()
 
     def go(conn):
         s, i, bindings = _current_identity(conn, root)
-        ids = []
+        msgs = _unread_with_bodies(conn, i["agent_id"])
+        ids = [m["id"] for m in msgs]
+        obj = {"agent_id": i["agent_id"], "name": i["name"],
+               "session_id": s["session_id"], "session": s["name"],
+               "count": len(msgs), "messages": msgs}
+        text = _mail_text(s, i, msgs)
         if read:
-            # One transaction: select, print, then claim+ack. If the reader has gone away the
-            # print fails and nothing changes, so no mail is marked read without being delivered.
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                msgs = _unread_with_bodies(conn, i["agent_id"])
-                ids = [m["id"] for m in msgs]
-                obj = {"agent_id": i["agent_id"], "name": i["name"],
-                       "session_id": s["session_id"], "session": s["name"],
-                       "count": len(msgs), "messages": msgs}
-                text = json.dumps(obj, default=str) if getattr(args, "json", False) \
-                    else _mail_text(s, i, msgs)
-                try:
-                    sys.stdout.write(text + "\n")
-                    sys.stdout.flush()
-                except OSError as exc:      # BrokenPipeError is an OSError
-                    try:
-                        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-                    except (OSError, ValueError):
-                        pass
-                    conn.rollback()
-                    _die(f"inbox: output closed ({exc}); {len(ids)} unread mail left unread", 1)
-                if ids:
-                    rookery.claim(conn, ids, commit=False)    # pending -> inflight
-                    rookery.ack(conn, ids, commit=False)      # inflight -> done
-                conn.commit()
-            except BaseException:
-                conn.rollback()
-                raise
-            if root:
-                turn_block.log_event(root, event="inbox-read", session=s["session_id"],
-                                     agent_id=i["agent_id"], name=i["name"],
-                                     bindings=[list(b) for b in bindings],
-                                     count=len(ids), ids=ids, peek=False)
-            return
-        else:
-            msgs = _unread_with_bodies(conn, i["agent_id"])
-            if root:                        # FR-031: peek logs too; it still changes no mail row
-                turn_block.log_event(root, event="inbox-read", session=s["session_id"],
-                                     agent_id=i["agent_id"], name=i["name"],
-                                     bindings=[list(b) for b in bindings],
-                                     count=len(msgs), ids=[m["id"] for m in msgs], peek=True)
-        _out(args, {"agent_id": i["agent_id"], "name": i["name"],
-                    "session_id": s["session_id"], "session": s["name"],
-                    "count": len(msgs), "messages": msgs},
-             _mail_text(s, i, msgs))
+            ack = _ack_cmd(ids) if ids else None
+            obj["ids"] = ids
+            obj["ack"] = ack
+            if ack:
+                text += "\nMark read: " + ack
+        _write_or_exit(json.dumps(obj, default=str) if getattr(args, "json", False) else text)
+        if root:                            # FR-031: log after a good write; no mail row changes
+            turn_block.log_event(root, event="inbox-read", session=s["session_id"],
+                                 agent_id=i["agent_id"], name=i["name"],
+                                 bindings=[list(b) for b in bindings],
+                                 count=len(msgs), ids=ids, peek=not read)
 
     _run(args, go)
 
@@ -374,6 +362,58 @@ def cmd_inbox(args):
 
 def cmd_peek(args):
     _mail(args, False)
+
+
+def cmd_ack(args):
+    import rookery
+    import turn_block
+
+    root = _mail_root()
+
+    def go(conn):
+        s, i, bindings = _current_identity(conn, root)
+        want = list(dict.fromkeys(args.ids))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            status = {}
+            for k in range(0, len(want), 500):      # stay under SQLite's variable limit
+                part = want[k:k + 500]
+                q = ",".join("?" * len(part))
+                for r in conn.execute(
+                        f"SELECT id, status FROM inbox WHERE recipient=? AND id IN ({q})",
+                        [i["agent_id"], *part]):
+                    status[r["id"]] = r["status"]
+            ok = [n for n in want if status.get(n) == "pending"]
+            # inflight and done mean read. held, quarantined, dlq and unknown ids are skipped.
+            already = [n for n in want if status.get(n) in ("inflight", "done")]
+            skipped = [n for n in want if n not in status or
+                       status[n] not in ("pending", "inflight", "done")]
+            if ok:
+                rookery.claim(conn, ok, commit=False)     # pending -> inflight
+                rookery.ack(conn, ok, commit=False)       # inflight -> done
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        if root:
+            turn_block.log_event(root, event="inbox-ack", session=s["session_id"],
+                                 agent_id=i["agent_id"], name=i["name"],
+                                 bindings=[list(b) for b in bindings],
+                                 ids=ok, already_read=already, skipped=skipped)
+        text = f"{len(ok)} marked read."
+        if already:
+            text += "\nAlready read: " + " ".join(map(str, already))
+        if skipped:
+            text += f"\nSkipped (not unread mail of {i['name']}): " + " ".join(map(str, skipped))
+        obj = {"agent_id": i["agent_id"], "name": i["name"], "acked": ok,
+               "already_read": already, "skipped": skipped}
+        # The commit is done, so a closed stdout does not change the exit code.
+        _write_or_exit(json.dumps(obj, default=str) if args.json else text,
+                       1 if skipped else 0)
+        if skipped:
+            sys.exit(1)
+
+    _run(args, go)
 
 
 # ---------------------------------------------------------------- parser
@@ -439,10 +479,15 @@ def add_parser(subparsers):
     _json_flag(p)
     p.set_defaults(func=cmd_identity_link)
 
-    p = subparsers.add_parser("inbox", help="Read my unread mail and mark it read.")
+    p = subparsers.add_parser("inbox", help="Show my unread mail; mark it read with rookery ack.")
     _json_flag(p)
     p.set_defaults(func=cmd_inbox)
 
     p = subparsers.add_parser("peek", help="Show my unread mail without changing anything.")
     _json_flag(p)
     p.set_defaults(func=cmd_peek)
+
+    p = subparsers.add_parser("ack", help="Mark my unread mail read, by ID.")
+    p.add_argument("ids", nargs="+", type=int, metavar="ID")
+    _json_flag(p)
+    p.set_defaults(func=cmd_ack)

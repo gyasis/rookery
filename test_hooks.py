@@ -352,18 +352,25 @@ class InboxTests(Base):
         finally:
             c.close()
 
-    def test_inbox_lists_only_my_mail_and_marks_it_read(self):
+    def test_inbox_lists_only_my_mail_and_ack_marks_it_read(self):
         out = self.cli("inbox", "--json")
         self.assertEqual(out.returncode, 0, out.stderr)
         obj = json.loads(out.stdout)
         self.assertEqual(obj["agent_id"], self.me["agent_id"])
         self.assertEqual(sorted(m["id"] for m in obj["messages"]),
                          sorted([self.m_me, self.m_me2]))
+        self.assertEqual(sorted(obj["ids"]), sorted([self.m_me, self.m_me2]))
+        st = self.statuses()
+        for mid in (self.m_me, self.m_me2):
+            self.assertEqual(st[mid][0], "pending")
+        self.assertEqual(st[self.m_other][0], "pending")
+        self.assertEqual(st[self.m_beta][0], "pending")
+        self.assertEqual(json.loads(self.cli("inbox", "--json").stdout)["count"], 2)
+        self.assertEqual(self.cli("ack", *map(str, obj["ids"])).returncode, 0)
         st = self.statuses()
         for mid in (self.m_me, self.m_me2):
             self.assertEqual(st[mid], ("done", 1))
         self.assertEqual(st[self.m_other][0], "pending")
-        self.assertEqual(st[self.m_beta][0], "pending")
         again = json.loads(self.cli("inbox", "--json").stdout)
         self.assertEqual(again["count"], 0)
 
@@ -380,6 +387,7 @@ class InboxTests(Base):
     def test_peek_matches_inbox_listing(self):
         peek = json.loads(self.cli("peek", "--json").stdout)
         inbox = json.loads(self.cli("inbox", "--json").stdout)
+        self.assertEqual(inbox.pop("ack"), "rookery ack %d %d" % tuple(inbox.pop("ids")))
         self.assertEqual(peek, inbox)
 
     def test_neither_accepts_as_or_all(self):

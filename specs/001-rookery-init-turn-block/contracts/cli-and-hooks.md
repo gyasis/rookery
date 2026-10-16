@@ -59,14 +59,21 @@ rookery identity show [--json]                     # who am I
 rookery identity list [--session SESSION] [--json]
 ```
 
-## `rookery inbox` and `rookery peek` (FR-031, RQ-1.13, RQ-1.14, RQ-1.22)
+## `rookery inbox`, `rookery peek` and `rookery ack` (FR-031, RQ-1.13, RQ-1.14, RQ-1.22)
 
 ```text
-rookery inbox [--json]     # unread mail of the resolved identity; marks it read
-rookery peek  [--json]     # the same mail; changes nothing
+rookery inbox [--json]          # unread mail of the resolved identity; changes nothing
+rookery peek  [--json]          # the same mail, without the ack line; changes nothing
+rookery ack ID [ID ...] [--json]  # marks the named unread mail read
 ```
 
-- No `--as`, no `--all`. Each call logs `inbox-read` with the identity and its bindings.
+- `inbox` ends its text output with the line `Mark read: rookery ack 12 13 14`. The IDs are the mail it showed. If there is no mail, it prints `No unread mail for <name>.` and no ack line.
+- `inbox --json` adds `"ids": [12, 13, 14]` and `"ack": "rookery ack 12 13 14"`. The `ack` value is `null` when there is no mail.
+- `ack` resolves the identity as `inbox` does. It marks read only the IDs that are unread mail of that identity. It skips all other IDs and does not change them.
+- `ack` prints `N marked read.` If an ID is mail of the identity that is already read, it prints `Already read: 1 2`. This is not an error, so you can run `ack` again. If it skipped IDs, it also prints `Skipped (not unread mail of <name>): 7 9`. It skips an ID in these cases: not found, not mail of the identity, or mail with status held, quarantined or dlq. It exits 1 if it skipped any ID. It still marks the valid IDs. An ID that is not an integer is a usage error (exit 2).
+- `ack` logs `inbox-ack` with the identity, its bindings, the IDs it marked, the IDs that were already read and the IDs it skipped. `--json` has the same three lists as `acked`, `already_read` and `skipped`.
+
+- No `--as`, no `--all`. Each `inbox` and `peek` call logs `inbox-read` with the identity and its bindings.
 - No current Rookery session: exit 3, stderr `No current Rookery session. Set ROOKERY_SESSION or start
   in a pane with a session binding.`
 

@@ -8,7 +8,7 @@
 - The `rookery turn` block. An agent ends a turn with a block, and the Stop hook sends the mail in it.
 - Sessions, identities and bindings. Rookery makes the session ID. A binding links a pane or a herdr workspace to a session.
 - Session-start hook and prompt hook. The session-start hook shows who the agent is and the newest `HANDOFF.md`. The prompt hook shows unread mail.
-- `rookery inbox` and `rookery peek` commands. They show only the mail of the current agent.
+- `rookery inbox`, `rookery peek` and `rookery ack` commands. `inbox` and `peek` show only the mail of the current agent and change nothing. `inbox` ends with the line `Mark read: rookery ack ID ...`. Run `rookery ack` to mark mail read.
 - `rookery turn` command. It reads the text of one turn from stdin and sends the block in it. Use it for agents that have no hooks.
 - Postmaster idle push. The postmaster wakes an agent when new mail arrives and the agent is idle.
 - Postmaster outbox scan. It sends each file from the outbox drop-box once.

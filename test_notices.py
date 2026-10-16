@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wave-14 audit fixes: notice sanitising and caps, failed-block scan, `rookery inbox` atomicity.
+"""Wave-14 audit fixes: notice sanitising and caps, failed-block scan, `rookery inbox` and `rookery ack`.
 
     python3 -W ignore -m unittest test_notices -v
 """
@@ -119,28 +119,141 @@ class TestInbox(WakeBase):
         self.conn.rollback()
         return {r[0]: r[1] for r in self.conn.execute("SELECT status, COUNT(*) FROM inbox GROUP BY 1")}
 
-    def test_closed_pipe_leaves_mail_pending(self):
-        for i in range(300):
-            R.send(self.conn, self.me["agent_id"], self.lc["agent_id"], "x" * 2000, topic="T",
-                   session_id=self.sid, commit=False)
-        self.conn.commit()
-        p = self.cli("inbox", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        p.stdout.read(10)
-        p.stdout.close()
-        p.wait(timeout=60)
-        self.assertNotEqual(p.returncode, 0)
-        self.assertEqual(self.statuses(), {"pending": 300})
+    def run_cli(self, *args, env=None):
+        e = dict(os.environ, ROOKERY_SESSION=self.sid, ROOKERY_NODE="law-counsel")
+        e.update(env or {})
+        return subprocess.run([sys.executable, "-W", "ignore", os.path.join(HERE, "rookery_cli.py"),
+                               *args], env=e, cwd=self.root, capture_output=True, text=True,
+                              timeout=60)
 
-    def test_normal_run_marks_done_and_delivered(self):
-        for i in range(3):
-            self.mail(topic="T%d" % i)
-        p = self.cli("inbox", stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        out, err = p.communicate(timeout=60)
-        self.assertEqual(p.returncode, 0, err)
-        self.assertIn("3 unread", out)
+    def three(self):
+        return [self.mail(topic="T%d" % i) for i in range(3)]
+
+    def test_inbox_changes_nothing_and_prints_ack_line(self):
+        ids = self.three()
+        r = self.run_cli("inbox")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("3 unread", r.stdout)
+        self.assertEqual(r.stdout.splitlines()[-1], "Mark read: rookery ack " + " ".join(map(str, ids)))
+        self.assertEqual(self.statuses(), {"pending": 3})
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM inbox WHERE delivered=1").fetchone()[0], 0)
+        self.assertTrue(any(x.get("event") == "inbox-read" and x.get("peek") is False
+                            for x in self.read_log()))
+
+    def test_inbox_piped_to_head_leaves_mail_pending(self):
+        self.three()
+        env = dict(os.environ, ROOKERY_SESSION=self.sid, ROOKERY_NODE="law-counsel")
+        r = subprocess.run("%s -W ignore %s inbox | head -1" % (sys.executable,
+                           os.path.join(HERE, "rookery_cli.py")), shell=True, env=env,
+                           cwd=self.root, capture_output=True, text=True, timeout=60)
+        self.assertEqual(len(r.stdout.splitlines()), 1)
+        self.assertEqual(self.statuses(), {"pending": 3})
+
+    def test_inbox_empty_has_no_ack_line(self):
+        r = self.run_cli("inbox")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "No unread mail for law-counsel.")
+        j = json.loads(self.run_cli("inbox", "--json").stdout)
+        self.assertEqual((j["ids"], j["ack"]), ([], None))
+
+    def test_inbox_json_has_ids_and_ack(self):
+        ids = self.three()
+        j = json.loads(self.run_cli("inbox", "--json").stdout)
+        self.assertEqual(j["ids"], ids)
+        self.assertEqual(j["ack"], "rookery ack " + " ".join(map(str, ids)))
+
+    def test_ack_marks_done_delivered_and_logs(self):
+        ids = self.three()
+        r = self.run_cli("ack", *map(str, ids))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("3 marked read.", r.stdout)
         self.assertEqual(self.statuses(), {"done": 3})
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM inbox WHERE delivered=1").fetchone()[0], 3)
-        self.assertTrue(any(x.get("event") == "inbox-read" for x in self.read_log()))
+        ev = [x for x in self.read_log() if x.get("event") == "inbox-ack"]
+        self.assertEqual(len(ev), 1)
+        self.assertEqual((ev[0]["ids"], ev[0]["skipped"], ev[0]["name"]), (ids, [], "law-counsel"))
+        self.assertIn("bindings", ev[0])
+
+    def test_ack_other_identity_mail_is_skipped(self):
+        mine = self.mail()
+        theirs = self.mail(to=self.me, sender=self.lc)
+        r = self.run_cli("ack", str(theirs))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Skipped (not unread mail of law-counsel): %d" % theirs, r.stdout)
+        self.assertEqual(self.statuses(), {"pending": 2})
+
+    def test_ack_already_read_is_idempotent(self):
+        i = self.mail()
+        self.assertEqual(self.run_cli("ack", str(i)).returncode, 0)
+        r = self.run_cli("ack", str(i))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("0 marked read.", r.stdout)
+        self.assertIn("Already read: %d" % i, r.stdout)
+        self.assertNotIn("Skipped", r.stdout)
+        j = json.loads(self.run_cli("ack", str(i), "--json").stdout)
+        self.assertEqual((j["acked"], j["already_read"], j["skipped"]), ([], [i], []))
+        ev = [x for x in self.read_log() if x.get("event") == "inbox-ack"]
+        self.assertEqual(ev[-1]["already_read"], [i])
+
+    def test_ack_missing_and_held_are_skipped(self):
+        h = self.mail()
+        self.conn.execute("UPDATE inbox SET status='held' WHERE id=?", (h,))
+        self.conn.commit()
+        r = self.run_cli("ack", str(h), "9999")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("%d 9999" % h, r.stdout)
+        self.assertNotIn("Already read", r.stdout)
+        self.assertEqual(self.statuses(), {"held": 1})
+
+    def test_ack_many_ids(self):
+        i = self.mail()
+        r = self.run_cli("ack", str(i), *[str(50000 + n) for n in range(59000)], "--json")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["acked"], [i])
+
+    def test_ack_closed_stdout_is_quiet(self):
+        i = self.mail()
+        e = dict(os.environ, ROOKERY_SESSION=self.sid, ROOKERY_NODE="law-counsel")
+        r = subprocess.run("%s -W ignore %s ack %d | head -c0" % (sys.executable,
+                           os.path.join(HERE, "rookery_cli.py"), i), shell=True, env=e,
+                           cwd=self.root, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.stderr, "")
+        self.assertEqual(self.statuses(), {"done": 1})
+        e2 = subprocess.run([sys.executable, "-W", "ignore", os.path.join(HERE, "rookery_cli.py"),
+                             "ack", str(i)], env=e, cwd=self.root, stdout=subprocess.DEVNULL)
+        self.assertEqual(e2.returncode, 0)
+
+    def test_closed_pipe_inbox_does_not_log(self):
+        self.three()
+        e = dict(os.environ, ROOKERY_SESSION=self.sid, ROOKERY_NODE="law-counsel")
+        cmd = "%s -W ignore %s inbox; echo rc=$? >&2" % (sys.executable, os.path.join(HERE, "rookery_cli.py"))
+        r = subprocess.run("(%s) | head -c0" % cmd, shell=True, env=e, cwd=self.root,
+                           capture_output=True, text=True, timeout=60)
+        self.assertIn("rc=1", r.stderr)
+        self.assertNotIn("Exception", r.stderr)
+        self.assertFalse(any(x.get("event") == "inbox-read" for x in self.read_log()))
+
+    def test_ack_mixed_commits_valid_ones(self):
+        mine = self.mail()
+        theirs = self.mail(to=self.me, sender=self.lc)
+        r = self.run_cli("ack", str(mine), str(theirs), "--json")
+        self.assertEqual(r.returncode, 1)
+        j = json.loads(r.stdout)
+        self.assertEqual((j["acked"], j["skipped"]), ([mine], [theirs]))
+        st = {x[0]: x[1] for x in self.conn.execute("SELECT id, status FROM inbox")}
+        self.assertEqual((st[mine], st[theirs]), ("done", "pending"))
+
+    def test_ack_without_session_exits_3(self):
+        e = {k: v for k, v in os.environ.items() if not k.startswith("ROOKERY_")}
+        r = subprocess.run([sys.executable, "-W", "ignore", os.path.join(HERE, "rookery_cli.py"),
+                            "ack", "1"], env=dict(e, ROOKERY_DB=os.environ["ROOKERY_DB"],
+                            ROOKERY_ROOT=self.root), cwd=self.root, capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("No current Rookery session", r.stderr)
+
+    def test_ack_rejects_non_integer(self):
+        self.assertEqual(self.run_cli("ack", "abc").returncode, 2)
 
     def read_log(self):
         out = []
