@@ -113,9 +113,8 @@ class TestWake(WakeBase):
         self.mail()
         self.loop()
         calls = self.calls()
-        self.assertEqual(len(calls), 2, calls)
-        self.assertEqual(calls[0][:4], ["pane", "send-text", "w1:p2", calls[0][3]])
-        self.assertEqual(calls[1], ["pane", "send-keys", "w1:p2", "Enter"])
+        self.assertEqual(len(calls), 1, calls)
+        self.assertEqual(calls[0][:4], ["agent", "prompt", "w1:p2", calls[0][3]])
         self.assertTrue(os.path.exists(self.pushed(self.lc)))
 
     def test_text_names_sender_task_and_inbox(self):
@@ -140,8 +139,8 @@ class TestWake(WakeBase):
         self.loop()
         self.mail(topic="TASK-8")
         self.loop()
-        self.assertEqual(len(self.calls()), 4)
-        self.assertIn("TASK-8", self.calls()[2][3])
+        self.assertEqual(len(self.calls()), 2)
+        self.assertIn("TASK-8", self.calls()[1][3])
 
     def test_busy_gets_no_push_then_idle_pushes_once(self):
         self.set_state("law-counsel", "busy")
@@ -150,9 +149,9 @@ class TestWake(WakeBase):
         self.assertEqual(self.calls(), [])
         self.set_state("law-counsel", "idle")
         self.loop()
-        self.assertEqual(len(self.calls()), 2)
+        self.assertEqual(len(self.calls()), 1)
         self.loop()
-        self.assertEqual(len(self.calls()), 2)
+        self.assertEqual(len(self.calls()), 1)
 
     def test_no_state_file_no_push_logs_no_idle_state(self):
         os.remove(os.path.join(TB.workspace(self.root, "alpha", "law-counsel"), "state", "turn.json"))
@@ -223,7 +222,7 @@ class TestWaveFourteen(WakeBase):
         self.conn.commit()
         self.loop()
         calls = self.calls()
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)
         self.assertLessEqual(len(calls[0][3]), 400)
         self.assertIn("more", calls[0][3])
         self.assertTrue(calls[0][3].endswith("rookery inbox"))
@@ -231,7 +230,7 @@ class TestWaveFourteen(WakeBase):
     def _failing_run(self, log):
         def run(argv, **kw):
             log.append(argv)
-            return subprocess.CompletedProcess(argv, 1 if argv[2] == "send-keys" else 0)
+            return subprocess.CompletedProcess(argv, 1 if argv[2] == "prompt" else 0)
         return run
 
     def test_partial_failure_backs_off_and_logs_once(self):
@@ -241,17 +240,17 @@ class TestWaveFourteen(WakeBase):
         for _ in range(3):
             PM.wake_identities(self.conn, self.root, self.config, run=run, backoff=backoff,
                                now=lambda: t[0])
-        self.assertEqual([a for a in sent if a[2] == "send-text"].__len__(), 1, sent)
+        self.assertEqual([a for a in sent if a[2] == "prompt"].__len__(), 1, sent)
         self.assertEqual(sum(1 for x in self.log_lines() if x.get("outcome") == "wake-failed"), 1)
         t[0] += 31
         PM.wake_identities(self.conn, self.root, self.config, run=run, backoff=backoff,
                            now=lambda: t[0])
-        self.assertEqual([a for a in sent if a[2] == "send-text"].__len__(), 2)
+        self.assertEqual([a for a in sent if a[2] == "prompt"].__len__(), 2)
         self.assertEqual(sum(1 for x in self.log_lines() if x.get("outcome") == "wake-failed"), 1)
         t[0] += 40          # second wait is 60 s: still backing off
         PM.wake_identities(self.conn, self.root, self.config, run=run, backoff=backoff,
                            now=lambda: t[0])
-        self.assertEqual([a for a in sent if a[2] == "send-text"].__len__(), 2)
+        self.assertEqual([a for a in sent if a[2] == "prompt"].__len__(), 2)
 
     def test_success_clears_backoff(self):
         self.mail()
@@ -269,15 +268,15 @@ class TestWaveFourteen(WakeBase):
                      hold=True, session_id=self.sid)
         self.mail(topic="TASK-3")
         self.loop()
-        self.assertEqual(len(self.calls()), 2)
+        self.assertEqual(len(self.calls()), 1)
         self.assertNotIn("HELD-1", self.calls()[0][3])
         self.conn.execute("UPDATE inbox SET status='pending' WHERE id=?", (old,))
         self.conn.commit()
         self.loop()
-        self.assertEqual(len(self.calls()), 4)
-        self.assertIn("HELD-1", self.calls()[2][3])
+        self.assertEqual(len(self.calls()), 2)
+        self.assertIn("HELD-1", self.calls()[1][3])
         self.loop()
-        self.assertEqual(len(self.calls()), 4)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_old_format_pushed_file_is_honoured(self):
         first = self.mail()
@@ -288,7 +287,7 @@ class TestWaveFourteen(WakeBase):
         self.assertEqual(self.calls(), [])
         self.mail(topic="TASK-9")
         self.loop()
-        self.assertEqual(len(self.calls()), 2)
+        self.assertEqual(len(self.calls()), 1)
 
 
 class TestNoRosterProcess(WakeBase):
@@ -323,11 +322,11 @@ class TestNoRosterProcess(WakeBase):
         try:
             import time
             end = time.time() + 5
-            while time.time() < end and len(self.calls()) < 2:
+            while time.time() < end and len(self.calls()) < 1:
                 time.sleep(0.05)
-            self.assertEqual(len(self.calls()), 2, self.calls())
+            self.assertEqual(len(self.calls()), 1, self.calls())
             time.sleep(0.6)
-            self.assertEqual(len(self.calls()), 2, "second push without new mail")
+            self.assertEqual(len(self.calls()), 1, "second push without new mail")
             self.assertIsNone(proc.poll(), "postmaster exited")
         finally:
             self._stop(proc)

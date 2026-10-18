@@ -270,7 +270,7 @@ session-scoped identities (constitution IX).
   ```json
   {"identity_binding_sources": {"HERDR_PANE_ID": "herdr-pane", "TMUX_PANE": "tmux-pane"},
    "session_binding_sources": {"HERDR_WORKSPACE_ID": "herdr-workspace"},
-   "wake": {"herdr-pane": [["herdr","pane","send-text","{value}","{text}"],["herdr","pane","send-keys","{value}","Enter"]],
+   "wake": {"herdr-pane": [["herdr","agent","prompt","{value}","{text}"]],
             "tmux-pane": [["tmux","send-keys","-t","{value}","-l","{text}"],["tmux","send-keys","-t","{value}","Enter"]]}}
   ```
 - The harness session ID from the hook input always gives one more binding, of kind `claude-session`
