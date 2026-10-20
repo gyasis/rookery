@@ -196,6 +196,135 @@ def _dirty(text):
     return [c for c in text if ord(c) < 32 or ord(c) == 127 or unicodedata.category(c) in ("Cc", "Cf")]
 
 
+class TestPushGate(WakeBase):
+    """FR-038: only mail that needs action wakes the recipient."""
+
+    def mailk(self, kind, to=None, sender=None, topic="TASK-7", body=None):
+        to, sender = to or self.lc, sender or self.me
+        body = body if body is not None else json.dumps(
+            {"to": to["name"], "task": topic, "kind": kind, "say": "x", "status": "done"})
+        return R.send(self.conn, sender["agent_id"], to["agent_id"], body, topic=topic,
+                      session_id=self.sid)
+
+    def test_status_and_answer_are_not_pushed(self):
+        for kind in ("status", "answer"):
+            self.mailk(kind)
+        self.loop()
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(len(R.fetch_undelivered(self.conn, self.lc["agent_id"])), 2)  # still delivered
+
+    def test_action_kinds_are_pushed(self):
+        for kind in ("ask", "handoff", "recruit", "decline"):
+            self.tearDown(); self.setUp()
+            self.mailk(kind)
+            self.loop()
+            self.assertEqual(len(self.calls()), 1, kind)
+
+    def test_bounce_is_pushed(self):
+        self.mailk("bounce", sender={"agent_id": "rookery"})
+        self.loop()
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_self_send_is_not_pushed(self):
+        self.mailk("ask", to=self.lc, sender=self.lc)
+        self.loop()
+        self.assertEqual(self.calls(), [])
+
+    def test_legacy_plain_body_is_pushed(self):
+        self.mailk(None, body="plain text, no JSON")
+        self.mailk(None, body='{"no_kind": 1}', topic="TASK-8")
+        self.loop()
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_status_then_ask_pushes_the_ask_once(self):
+        self.mailk("status")
+        self.loop()
+        self.assertEqual(self.calls(), [])
+        self.mailk("ask", topic="TASK-9")
+        self.loop()
+        self.loop()
+        calls = self.calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIn("TASK-9", calls[0][3])
+        self.assertNotIn("TASK-7", calls[0][3])      # the status mail is not named
+
+    def test_skipped_mail_does_not_log_or_back_off(self):
+        self.mailk("status")
+        self.loop()
+        self.assertFalse(any(x.get("outcome") in ("pushed", "wake-failed") for x in self.log_lines()))
+
+    def test_replay_of_live_loop_sequence_never_pushes(self):
+        """T056 2026-10-20: ids 4-15, status/answer chain between two agents, with self-sends."""
+        a, b = self.me, self.lc
+        chain = [("status", a, b), ("answer", b, a), ("status", a, a), ("answer", b, b),
+                 ("status", a, b), ("status", b, a), ("answer", a, b), ("answer", b, a),
+                 ("status", a, b), ("answer", b, a), ("status", b, b), ("answer", a, b)]
+        for kind, s, r in chain:
+            self.mailk(kind, to=r, sender=s)
+            self.set_state("me", "idle")
+            self.set_state("law-counsel", "idle")
+            self.loop()
+        RI.bind(self.conn, self.sid, a["agent_id"], "herdr-pane", "w1:p9")
+        self.loop()
+        self.assertEqual(self.calls(), [])
+
+    def test_answer_to_my_ask_is_pushed_once(self):
+        self.mailk("ask", to=self.me, sender=self.lc)         # law-counsel asked me
+        self.mailk("answer")                                  # I answer
+        self.loop()
+        self.assertEqual(len(self.calls()), 1)
+        self.mailk("answer")                                  # second answer to the same ask
+        self.loop()
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_second_answer_in_same_tick_is_not_pushed_twice(self):
+        self.mailk("ask", to=self.me, sender=self.lc)
+        self.mailk("answer")
+        self.mailk("answer")
+        self.loop()
+        self.assertEqual(len(self.calls()), 1)
+        self.assertIn("1 ", str(self.log_lines()[-1].get("count", "1 ")) + " ")
+
+    def test_answer_without_prior_ask_is_not_pushed(self):
+        self.mailk("answer")
+        self.loop()
+        self.assertEqual(self.calls(), [])
+
+    def test_answer_on_another_task_is_not_pushed(self):
+        self.mailk("ask", to=self.me, sender=self.lc, topic="TASK-1")
+        self.mailk("answer", topic="TASK-2")
+        self.loop()
+        self.assertEqual(self.calls(), [])
+
+    def test_ask_after_the_answer_does_not_count(self):
+        self.mailk("answer")
+        self.mailk("ask", to=self.me, sender=self.lc)
+        self.loop()
+        self.assertEqual(self.calls(), [])
+
+    def test_status_never_pushes_even_after_an_ask(self):
+        self.mailk("ask", to=self.me, sender=self.lc)
+        self.mailk("status")
+        self.loop()
+        self.assertEqual(self.calls(), [])
+
+    def test_no_push_ids_are_not_reparsed_every_tick(self):
+        self.mailk("status")
+        cache = {}
+        PM.wake_identities(self.conn, self.root, self.config, nopush=cache)
+        self.assertEqual(len(cache.get(self.lc["agent_id"], ())), 1)
+        orig = PM._needs_push
+        PM._needs_push = lambda *a, **k: self.fail("parsed again")
+        try:
+            PM.wake_identities(self.conn, self.root, self.config, nopush=cache)
+        finally:
+            PM._needs_push = orig
+        self.conn.execute("UPDATE inbox SET status='done'")
+        self.conn.commit()
+        PM.wake_identities(self.conn, self.root, self.config, nopush=cache)
+        self.assertEqual(len(cache.get(self.lc["agent_id"], ())), 0)   # bounded
+
+
 class TestWaveFourteen(WakeBase):
     def test_control_chars_never_reach_the_pane(self):
         self.mail(topic="X\x04\x03\x1b[2J\x15rm -rf ~\x1b\x1bOA")

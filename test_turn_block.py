@@ -1176,5 +1176,161 @@ class TurnCommand(Base):
         self.assertEqual(self.rows(), [])
 
 
+class LoopBreaker(Base):
+    """FR-039: more than loop_limit mails on one task between two agents, with no human prompt
+    in between, are held with reason loop."""
+
+    def block(self, to, task="TASK-12", kind="status"):
+        return ("```rookery\n" + json.dumps({"to": to, "task": task, "kind": kind,
+                "say": "got it", "status": "done"}) + "\n```")
+
+    def send(self, frm, to, task="TASK-12"):
+        ctx = dict(self.ctx, identity=frm)
+        return dispatch(self.conn, self.block(to["name"], task), ctx)
+
+    def ping_pong(self, n, task="TASK-12"):
+        out = []
+        for i in range(n):
+            a, b = (self.me, self.lc) if i % 2 == 0 else (self.lc, self.me)
+            out.append(self.send(a, b, task))
+        return out
+
+    def test_ten_sent_eleventh_held(self):
+        res = self.ping_pong(11)
+        self.assertEqual([r["outcome"] for r in res], ["sent"] * 10 + ["loop-held"])
+        row = self.rows()[-1]
+        self.assertEqual((row["status"], row["reason"]), ("held", "loop"))
+        self.assertTrue(any(x.get("outcome") == "loop-held" for x in self.log_lines()))
+        self.assertEqual(len(self.rows()), 11)
+
+    def test_further_mail_stays_held(self):
+        res = self.ping_pong(13)
+        self.assertEqual([r["outcome"] for r in res][10:], ["loop-held"] * 3)
+
+    def test_self_sends_count(self):
+        res = [self.send(self.me, self.me) for _ in range(11)]
+        self.assertEqual(res[-1]["outcome"], "loop-held")
+
+    def test_tasks_counted_separately(self):
+        self.ping_pong(10, "TASK-1")
+        self.assertEqual(self.ping_pong(1, "TASK-2")[0]["outcome"], "sent")
+        self.assertEqual(self.ping_pong(1, "TASK-1")[0]["outcome"], "loop-held")
+
+    def test_other_pair_counted_separately(self):
+        self.ping_pong(10)
+        third = RI.new_identity(self.conn, self.alpha["session_id"], "third")
+        self.assertEqual(self.send(self.me, third)["outcome"], "sent")
+
+    def test_reset_lets_mail_through(self):
+        self.ping_pong(11)
+        n = TB.reset_loop_counts(self.conn, self.me["agent_id"])
+        self.assertGreaterEqual(n, 1)
+        self.assertEqual(self.ping_pong(1)[0]["outcome"], "sent")
+
+    def test_reset_of_an_outsider_changes_nothing(self):
+        self.ping_pong(11)
+        third = RI.new_identity(self.conn, self.alpha["session_id"], "third")
+        TB.reset_loop_counts(self.conn, third["agent_id"])
+        self.assertEqual(self.ping_pong(1)[0]["outcome"], "loop-held")
+
+    def test_limit_read_from_config(self):
+        os.makedirs(os.path.join(self.tmp.name, ".rookery"), exist_ok=True)
+        with open(os.path.join(self.tmp.name, ".rookery", "config.json"), "w") as fh:
+            json.dump({"loop_limit": 3}, fh)
+        res = self.ping_pong(5)
+        self.assertEqual([r["outcome"] for r in res], ["sent"] * 3 + ["loop-held"] * 2)
+
+    def test_default_limit_is_ten_in_packaged_config(self):
+        import rookery_identity
+        self.assertEqual(rookery_identity.load_config(persist=False)["loop_limit"], 10)
+
+    def test_bad_limit_falls_back_to_ten(self):
+        os.makedirs(os.path.join(self.tmp.name, ".rookery"), exist_ok=True)
+        with open(os.path.join(self.tmp.name, ".rookery", "config.json"), "w") as fh:
+            json.dump({"loop_limit": "many"}, fh)
+        self.assertEqual([r["outcome"] for r in self.ping_pong(11)][-1], "loop-held")
+
+    def test_held_mail_is_not_pending_for_recipient(self):
+        self.ping_pong(11)
+        self.assertEqual(self.rows()[-1]["status"], "held")
+        pending = [r for r in self.rows() if r["status"] == "pending"]
+        self.assertEqual(len(pending), 10)
+
+    def test_stop_hook_parks_loop_held_block_and_notice_names_it(self):
+        self.ping_pong(10)
+        before = len(self.rows())
+        res = self.send(self.me, self.lc)
+        self.assertEqual(res["outcome"], "loop-held")
+        files = self.failed_files()
+        self.assertEqual(len(files), 1, files)
+        notes = TB.new_failed_blocks(self.root, "alpha", "me")
+        self.assertEqual([n["reason"] for n in notes], ["loop-held"])
+        self.assertIn("loop-held", TB.format_failed_line(notes[0]))
+        self.assertEqual(len(self.rows()), before + 1)          # no bounce mail
+
+    def test_outbox_adapter_puts_nothing_back_for_loop_held(self):
+        self.ping_pong(10)
+        ctx = dict(self.ctx, adapter="outbox")
+        res = dispatch(self.conn, self.block(self.lc["name"]), ctx)
+        self.assertEqual(res["outcome"], "loop-held")
+        self.assertEqual(self.failed_files(), [])
+
+    def test_rookery_turn_prints_stderr_note_and_json_outcome(self):
+        self.ping_pong(10)
+        env = TurnCommand.turn_env(self)
+        cli = os.path.join(HERE, "rookery_cli.py")
+        out = subprocess.run([sys.executable, cli, "turn", "--project", "p"],
+                             input=self.block(self.lc["name"]), capture_output=True, text=True,
+                             env=env, cwd=HERE, timeout=30)
+        self.assertEqual(out.returncode, 0, (out.stdout, out.stderr))   # as send-failed / quarantined
+        self.assertIn("loop-held", out.stdout)
+        self.assertIn("loop-held", out.stderr)
+        self.assertEqual(len(self.failed_files()), 1)
+
+    def test_task_rename_does_not_evade(self):
+        res = [self.send(self.me, self.lc, f"T{i}")["outcome"] for i in range(31)]
+        self.assertEqual(res, ["sent"] * 30 + ["loop-held"])
+        self.assertEqual(self.rows()[-1]["reason"], "loop")
+
+    def test_pair_limit_from_config(self):
+        os.makedirs(os.path.join(self.tmp.name, ".rookery"), exist_ok=True)
+        with open(os.path.join(self.tmp.name, ".rookery", "config.json"), "w") as fh:
+            json.dump({"loop_limit": 10, "loop_pair_limit": 4}, fh)
+        res = [self.send(self.me, self.lc, f"T{i}")["outcome"] for i in range(6)]
+        self.assertEqual(res, ["sent"] * 4 + ["loop-held"] * 2)
+
+    def test_packaged_pair_limit_is_thirty(self):
+        import rookery_identity
+        self.assertEqual(rookery_identity.load_config(persist=False)["loop_pair_limit"], 30)
+
+    def test_pair_counter_resets_with_human_prompt(self):
+        [self.send(self.me, self.lc, f"T{i}") for i in range(30)]
+        TB.reset_loop_counts(self.conn, self.me["agent_id"])
+        self.assertEqual(self.send(self.me, self.lc, "T99")["outcome"], "sent")
+
+    def test_bounce_loop_is_bounded(self):
+        for _ in range(30):
+            dispatch(self.conn, "```rookery\n{not json}\n```", self.ctx)
+        bounces = [r for r in self.rows() if r["sender"] == "rookery"]
+        self.assertEqual(len(bounces), 30)
+        self.assertEqual(sum(r["status"] == "pending" for r in bounces), 10)
+        held = [r for r in bounces if r["status"] == "held"]
+        self.assertEqual((len(held), {r["reason"] for r in held}), (20, {"loop"}))
+        orig = [r for r in self.rows() if r["sender"] != "rookery"]
+        self.assertTrue(all(r["status"] == "quarantined" for r in orig))
+
+    def test_bounce_counter_resets_with_human_prompt(self):
+        for _ in range(11):
+            dispatch(self.conn, "```rookery\n{not json}\n```", self.ctx)
+        TB.reset_loop_counts(self.conn, self.me["agent_id"])
+        dispatch(self.conn, "```rookery\n{not json}\n```", self.ctx)
+        self.assertEqual(self.rows()[-1]["status"], "pending")
+
+    def test_reset_skips_update_when_nothing_to_reset(self):
+        self.conn.execute("CREATE TRIGGER boom BEFORE UPDATE ON loop_counts "
+                          "BEGIN SELECT RAISE(ABORT,'boom'); END")
+        self.assertEqual(TB.reset_loop_counts(self.conn, self.me["agent_id"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -92,6 +92,10 @@ is phase 3; phase 1 only stamps the session ID.
 - Q: What is `settings` in `rookery init --json` for a harness with no hook settings file? → A: `null`.
   Codex, pi and omp have no such file. Their agents get mail through `rookery turn` or the postmaster
   push.
+- Q: What stops agents from mailing each other in a loop? → A: Two code rules. The postmaster pushes only
+  mail that needs action (ask, handoff, recruit, decline); status and answer mail waits for the next turn.
+  More than 10 mails on one task between agents with no human prompt in between are held with reason loop
+  (FR-038, FR-039).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -402,6 +406,29 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   (`send-failed`, `remote-unsupported` or `interrupted`). The next session-start or prompt notice names the
   task, the reason and the file path, once for each block. The agent can then fix the cause and send the
   block again.
+- **FR-038**: The postmaster MUST push a notice only for mail that needs action. A block of kind `ask`,
+  `handoff`, `recruit` or `decline` needs action. A bounce from `rookery` also needs action, because it
+  tells the sender that its block failed. Mail of kind `status` MUST wait for the recipient's next turn.
+  Mail of kind `answer` MUST also wait, unless it answers an open `ask`. An ask is open when
+  the recipient sent it to the answerer on the same task. It stays open until that agent sends one
+  answer. Waiting mail stays `pending` and the next prompt notice counts it, but it never starts
+  a turn. Rookery MUST never push mail that an identity sent to itself. Old mail with a plain-text body
+  or no `kind` still pushes. A mail that Rookery does not push MUST NOT stop a later mail from pushing.
+- **FR-039**: Rookery MUST stop an agent-to-agent loop on the block path (the Stop hook, `rookery turn`
+  and the outbox scan). The send paths that work from nodes (`rookery_mcp`, `send_mail`,
+  `mailroom_server`) do not count. Rookery keeps three counters since the last human prompt. The first
+  counts mails on one task between two identities, or one identity and itself, in both directions. The
+  second counts all mails between the same two identities on any task, so a new task name does not
+  escape the first. The third counts bounces to one agent. When a counter reaches its limit, Rookery
+  stores the next mail (or bounce) with status `held` and reason `loop`. The limits are the keys
+  `loop_limit` (default 10) and `loop_pair_limit` (default 30, three times `loop_limit`) in
+  `rookery_config.default.json`. The bounce counter uses `loop_limit`. The check runs at send time in
+  the shared send path. Rookery logs `loop-held`. In the Stop hook and `rookery turn`, Rookery keeps the
+  block in `outbox/failed/`, so the next prompt notice names it as failed (`loop-held`). Rookery sends no
+  bounce mail for it, because that mail would feed the loop. Every later mail past a limit also gets
+  status `held`. A human prompt resets the counters of the identity that got the prompt. A prompt that
+  starts with `[rookery] new mail for` is a postmaster push, not a human prompt, and resets nothing.
+  Leading white space and a bracketed-paste wrapper do not hide the prefix.
 - **FR-019** (RQ-1.18): The contract MUST survive context compaction, and a long-session live run (R5) MUST prove it. The contract lives in the context file the harness
   re-reads, reinforced by FR-015–FR-017.
 
@@ -554,5 +581,6 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   wake command per binding kind is the new part.
 - `rookery` already has an `up` subcommand (remote peer node); phase 2 must resolve that name clash. Not
   touched here.
+- A model-based mail judge (a tier-1 model decides send or drop) is deferred to a later phase.
 - Personal use only; the managed section and hooks never handle sign-in tokens.
 - Dependencies: Rookery mailroom and send path, PR #14 quarantine/bounce, the roster, the postmaster.

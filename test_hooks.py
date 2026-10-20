@@ -249,6 +249,62 @@ class PromptTests(Base):
     def prompt(self, env=None):
         return self.hook("prompt", {"prompt": "hello", "session_id": "c1"}, env=env)
 
+    def _fill_loop(self, n=11):
+        import json as _j
+        res = []
+        for i in range(n):
+            a, b = (self.me, self.researcher) if i % 2 == 0 else (self.researcher, self.me)
+            text = "```rookery\n" + _j.dumps({"to": b["name"], "task": "TASK-12", "kind": "status",
+                                           "say": "ok", "status": "done"}) + "\n```"
+            ctx = {"root": self.root, "session": self.alpha, "identity": a, "adapter": "stop"}
+            res.append(TB.dispatch_text(self.conn, text, ctx)["outcome"])
+        return res
+
+    def test_human_prompt_resets_loop_counter(self):
+        self.assertEqual(self._fill_loop()[-1], "loop-held")
+        self.hook("prompt", {"prompt": "please continue", "session_id": "c1"})
+        self.assertEqual(self._fill_loop(1)[0], "sent")
+        self.assertTrue(any(x.get("outcome") == "loop-reset" for x in self.log_lines()))
+
+    def test_postmaster_push_prompt_does_not_reset(self):
+        self.assertEqual(self._fill_loop()[-1], "loop-held")
+        self.hook("prompt", {"prompt": "[rookery] new mail for me from researcher about TASK-12. "
+                                       "Read it with: rookery inbox", "session_id": "c1"})
+        self.assertEqual(self._fill_loop(1)[0], "loop-held")
+
+    def test_prompt_without_text_does_not_reset(self):
+        self.assertEqual(self._fill_loop()[-1], "loop-held")
+        self.hook("prompt", {"session_id": "c1"})
+        self.assertEqual(self._fill_loop(1)[0], "loop-held")
+
+    def test_leading_newline_push_prompt_does_not_reset(self):
+        self._fill_loop()
+        self.hook("prompt", {"prompt": "\n  [rookery] new mail for me from researcher about T. "
+                                       "Read it with: rookery inbox", "session_id": "c1"})
+        self.assertEqual(self._fill_loop(1)[0], "loop-held")
+
+    def test_bracketed_paste_push_prompt_does_not_reset(self):
+        self._fill_loop()
+        self.hook("prompt", {"prompt": "\x1b[200~[rookery] new mail for me from researcher about T. "
+                                       "Read it with: rookery inbox\x1b[201~", "session_id": "c1"})
+        self.assertEqual(self._fill_loop(1)[0], "loop-held")
+
+    def test_bracketed_paste_human_prompt_resets(self):
+        self._fill_loop()
+        self.hook("prompt", {"prompt": "\x1b[200~go on\x1b[201~", "session_id": "c1"})
+        self.assertEqual(self._fill_loop(1)[0], "sent")
+
+    def test_reset_error_is_logged_and_notice_still_prints(self):
+        self._fill_loop()
+        self.mail(self.researcher)
+        self.conn.execute("CREATE TRIGGER boom BEFORE UPDATE ON loop_counts "
+                          "BEGIN SELECT RAISE(ABORT,'boom'); END")
+        self.conn.commit()
+        out = self.hook("prompt", {"prompt": "human words", "session_id": "c1"})
+        self.assertIn("unread", out)
+        self.assertTrue(any(x.get("outcome") == "loop-reset-error" for x in self.log_lines()))
+        self.assertFalse(any(x.get("outcome") == "hook-error" for x in self.log_lines()))
+
     def test_zero_unread_prints_nothing(self):
         self.assertEqual(self.prompt(), "")
 

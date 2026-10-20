@@ -123,6 +123,45 @@ def _notice(conn, ident, rows):
 BACKOFF_START, BACKOFF_MAX = 30, 600
 
 
+# Mail of these block kinds waits for the recipient's next turn: it never wakes an idle agent (FR-038).
+NO_PUSH_KINDS = ("status",)       # "answer" pushes only for an open ask (_needs_push)
+
+
+def _kind_of(body):
+    try:
+        return json.loads(body).get("kind")
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _answers_open_ask(conn, row, agent_id) -> bool:
+    """True when agent_id asked row's sender on row's task, and no answer from that sender on that
+    task came after the ask and before this mail."""
+    open_ask = False
+    for r in conn.execute(
+            "SELECT sender, body FROM inbox WHERE id<? AND topic=? AND status<>'quarantined' "
+            "AND ((sender=? AND recipient=?) OR (sender=? AND recipient=?)) ORDER BY id",
+            (row["id"], row["topic"], agent_id, row["sender"], row["sender"], agent_id)):
+        kind = _kind_of(r["body"])
+        if r["sender"] == agent_id and kind == "ask":
+            open_ask = True
+        elif r["sender"] != agent_id and kind == "answer":
+            open_ask = False
+    return open_ask
+
+
+def _needs_push(row, agent_id, conn=None) -> bool:
+    """False for a self-send, for kind status, and for kind answer unless it answers an open ask
+    of the recipient (the asker waits for it). A bounce, an ask, handoff, recruit, decline, and any
+    body that is not a block with a kind (old plain mail) push."""
+    if row["sender"] == agent_id:
+        return False
+    kind = _kind_of(row["body"])
+    if kind == "answer":
+        return conn is not None and row["topic"] is not None and _answers_open_ask(conn, row, agent_id)
+    return kind not in NO_PUSH_KINDS
+
+
 def _load_pushed(root, agent_id):
     """(pushed_ids or None, last_id). New files carry "pushed_ids"; an old {"last_id": N} file
     means every id <= N was pushed."""
@@ -137,7 +176,7 @@ def _load_pushed(root, agent_id):
 
 
 def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, backoff=None,
-                    now=time.time):
+                    now=time.time, nopush=None):
     """Push a notice into each idle identity (open session) with pending mail not yet announced
     in <root>/postmaster/pushed/<agent_id>.json (D10, FR-018, FR-028). The file holds the pending
     ids already announced, so mail released from held/quarantined (an older id) is pushed too.
@@ -150,6 +189,7 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
     Returns the number of identities pushed."""
     skip_logged = {} if skip_logged is None else skip_logged
     backoff = {} if backoff is None else backoff
+    nopush = {} if nopush is None else nopush    # agent_id -> ids judged "no push"; kept in memory
     wake_cfg = (config or {}).get("wake") or {}
     pushed = 0
     ids = conn.execute(
@@ -160,12 +200,21 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
         aid = ident["agent_id"]
         done_ids, last = _load_pushed(root, aid)
         pending = conn.execute(
-            "SELECT id, sender, topic FROM inbox WHERE recipient=? AND status='pending' "
+            "SELECT id, sender, topic, body FROM inbox WHERE recipient=? AND status='pending' "
             "ORDER BY id", (aid,)).fetchall()
         pending_ids = [r["id"] for r in pending]
         if done_ids is None:
             done_ids = {i for i in pending_ids if i <= last}
-        rows = [r for r in pending if r["id"] not in done_ids]
+        skipped = nopush.setdefault(aid, set())
+        skipped &= set(pending_ids)              # bounded: forget ids that left pending
+        rows = []
+        for r in pending:
+            if r["id"] in done_ids or r["id"] in skipped:
+                continue
+            if _needs_push(r, aid, conn):
+                rows.append(r)
+            else:
+                skipped.add(r["id"])
         if not rows:
             if done_ids - set(pending_ids):      # forget ids that left pending (read, requeued)
                 _write_pushed(root, aid, pending_ids, [i for i in pending_ids if i in done_ids])
@@ -225,7 +274,8 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
                                      kind=kind, mail_id=newest, retry_in=delay, **log_f)
             continue
         backoff.pop(aid, None)
-        _write_pushed(root, aid, pending_ids, pending_ids)
+        announced = done_ids | {r["id"] for r in rows}       # status/answer ids stay un-announced
+        _write_pushed(root, aid, pending_ids, [i for i in pending_ids if i in announced])
         turn_block.log_event(root, "postmaster", outcome="pushed", kind=kind,
                              mail_id=newest, count=len(rows), **log_f)
         pushed += 1
@@ -274,14 +324,14 @@ def scan_outbox_roots(conn, root=None):
 def run_identities_only(root, poll):
     """No --nodes (D10, FR-018): skip every roster step; run only the outbox scan and the wake step."""
     wake_conn = turn_block.open_db()      # same db_path() as the hooks (D6)
-    skip_logged, backoff = {}, {}
+    skip_logged, backoff, nopush = {}, {}, {}
     log("online. no roster: outbox scan + identity wake step only.")
     try:
         while True:
             scan_outbox_roots(wake_conn, root)
             try:
                 wake_identities(wake_conn, root, rookery_identity.load_config(persist=False),
-                                skip_logged=skip_logged, backoff=backoff)
+                                skip_logged=skip_logged, backoff=backoff, nopush=nopush)
             except Exception as exc:     # never kill the loop; retried next tick
                 turn_block.log_event(root, "postmaster", outcome="wake-step-error", reason=str(exc))
             time.sleep(poll)
@@ -299,6 +349,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
     wake_conn = turn_block.open_db() if root else None   # same db_path() as the hooks (D6)
     skip_logged = {}
     backoff = {}
+    nopush = {}
     nodes = list(node_engine)
 
     def lifecycle(n):
@@ -385,7 +436,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                 scan_outbox_roots(wake_conn, root)
                 try:
                     wake_identities(wake_conn, root, rookery_identity.load_config(persist=False),
-                                    skip_logged=skip_logged, backoff=backoff)
+                                    skip_logged=skip_logged, backoff=backoff, nopush=nopush)
                 except Exception as exc:     # never kill the loop; retried next tick
                     turn_block.log_event(root, "postmaster", outcome="wake-step-error",
                                          reason=str(exc))

@@ -98,7 +98,7 @@ def _schema_current(conn: sqlite3.Connection) -> bool:
     """True when the sessions schema and the legacy session row already exist
     (checked with reads only, so it works while another connection writes)."""
     have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if not {"rookery_sessions", "identities", "bindings", "inbox"} <= have:
+    if not {"rookery_sessions", "identities", "bindings", "inbox", "loop_counts"} <= have:
         return False
     cols = {r[1] for r in conn.execute("PRAGMA table_info(inbox)")}
     if "session_id" not in cols or not {c.split()[0] for c in rookery._INBOX_SCREENING_COLS} <= cols:
@@ -418,7 +418,7 @@ def _cap_raw(raw) -> str:
     return f"{cut}\u2026[truncated, {len(data)} bytes]"
 
 
-def _put_back(ctx, block, raw, failed: bool) -> str | None:
+def _put_back(ctx, block, raw, failed: bool, reason=None) -> str | None:
     """Write the block to <workspace>/outbox[/failed]/<TASK-ID>-<ts>.json. Returns
     the path, or None if the file could not be written (logged by the caller)."""
     task = block.get("task") if isinstance(block, dict) else None
@@ -428,7 +428,8 @@ def _put_back(ctx, block, raw, failed: bool) -> str | None:
     path = os.path.join(folder, f"{name}-{_stamp()}.json")
     if os.path.exists(path):
         path = os.path.join(folder, f"{name}-{_stamp()}-{secrets.token_hex(3)}.json")
-    write_json_atomic(path, block if isinstance(block, dict) else {"raw": _cap_raw(raw)})
+    data = block if isinstance(block, dict) else {"raw": _cap_raw(raw)}
+    write_json_atomic(path, dict(data, reason=reason) if reason else data)
     return path
 
 
@@ -474,12 +475,73 @@ def _hold_and_quarantine(conn, ctx, recipient, body, topic, reason, note, sugges
         msg_id = rookery.send(conn, ctx["identity"]["agent_id"], recipient, body,
                               topic=topic, hold=True, session_id=sid, commit=False)
         rookery.quarantine(conn, msg_id, reason, decided_by="turn-block-parser",
-                           note=note, suggest=suggest, commit=False)
+                           note=note, suggest=suggest, commit=False,
+                           bounce_limit=loop_limit())
         conn.commit()
     except BaseException:
         conn.rollback()
         raise
     return msg_id
+
+
+DEFAULT_LOOP_LIMIT = 10
+
+
+def _pos_int(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 1 else None
+
+
+def loop_limits():
+    """(loop_limit, loop_pair_limit) from the Rookery config (FR-039). A missing, non-integer or
+    < 1 loop_limit gives 10. A missing or bad loop_pair_limit gives 3 x loop_limit."""
+    import rookery_identity     # local: rookery_identity imports this module
+    try:
+        cfg = rookery_identity.load_config(persist=False)
+    except Exception:
+        cfg = {}
+    limit = _pos_int(cfg.get("loop_limit")) or DEFAULT_LOOP_LIMIT
+    return limit, _pos_int(cfg.get("loop_pair_limit")) or 3 * limit
+
+
+def loop_limit() -> int:
+    return loop_limits()[0]
+
+
+def reset_loop_counts(conn, agent_id) -> int:
+    """A human prompt reached agent_id: zero every loop counter that names it. Returns the
+    number of counters that were above zero. Writes nothing when there are none."""
+    if conn.execute("SELECT 1 FROM loop_counts WHERE count>0 AND (a=? OR b=?) LIMIT 1",
+                    (agent_id, agent_id)).fetchone() is None:
+        return 0
+    cur = conn.execute("UPDATE loop_counts SET count=0 WHERE count>0 AND (a=? OR b=?)",
+                       (agent_id, agent_id))
+    conn.commit()
+    return cur.rowcount
+
+
+def _send_counted(conn, sender_id, recipient_id, body, task, sid):
+    """Send one agent mail. Counts it against two counters in the same transaction: one for the
+    (task, pair) and one task-less for the pair (so a new task name does not evade, limit
+    loop_pair_limit). At either limit the mail is stored `held` with reason `loop` instead, and no
+    counter moves. Returns (msg_id, held)."""
+    limit, pair_limit = loop_limits()
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        held = rookery.count_loop(conn, sid, [(task, sender_id, recipient_id, limit),
+                                              ("~pair", sender_id, recipient_id, pair_limit)])
+        msg_id = rookery.send(conn, sender_id, recipient_id, body, topic=task, session_id=sid,
+                              hold=True if held else None, commit=False)
+        if held:
+            conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
+                         (f"Held: too many mails on task {task} (or between these agents) with "
+                          "no human prompt in between.", msg_id))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return msg_id, held
 
 
 def _top_level_failure(ctx, exc, block=None, raw=None):
@@ -609,8 +671,14 @@ def _dispatch_block(conn, raw, ctx):
             return done(block, "handoff-pending",
                         reason="handoff is still in-progress; nothing sent")
 
-        msg_id = rookery.send(conn, sender["agent_id"], recipient[0], compact,
-                              topic=task, session_id=sid)
+        msg_id, held = _send_counted(conn, sender["agent_id"], recipient[0], compact, task, sid)
+        if held:
+            if keep:     # park it: the next prompt notice names it. No bounce mail (it would feed the loop).
+                try:
+                    _put_back(ctx, block, raw, failed=True, reason="loop-held")
+                except Exception as werr:
+                    return done(block, "loop-held", msg_id, f"loop (could not keep the block: {werr})")
+            return done(block, "loop-held", msg_id, "loop")
         return done(block, "sent", msg_id)
     except Exception as exc:     # send/quarantine failed: log, keep the block, never raise
         try:
@@ -795,6 +863,11 @@ def format_failed_line(item) -> str:
         return (f"[rookery] Your block for {notice_field(item.get('task') or 'no-task')} may have "
                 f"been sent before an interruption. It is kept in {notice_field(item['path'], 200)}. "
                 "Check with the recipient or the mailroom before you send it again.")
+    if item.get("reason") == "loop-held":
+        return (f"[rookery] Your block for {notice_field(item.get('task') or 'no-task')} failed "
+                f"(loop-held). Too many mails went between you and the other agent with no human "
+                f"prompt. It is kept in {notice_field(item['path'], 200)}. "
+                "Do not send it again until a human gives a prompt.")
     return (f"[rookery] Your block for {notice_field(item.get('task') or 'no-task')} failed "
             f"({notice_field(item.get('reason') or 'unknown')}). It is kept in "
             f"{notice_field(item['path'], 200)}. "

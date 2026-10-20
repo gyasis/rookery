@@ -123,6 +123,13 @@ rookery hook session-start --project NAME
   `[rookery] Your block for TASK-12 failed (send-failed). It is kept in <path>. Fix the cause, then send the block again.`
 - It never prints a mail body. It never changes a mail status.
 - With a session, it writes `state/turn.json` = `{"state": "busy", "since": ts}` (research D8).
+- Loop breaker (FR-039): the stdin `prompt` text can start with `[rookery] new mail for`. Leading white
+  space and one bracketed-paste wrapper (`ESC[200~` ... `ESC[201~`) do not count. If the text does not
+  start so, the hook sets the loop counters of this identity to 0 and logs `loop-reset`. It writes
+  nothing when no counter is above 0. A postmaster push or a missing `prompt` field resets nothing. If
+  the reset fails, the hook logs `loop-reset-error` and still prints the notice.
+- A block kept as `loop-held` shows as `[rookery] Your block for <task> failed (loop-held). ... Do not
+  send it again until a human gives a prompt.`
 
 ## `rookery hook stop` (FR-005 to FR-009, FR-017, RQ-1.4, RQ-1.5, RQ-1.6, RQ-1.7, RQ-1.14)
 
@@ -147,8 +154,9 @@ rookery turn --project NAME [--json] < turn-output.txt
 
 - stdin: the full text of one headless turn (Codex, pi, omp). Resolve from the environment.
 - Effect: the same `dispatch_text()` as the Stop hook. It writes no idle state.
-- `--json` stdout: `{"outcome": "sent|no-block|quarantined|handoff-pending|send-failed|no-session|remote-unsupported|db-busy",
+- `--json` stdout: `{"outcome": "sent|no-block|quarantined|loop-held|handoff-pending|send-failed|no-session|remote-unsupported|db-busy",
   "msg_id": n, "reason": "..."}`.
+- A `loop-held` outcome keeps the block in `outbox/failed/` and sends no bounce mail (FR-039).
 - On `db-busy`, exit 4. The caller still has the turn text and can run `rookery turn` again (research D16).
 
 ## Postmaster steps (FR-011, FR-018, FR-028, RQ-1.9, RQ-1.15, RQ-1.23)
@@ -162,6 +170,10 @@ rookery turn --project NAME [--json] < turn-output.txt
   `<root>/postmaster/pushed/<agent_id>.json`, and ONLY when its `state/turn.json` reads `idle`: run the
   wake command of the first binding whose kind has one in `~/.rookery/config.json`. Notice text:
   `[rookery] new mail for <name> from <sender name> about <task>. Read it with: rookery inbox`.
+  Push gate (FR-038): only mail that needs action counts. Kind `status`, and mail from the identity to
+  itself, never push. They stay `pending` and show in the next prompt notice. Kind `answer` pushes only
+  when it answers an open `ask`. The recipient sent that ask on the same task, and no earlier answer
+  from that agent followed it. Bounces and mail with no `kind` push. A mail that is not pushed is not written to the pushed file.
   A busy agent gets no push until its turn ends. No such binding → log `no-wake-binding`. No
   `state/turn.json` → log `no-idle-state`. Either way the mail waits (research D10).
 

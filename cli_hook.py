@@ -350,9 +350,27 @@ def session_start(args):
                   outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
 
 
+PUSH_PROMPT_PREFIX = "[rookery] new mail for"   # the postmaster push text (postmaster._notice)
+
+
+_PASTE_START, _PASTE_END = "\x1b[200~", "\x1b[201~"
+
+
+def _is_push_prompt(text) -> bool:
+    """True when text is not a human prompt: a postmaster push, or no prompt text at all (nothing
+    resets then). Leading white space and one bracketed-paste wrapper are ignored."""
+    if not isinstance(text, str):
+        return True
+    text = text.lstrip()
+    if text.startswith(_PASTE_START):
+        text = text[len(_PASTE_START):].lstrip()
+    return text.startswith(PUSH_PROMPT_PREFIX)
+
+
 def prompt(args):
     """UserPromptSubmit hook (FR-016, FR-037, D8, D16, D23). Runs on every prompt: read-only
-    resolve (never creates an identity), writes turn.json = busy, prints unread/failed lines."""
+    resolve (never creates an identity), writes turn.json = busy, prints unread/failed lines.
+    A prompt that is not a postmaster push also resets the loop counters of this identity (FR-039)."""
     root = None
     session_id = None
     events = []
@@ -395,6 +413,13 @@ def prompt(args):
             turn_block.write_json_atomic(
                 os.path.join(ws, "state", "turn.json"),
                 {"state": "busy", "since": rookery.now()})
+            reset = 0
+            if not _is_push_prompt(hook_input.get("prompt")):
+                try:
+                    reset = turn_block.reset_loop_counts(conn, agent_id)   # a human prompt (FR-039)
+                except Exception as exc:     # never lose the notice over the counter
+                    _safe_log(root, adapter="prompt", session=session_id, **ids,
+                              outcome="loop-reset-error", reason=f"{type(exc).__name__}: {exc}")
             lines = []
             unread = turn_block.format_unread_line(turn_block.unread_summary(conn, agent_id))
             if unread:
@@ -410,6 +435,9 @@ def prompt(args):
             turn_block.mark_failed_seen(root, session["name"], name,
                                         [it["file"] for it in failed])
         _flush_events(turn_block, root, events)
+        if reset:
+            turn_block.log_event(root, adapter="prompt", session=session_id,
+                                 agent_id=agent_id, outcome="loop-reset", counters=reset)
         turn_block.log_event(root, adapter="prompt", session=session_id,
                              agent_id=agent_id, outcome="prompt",
                              unread_shown=bool(unread), failed_shown=len(failed))
@@ -533,6 +561,9 @@ def turn(args):
             _turn_exit(args, 4, outcome, res.get("reason"), res.get("msg_id"),
                        human="The database is busy. The block is back in your outbox. "
                              "Run rookery turn again with the same text.")
+        if outcome == "loop-held":    # exit 0 like quarantined and send-failed; a note on stderr
+            print("loop-held: too many mails with no human prompt. Rookery held this mail. "
+                  "Do not send it again until a human gives a prompt.", file=sys.stderr)
         _turn_exit(args, 0, outcome, res.get("reason"), res.get("msg_id"))
     except SystemExit:
         raise

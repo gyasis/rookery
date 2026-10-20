@@ -75,6 +75,16 @@ CREATE TABLE IF NOT EXISTS bindings (
   created_at TEXT NOT NULL,
   UNIQUE(session_id, owner_type, kind, value)
 );
+-- Loop breaker (FR-039): mails sent on one task between two agents since the last human prompt.
+-- a <= b, so both directions share a row; a = b is a self-send.
+CREATE TABLE IF NOT EXISTS loop_counts (
+  session_id TEXT NOT NULL,
+  task       TEXT NOT NULL,
+  a          TEXT NOT NULL,
+  b          TEXT NOT NULL,
+  count      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(session_id, task, a, b)
+);
 """
 
 
@@ -167,6 +177,25 @@ def send(conn, sender, recipient, body, topic=None, hold=None, session_id=None,
     if commit:
         conn.commit()
     return cur.lastrowid
+
+
+def count_loop(conn, session_id, keys) -> bool:
+    """Loop breaker counters (FR-039). keys = [(task, a, b, limit), ...]; a and b are put in order
+    here. Runs inside the caller's transaction and never commits. If any counter is at its limit
+    the result is True and nothing moves. Otherwise every counter goes up by one and the result is
+    False."""
+    keys = [(t, *sorted((a, b)), lim) for t, a, b, lim in keys]
+    for t, a, b, lim in keys:
+        row = conn.execute("SELECT count FROM loop_counts WHERE session_id=? AND task=? AND a=? AND b=?",
+                           (session_id, t, a, b)).fetchone()
+        if row is not None and row[0] >= lim:
+            return True
+    for t, a, b, _lim in keys:
+        conn.execute(
+            "INSERT INTO loop_counts(session_id, task, a, b, count) VALUES(?,?,?,?,1) "
+            "ON CONFLICT(session_id, task, a, b) DO UPDATE SET count=count+1",
+            (session_id, t, a, b))
+    return False
 
 
 def fetch_undelivered(conn, recipient):
@@ -289,7 +318,7 @@ def release(conn, msg_id, decided_by):
 
 
 def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce=True,
-               commit=True):
+               commit=True, bounce_limit=None):
     """Reject a held message into quarantine and (by default) bounce it to the
     sender with the reason and an optional suggested recipient. Returns the
     bounce message id, or None."""
@@ -308,8 +337,16 @@ def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce
         "kind": "bounce", "msg_id": msg_id, "to": m["recipient"], "reason": reason,
         "note": note, "suggest": suggest, "decided_by": decided_by,
     })
-    return send(conn, "rookery", m["sender"], body, topic=m["topic"],
-                session_id=m["session_id"], commit=commit)
+    held = bounce_limit is not None and count_loop(
+        conn, m["session_id"], [("~bounce", "rookery", m["sender"], bounce_limit)])
+    bid = send(conn, "rookery", m["sender"], body, topic=m["topic"],
+               session_id=m["session_id"], hold=True if held else None, commit=False)
+    if held:                                  # FR-039: a bounce loop is held, not delivered
+        conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
+                     ("Held: too many bounces to this agent with no human prompt in between.", bid))
+    if commit:
+        conn.commit()
+    return bid
 
 
 def unquarantine(conn, msg_id, decided_by):
