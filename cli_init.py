@@ -229,12 +229,12 @@ def upsert_section(path, text):
 HOOK_EVENTS = (("SessionStart", "session-start"), ("UserPromptSubmit", "prompt"),
                ("Stop", "stop"))
 # permissions.allow rules init merges into settings.json. The list only pre-approves
-# these commands; it blocks nothing else.
+# these commands; it blocks nothing else. No pane send-keys/send-text: an agent that
+# mail tricks must not type into a shell. Agents wake agents with `herdr agent prompt`.
 PERMISSION_RULES = (
     "Bash(rookery inbox:*)", "Bash(rookery peek:*)", "Bash(rookery ack:*)",
     "Bash(rookery identity show:*)", "Bash(rookery turn:*)",
-    "Bash(herdr pane read:*)", "Bash(herdr pane send-keys:*)",
-    "Bash(herdr pane send-text:*)", "Bash(herdr agent list:*)",
+    "Bash(herdr pane read:*)", "Bash(herdr agent list:*)",
     "Bash(herdr agent prompt:*)", "Bash(herdr agent start:*)",
     "Bash(herdr agent wait:*)",
 )

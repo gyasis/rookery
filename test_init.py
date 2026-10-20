@@ -273,8 +273,7 @@ class TestSettingsMerge(InitBase):
 class TestPermissions(InitBase):
     RULES = ["Bash(rookery inbox:*)", "Bash(rookery peek:*)", "Bash(rookery ack:*)",
              "Bash(rookery identity show:*)", "Bash(rookery turn:*)",
-             "Bash(herdr pane read:*)", "Bash(herdr pane send-keys:*)",
-             "Bash(herdr pane send-text:*)", "Bash(herdr agent list:*)",
+             "Bash(herdr pane read:*)", "Bash(herdr agent list:*)",
              "Bash(herdr agent prompt:*)", "Bash(herdr agent start:*)",
              "Bash(herdr agent wait:*)"]
 
@@ -288,7 +287,7 @@ class TestPermissions(InitBase):
                          {"added": [], "unchanged": self.RULES, "skipped": []})
 
     def test_human_line(self):
-        self.assertIn("permissions: added 12 allow rules", self.run_init().stdout)
+        self.assertIn("permissions: added 10 allow rules", self.run_init().stdout)
         self.assertIn("permissions: unchanged", self.run_init().stdout)
 
     def test_deny_is_skipped(self):

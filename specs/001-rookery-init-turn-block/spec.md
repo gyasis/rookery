@@ -84,6 +84,8 @@ is phase 3; phase 1 only stamps the session ID.
 - Q: Should rookery init grant agents access to mail and herdr pane control? → A: Yes. init merges a
   permissions.allow list for the rookery mail commands and herdr pane control into .claude/settings.json.
   The list only pre-approves; it blocks nothing (FR-013).
+- Q: Should the list let agents type into panes (`herdr pane send-keys`, `send-text`)? → A: No. An agent
+  that mail tricks must not type into a shell pane. Agents wake agents with `herdr agent prompt` (FR-013).
 - Q: When does a block go to the outbox? → A: Only after a failed send. A turn first sends the mail
   directly. If the process dies between the parse and the send, the block is lost (FR-005).
 - Q: May carry-over write into a successor's folder, against "one writer per folder"? → A: Yes, once.
@@ -372,10 +374,10 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   it MUST change nothing and exit non-zero naming the file and the parse error.
   Init MUST also merge a `permissions.allow` list into the same file. The list holds these rules:
   `Bash(rookery inbox:*)`, `Bash(rookery peek:*)`, `Bash(rookery ack:*)`, `Bash(rookery identity show:*)`,
-  `Bash(rookery turn:*)`, `Bash(herdr pane read:*)`, `Bash(herdr pane send-keys:*)`,
-  `Bash(herdr pane send-text:*)`, `Bash(herdr agent list:*)`, `Bash(herdr agent prompt:*)`,
+  `Bash(rookery turn:*)`, `Bash(herdr pane read:*)`, `Bash(herdr agent list:*)`, `Bash(herdr agent prompt:*)`,
   `Bash(herdr agent start:*)` and `Bash(herdr agent wait:*)`. The list only pre-approves these commands. It
-  blocks nothing else. Init MUST keep every existing `permissions` key and every existing `allow` entry in
+  blocks nothing else. The list MUST NOT hold `herdr pane send-keys` or `herdr pane send-text`: an agent that
+  mail tricks must not type into a shell pane. Init MUST keep every existing `permissions` key and every existing `allow` entry in
   its order, and add only the missing rules. It MUST NOT change `deny`, `ask` or `defaultMode`. If a rule is
   in `deny` or `ask`, init MUST NOT add it to `allow` and MUST report it as skipped. If `permissions` is not
   an object, or `allow`, `deny` or `ask` is not a list, init MUST change nothing and exit non-zero.

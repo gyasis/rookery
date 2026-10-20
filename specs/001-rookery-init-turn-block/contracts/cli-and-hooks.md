@@ -25,8 +25,8 @@ rookery init [--harness claude|codex|pi|omp] [--project NAME] [--dir PATH] [--js
 | `--project` | the folder name of the git top level of `--dir` |
 
 - `claude`: upserts the section in `CLAUDE.md` and merges three hooks and a `permissions.allow` list into
-  `.claude/settings.json`. The list holds 12 rules for the `rookery` mail commands and `herdr` pane and agent
-  control. It only pre-approves these commands. It blocks nothing else.
+  `.claude/settings.json`. The list holds 10 rules for the `rookery` mail commands, `herdr pane read` and
+  `herdr agent` control. It holds no `send-keys` or `send-text` rule. It only pre-approves these commands. It blocks nothing else.
 - `codex`, `pi`, `omp`: upserts the section in `AGENTS.md` only.
 - `--json` output:
   `{"ok": true, "context_file": {"path": "...", "action": "created|inserted|replaced|unchanged"},

@@ -510,7 +510,9 @@ class TestMergePermissions(Base):
 
     def test_fresh_gets_all_twelve(self):
         r = self.merge()
-        self.assertEqual(len(cli_init.PERMISSION_RULES), 12)
+        self.assertEqual(len(cli_init.PERMISSION_RULES), 10)
+        # No raw keystrokes into panes: an agent tricked by mail must not type into a shell.
+        self.assertFalse([r for r in cli_init.PERMISSION_RULES if "send-keys" in r or "send-text" in r])
         self.assertEqual(r["permissions"], {"added": list(cli_init.PERMISSION_RULES),
                                             "unchanged": [], "skipped": []})
         self.assertEqual(self.load()["permissions"]["allow"], list(cli_init.PERMISSION_RULES))
@@ -521,7 +523,7 @@ class TestMergePermissions(Base):
         self.put_settings(json.dumps(seed).encode())
         r = self.merge()
         self.assertEqual(r["permissions"]["unchanged"], ["Bash(rookery peek:*)"])
-        self.assertEqual(len(r["permissions"]["added"]), 11)
+        self.assertEqual(len(r["permissions"]["added"]), 9)
         perms = self.load()["permissions"]
         self.assertEqual(perms["allow"][:3], seed["permissions"]["allow"])
         self.assertEqual(perms["allow"][3:], r["permissions"]["added"])
@@ -545,7 +547,7 @@ class TestMergePermissions(Base):
         r = self.merge()
         self.assertEqual(r["permissions"]["skipped"],
                          ["Bash(rookery turn:*)", "Bash(herdr agent start:*)"])
-        self.assertEqual(len(r["permissions"]["added"]), 10)
+        self.assertEqual(len(r["permissions"]["added"]), 8)
         perms = self.load()["permissions"]
         self.assertNotIn("Bash(herdr agent start:*)", perms["allow"])
         self.assertNotIn("Bash(rookery turn:*)", perms["allow"])
