@@ -18,6 +18,8 @@ Write no block when you have nothing to send. Rookery then sends nothing.
 
 Do not send a block only to say that you got or read mail. Mark the mail as read with `rookery ack`, and write no block.
 
+On a long task, end each turn with a block that has `kind` `handoff` and `status` `in-progress`. Set `to` to the agent that gets the task at the end. This block updates your `HANDOFF.md` and sends no mail. When you finish the task, set `status` to `done`. Rookery then sends the hand-off mail.
+
 The example below uses a `json` fence on purpose. Do not copy that fence. Use `rookery` for a real block.
 
 ```json

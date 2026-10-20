@@ -153,6 +153,8 @@ class TestContextFile(InitBase):
         self.assertNotIn("End each final message", text)
         self.assertIn("Write no block when you have nothing to send", text)
         self.assertIn("Do not send a block only to say that you got", text)
+        # US2 / FR-009: a long task still keeps HANDOFF.md current, with no mail.
+        self.assertIn("`kind` `handoff` and `status` `in-progress`", text)
 
     def test_codex_writes_agents_md_only(self):
         out = self.run_json("--harness", "codex")
