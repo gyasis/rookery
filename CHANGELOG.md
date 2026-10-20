@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `rookery init` now merges a `permissions.allow` list into `.claude/settings.json`. The list has 12 rules for the `rookery` mail commands and `herdr` pane and agent control. It only pre-approves these commands. It blocks nothing else. Init keeps your existing `permissions` entries and does not add a rule that is in `deny` or `ask`. The `--json` output has a new `settings.permissions` object.
+
 ## 0.7.0 - 2026-10-15
 
 ### Added

@@ -24,18 +24,28 @@ rookery init [--harness claude|codex|pi|omp] [--project NAME] [--dir PATH] [--js
 | `--dir` | the current folder |
 | `--project` | the folder name of the git top level of `--dir` |
 
-- `claude`: upserts the section in `CLAUDE.md` and merges three hooks into `.claude/settings.json`.
+- `claude`: upserts the section in `CLAUDE.md` and merges three hooks and a `permissions.allow` list into
+  `.claude/settings.json`. The list holds 12 rules for the `rookery` mail commands and `herdr` pane and agent
+  control. It only pre-approves these commands. It blocks nothing else.
 - `codex`, `pi`, `omp`: upserts the section in `AGENTS.md` only.
 - `--json` output:
   `{"ok": true, "context_file": {"path": "...", "action": "created|inserted|replaced|unchanged"},
-  "settings": {"path": "...", "added": ["Stop"], "updated": [], "unchanged": ["SessionStart"]},
+  "settings": {"path": "...", "added": ["Stop"], "updated": [], "unchanged": ["SessionStart"],
+  "permissions": {"added": ["Bash(rookery inbox:*)"], "unchanged": [], "skipped": []}},
   "project": "..."}`
 - `settings` is `null` for harnesses with no hook settings file (`codex`, `pi`, `omp`). Those agents get
   mail through `rookery turn` or the postmaster push.
+- `permissions.added` lists the rules init appended to `allow`. `unchanged` lists the rules already in
+  `allow`. `skipped` lists the rules init left out because they are in `deny` or `ask`. Init keeps every
+  other `permissions` key and every existing `allow` entry in its order, and never changes `deny`, `ask` or
+  `defaultMode`. The human line reads `permissions: added N allow rules` or `permissions: unchanged`.
 - Human output ends with: `Open agent sessions do not join. Start a new Rookery session with new panes
   and agents: rookery session new --name <name>.`
 - Init writes no file in `--dir` other than the context file and `.claude/settings.json` (FR-023). Its
   lock is `<root>/locks/init.lock` (research D13).
+- Bad `permissions` shape: exit 2 and no file changed. This covers a `permissions` value that is not an
+  object and an `allow`, `deny` or `ask` value that is not a list. Stderr names the key and says
+  `Rookery wrote nothing.`
 - Invalid settings JSON: exit 2, no file changed, stderr
   `settings file <path> is not valid JSON: line L column C: <message>. Fix the file, then run init again.`
 

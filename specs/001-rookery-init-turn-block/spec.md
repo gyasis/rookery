@@ -78,6 +78,12 @@ is phase 3; phase 1 only stamps the session ID.
   it writes nothing (FR-015, SC-010).
 - Q: May an agent send mail to itself? → A: Yes. Rookery does not block it. The mail follows the normal
   send path.
+
+### Session 2026-10-20
+
+- Q: Should rookery init grant agents access to mail and herdr pane control? → A: Yes. init merges a
+  permissions.allow list for the rookery mail commands and herdr pane control into .claude/settings.json.
+  The list only pre-approves; it blocks nothing (FR-013).
 - Q: When does a block go to the outbox? → A: Only after a failed send. A turn first sends the mail
   directly. If the process dies between the parse and the send, the block is lost (FR-005).
 - Q: May carry-over write into a successor's folder, against "one writer per folder"? → A: Yes, once.
@@ -360,6 +366,15 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   `Stop` hooks into `.claude/settings.json`. It MUST NOT remove, reorder or alter any existing hook or key
   (dev-kid's or the user's). Re-running MUST NOT duplicate entries. If init cannot parse the existing file,
   it MUST change nothing and exit non-zero naming the file and the parse error.
+  Init MUST also merge a `permissions.allow` list into the same file. The list holds these rules:
+  `Bash(rookery inbox:*)`, `Bash(rookery peek:*)`, `Bash(rookery ack:*)`, `Bash(rookery identity show:*)`,
+  `Bash(rookery turn:*)`, `Bash(herdr pane read:*)`, `Bash(herdr pane send-keys:*)`,
+  `Bash(herdr pane send-text:*)`, `Bash(herdr agent list:*)`, `Bash(herdr agent prompt:*)`,
+  `Bash(herdr agent start:*)` and `Bash(herdr agent wait:*)`. The list only pre-approves these commands. It
+  blocks nothing else. Init MUST keep every existing `permissions` key and every existing `allow` entry in
+  its order, and add only the missing rules. It MUST NOT change `deny`, `ask` or `defaultMode`. If a rule is
+  in `deny` or `ask`, init MUST NOT add it to `allow` and MUST report it as skipped. If `permissions` is not
+  an object, or `allow`, `deny` or `ask` is not a list, init MUST change nothing and exit non-zero.
 - **FR-014**: init MUST report what it did (files created / section inserted / section replaced / hooks added /
   already present) in a machine-readable form and a human line. The human line MUST say that open agent
   sessions do not join. It MUST also tell the user to start a new Rookery session with new panes and agents.

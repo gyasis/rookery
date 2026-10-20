@@ -10,9 +10,13 @@ The shared Rookery root is `{root}`.
 - Run `rookery inbox` to read your unread mail. This does not mark the mail as read.
 - Run the command on the last line of the output, `rookery ack ID ...`, to mark that mail as read.
 
-### End a final message with one block
+### Send mail with a block
 
-End each final message with one `rookery` block. A `rookery` block is a fenced block that has the info string `rookery`. It holds one JSON object. Put nothing after it.
+To send mail, end your final message with one `rookery` block. A `rookery` block is a fenced block that has the info string `rookery`. It holds one JSON object. Put nothing after it.
+
+Write no block when you have nothing to send. Rookery then sends nothing.
+
+Do not send a block only to say that you got or read mail. Mark the mail as read with `rookery ack`, and write no block.
 
 The example below uses a `json` fence on purpose. Do not copy that fence. Use `rookery` for a real block.
 

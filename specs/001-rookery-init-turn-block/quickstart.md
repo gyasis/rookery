@@ -28,7 +28,7 @@ run changes nothing, and `rk peek --as <old node>` still lists that node's mail.
 
 ```bash
 cd ~/Documents/code/<project>
-rookery init --json                     # CLAUDE.md section + 3 merged hooks
+rookery init --json                     # CLAUDE.md section + 3 merged hooks + permissions.allow rules
 rookery init --json                     # run again: every action reads "unchanged"
 rookery session new --name alpha --json # Rookery generates the session ID
 ```

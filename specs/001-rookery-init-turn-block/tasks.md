@@ -263,7 +263,7 @@ byte-identical files.
 
 - [x] T029 [P] [US3] Write `rookery_section.md` (FR-010, FR-012, FR-031). Use only the fields `{project}` and `{root}`. Put no agent name in it. The text states these rules:
   - The rules apply only when Rookery gives you an identity at session start.
-  - End a final message with one `rookery` block. Show one example in a `json` fence, and list the fields.
+  - To send mail, end the final message with one `rookery` block. Write no block when there is nothing to send. Show one example in a `json` fence, and list the fields.
   - Put example blocks in a different fence language.
   - Read your mail with `rookery inbox`. `rookery identity show` tells you who you are.
   - Put the task ID in the path and in a `task:` line of each file that you write.

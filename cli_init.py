@@ -228,6 +228,16 @@ def upsert_section(path, text):
 
 HOOK_EVENTS = (("SessionStart", "session-start"), ("UserPromptSubmit", "prompt"),
                ("Stop", "stop"))
+# permissions.allow rules init merges into settings.json. The list only pre-approves
+# these commands; it blocks nothing else.
+PERMISSION_RULES = (
+    "Bash(rookery inbox:*)", "Bash(rookery peek:*)", "Bash(rookery ack:*)",
+    "Bash(rookery identity show:*)", "Bash(rookery turn:*)",
+    "Bash(herdr pane read:*)", "Bash(herdr pane send-keys:*)",
+    "Bash(herdr pane send-text:*)", "Bash(herdr agent list:*)",
+    "Bash(herdr agent prompt:*)", "Bash(herdr agent start:*)",
+    "Bash(herdr agent wait:*)",
+)
 _CMD_PREFIX = "rookery hook "
 _OURS = re.compile(r"(?:\S*/)?rookery hook (session-start|prompt|stop) "
                    r"--project ([A-Za-z0-9._-]{1,64})")
@@ -288,7 +298,42 @@ def _merge_event(path, hooks, event, cmd):
     return "updated" if changed else "unchanged"
 
 
-def _merge_hooks(path, project):
+def _merge_permissions(path, data):
+    """Append the missing PERMISSION_RULES to data["permissions"]["allow"]. Never
+    changes other keys or entries. A rule listed in deny or ask is skipped. Returns
+    {"added", "unchanged", "skipped"}; raises InitError on a bad shape."""
+    perms = data.get("permissions")
+    if perms is None and "permissions" not in data:
+        perms = {}
+    if not isinstance(perms, dict):
+        raise InitError(f"{path}: \"permissions\" is not an object; fix the file by "
+                        f"hand. Rookery wrote nothing.")
+    lists = {}
+    for key in ("allow", "deny", "ask"):
+        v = perms.get(key, [])
+        if not isinstance(v, list):
+            raise InitError(f"{path}: permissions.{key} is not a list; fix the file by "
+                            f"hand. Rookery wrote nothing.")
+        lists[key] = v
+    restricted = {r for k in ("deny", "ask") for r in lists[k] if isinstance(r, str)}
+    have = {r for r in lists["allow"] if isinstance(r, str)}
+    res = {"added": [], "unchanged": [], "skipped": []}
+    for rule in PERMISSION_RULES:
+        if rule in have:
+            res["unchanged"].append(rule)
+        elif rule in restricted:
+            res["skipped"].append(rule)
+        else:
+            res["added"].append(rule)
+    if res["added"]:
+        allow = lists["allow"]
+        allow.extend(res["added"])
+        perms["allow"] = allow
+        data["permissions"] = perms
+    return res
+
+
+def _merge_hooks(path, project, with_permissions=False):
     try:
         with open(path, "r", encoding="utf-8", errors="surrogateescape",
                   newline="") as fh:
@@ -348,13 +393,17 @@ def _merge_hooks(path, project):
     for event, sub in HOOK_EVENTS:
         cmd = f"{_CMD_PREFIX}{sub} --project {project}"
         result[_merge_event(path, hooks, event, cmd)].append(event)
-    if old is None or result["added"] or result["updated"]:
+    changed = bool(result["added"] or result["updated"])
+    if with_permissions:
+        result["permissions"] = _merge_permissions(path, data)
+        changed = changed or bool(result["permissions"]["added"])
+    if old is None or changed:
         out = json.dumps(data, indent=indent, ensure_ascii=False) + tail
         write_text_atomic(path, bom + (out.replace("\n", nl) if nl != "\n" else out))
     return result
 
 
-def merge_hooks(path, project, root=None):
+def merge_hooks(path, project, root=None, with_permissions=False):
     """Merge the three Rookery hooks into a Claude Code settings.json (D13).
 
     A handler is ours only if its command, stripped, fully matches
@@ -378,13 +427,17 @@ def merge_hooks(path, project, root=None):
     Raises InitError, writing nothing, for: unsafe project name; invalid JSON (message
     has the path, line, column and the contract sentence), including duplicate keys,
     NaN/Infinity and numbers that overflow to infinity; non-object JSON, `hooks` not an object, an event value not a list, or a group without a
-    `hooks` list. With root given, runs under init_lock(root) (re-entrant)."""
+    `hooks` list. With root given, runs under init_lock(root) (re-entrant).
+    With with_permissions=True it also merges PERMISSION_RULES into permissions.allow
+    (see _merge_permissions) and the result gains a "permissions" key; a non-object
+    `permissions` or a non-list allow/deny/ask raises InitError. The rules only
+    pre-approve commands; nothing is blocked."""
     if not turn_block.is_safe_name(project):
         raise InitError(f"unsafe project name: {project!r} (use 1-64 of A-Z a-z 0-9 . _ -)")
     if root is None:
-        return _merge_hooks(path, project)
+        return _merge_hooks(path, project, with_permissions)
     with init_lock(root):
-        return _merge_hooks(path, project)
+        return _merge_hooks(path, project, with_permissions)
 
 
 # ---- `rookery init` command (T032) ---------------------------------------------------
@@ -450,11 +503,13 @@ def main(args):
             # to fail), then the context file: a failure never half-installs Rookery.
             check_section(ctx)
             text = _section_text(root, project)   # load before any write
-            settings = merge_hooks(sp, project) if claude else None
+            settings = (merge_hooks(sp, project, with_permissions=True)
+                        if claude else None)
             try:
                 action = upsert_section(ctx, text)
             except InitError as exc:
-                if settings and (settings["added"] or settings["updated"]):
+                if settings and (settings["added"] or settings["updated"]
+                                 or settings["permissions"]["added"]):
                     raise InitError(f"Rookery updated {sp} but not {ctx}: {exc}") from exc
                 raise
     except InitError as exc:
@@ -472,6 +527,12 @@ def main(args):
         print(f"{sp}: added {', '.join(settings['added']) or '-'}; updated "
               f"{', '.join(settings['updated']) or '-'}; unchanged "
               f"{', '.join(settings['unchanged']) or '-'}")
+        pm = settings["permissions"]
+        line = (f"permissions: added {len(pm['added'])} allow rules" if pm["added"]
+                else "permissions: unchanged")
+        if pm["skipped"]:
+            line += f"; skipped {len(pm['skipped'])} (in deny or ask): {', '.join(pm['skipped'])}"
+        print(line)
     print(_NEXT)
 
 

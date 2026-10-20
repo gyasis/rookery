@@ -145,6 +145,15 @@ class TestContextFile(InitBase):
                         or "applies only" in low, "section must say rules apply only when "
                         "Rookery gives an identity")
 
+    def test_section_makes_the_block_optional(self):
+        # Live T056 (2026-10-20): "End each final message with one block" made two agents
+        # mail each other on every turn (R6). A block is for sending mail, never required.
+        self.run_json()
+        text = self.read("CLAUDE.md").decode()
+        self.assertNotIn("End each final message", text)
+        self.assertIn("Write no block when you have nothing to send", text)
+        self.assertIn("Do not send a block only to say that you got", text)
+
     def test_codex_writes_agents_md_only(self):
         out = self.run_json("--harness", "codex")
         self.assertIs(out["ok"], True)
@@ -257,6 +266,50 @@ class TestSettingsMerge(InitBase):
         self.assertIn(sp, r.stderr)
         self.assertIn("not valid JSON", r.stderr)
         self.assertIn("Fix the file, then run init again.", r.stderr)
+
+
+class TestPermissions(InitBase):
+    RULES = ["Bash(rookery inbox:*)", "Bash(rookery peek:*)", "Bash(rookery ack:*)",
+             "Bash(rookery identity show:*)", "Bash(rookery turn:*)",
+             "Bash(herdr pane read:*)", "Bash(herdr pane send-keys:*)",
+             "Bash(herdr pane send-text:*)", "Bash(herdr agent list:*)",
+             "Bash(herdr agent prompt:*)", "Bash(herdr agent start:*)",
+             "Bash(herdr agent wait:*)"]
+
+    def test_json_shape_and_file(self):
+        out = self.run_json()
+        self.assertEqual(out["settings"]["permissions"],
+                         {"added": self.RULES, "unchanged": [], "skipped": []})
+        self.assertEqual(self.settings()["permissions"]["allow"], self.RULES)
+        again = self.run_json()
+        self.assertEqual(again["settings"]["permissions"],
+                         {"added": [], "unchanged": self.RULES, "skipped": []})
+
+    def test_human_line(self):
+        self.assertIn("permissions: added 12 allow rules", self.run_init().stdout)
+        self.assertIn("permissions: unchanged", self.run_init().stdout)
+
+    def test_deny_is_skipped(self):
+        os.makedirs(self.p(".claude"))
+        with open(self.p(".claude", "settings.json"), "w") as f:
+            json.dump({"permissions": {"deny": [self.RULES[0]]}}, f)
+        out = self.run_json()
+        self.assertEqual(out["settings"]["permissions"]["skipped"], [self.RULES[0]])
+        self.assertNotIn(self.RULES[0], self.settings()["permissions"]["allow"])
+
+    def test_bad_permissions_exit_2_no_change(self):
+        os.makedirs(self.p(".claude"))
+        with open(self.p(".claude", "settings.json"), "w") as f:
+            f.write('{"permissions": {"allow": "x"}}')
+        before = self.tree()
+        r = self.run_init()
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(self.tree(), before)
+        self.assertIn("permissions.allow is not a list", r.stderr)
+
+    def test_other_harnesses_have_no_settings(self):
+        out = self.run_json("--harness", "codex")
+        self.assertIsNone(out["settings"])
 
 
 class TestSideEffects(InitBase):

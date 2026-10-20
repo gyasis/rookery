@@ -498,6 +498,81 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestMergePermissions(Base):
+    """permissions.allow merge (init also writes the pre-approved command list)."""
+    sp = TestMergeHooks.sp
+    load = TestMergeHooks.load
+    get_abs = TestMergeHooks.get_abs
+    put_settings = TestMergeHooks.put_settings
+
+    def merge(self):
+        return cli_init.merge_hooks(self.sp(), "p", with_permissions=True)
+
+    def test_fresh_gets_all_twelve(self):
+        r = self.merge()
+        self.assertEqual(len(cli_init.PERMISSION_RULES), 12)
+        self.assertEqual(r["permissions"], {"added": list(cli_init.PERMISSION_RULES),
+                                            "unchanged": [], "skipped": []})
+        self.assertEqual(self.load()["permissions"]["allow"], list(cli_init.PERMISSION_RULES))
+
+    def test_existing_entries_and_keys_kept_in_order(self):
+        seed = {"permissions": {"defaultMode": "plan", "allow": ["Bash(ls:*)", "Bash(rookery peek:*)", 7],
+                                "extra": {"k": 1}}}
+        self.put_settings(json.dumps(seed).encode())
+        r = self.merge()
+        self.assertEqual(r["permissions"]["unchanged"], ["Bash(rookery peek:*)"])
+        self.assertEqual(len(r["permissions"]["added"]), 11)
+        perms = self.load()["permissions"]
+        self.assertEqual(perms["allow"][:3], seed["permissions"]["allow"])
+        self.assertEqual(perms["allow"][3:], r["permissions"]["added"])
+        self.assertEqual(perms["defaultMode"], "plan")
+        self.assertEqual(perms["extra"], {"k": 1})
+        self.assertEqual(list(perms), ["defaultMode", "allow", "extra"])
+
+    def test_idempotent(self):
+        self.merge()
+        raw, before = self.get_abs(self.sp()), os.stat(self.sp()).st_mtime_ns
+        r = self.merge()
+        self.assertEqual(r["permissions"]["added"], [])
+        self.assertEqual(r["permissions"]["unchanged"], list(cli_init.PERMISSION_RULES))
+        self.assertEqual(self.get_abs(self.sp()), raw)
+        self.assertEqual(os.stat(self.sp()).st_mtime_ns, before)
+
+    def test_deny_and_ask_rules_skipped_and_untouched(self):
+        seed = {"permissions": {"deny": ["Bash(herdr agent start:*)"],
+                                "ask": ["Bash(rookery turn:*)"]}}
+        self.put_settings(json.dumps(seed).encode())
+        r = self.merge()
+        self.assertEqual(r["permissions"]["skipped"],
+                         ["Bash(rookery turn:*)", "Bash(herdr agent start:*)"])
+        self.assertEqual(len(r["permissions"]["added"]), 10)
+        perms = self.load()["permissions"]
+        self.assertNotIn("Bash(herdr agent start:*)", perms["allow"])
+        self.assertNotIn("Bash(rookery turn:*)", perms["allow"])
+        self.assertEqual(perms["deny"], seed["permissions"]["deny"])
+        self.assertEqual(perms["ask"], seed["permissions"]["ask"])
+        r2 = self.merge()
+        self.assertEqual(r2["permissions"]["added"], [])
+        self.assertEqual(len(r2["permissions"]["skipped"]), 2)
+
+    def test_bad_permission_shapes_raise_and_leave_file(self):
+        cases = [b'{"permissions": []}', b'{"permissions": "x"}',
+                 b'{"permissions": {"allow": "x"}}', b'{"permissions": {"allow": {}}}',
+                 b'{"permissions": {"deny": "x"}}', b'{"permissions": {"ask": 3}}',
+                 b'{"permissions": null}']
+        for raw in cases:
+            with self.subTest(raw=raw):
+                self.put_settings(raw)
+                with self.assertRaises(cli_init.InitError) as cm:
+                    self.merge()
+                self.assertIn("Rookery wrote nothing", str(cm.exception))
+                self.assertEqual(self.get_abs(self.sp()), raw)
+
+    def test_hooks_only_call_leaves_permissions_alone(self):
+        cli_init.merge_hooks(self.sp(), "p")
+        self.assertNotIn("permissions", self.load())
+
+
 class TestZipapp(unittest.TestCase):
     """T048: the installed zipapp must find its data files (no plain paths inside the archive)."""
 
