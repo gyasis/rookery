@@ -494,8 +494,29 @@ def _extension_text(project):
     return _data_text(EXTENSION_FILE).replace(_EXTENSION_PLACEHOLDER, project)
 
 
+EXTENSION_HEADER = "// Rookery extension for the pi-family harnesses"
+
+
+def check_extension(path):
+    """Raise InitError when path holds a file that Rookery did not write (its first line is not
+    the Rookery header). Writes nothing."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            first = fh.readline()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise _oserr(path, exc)
+    if not first.startswith(EXTENSION_HEADER):
+        raise InitError(f"{path}: this file is not a Rookery extension (its first line is not "
+                        f"the Rookery header). Move or delete it, then run init again. "
+                        f"Rookery wrote nothing.")
+
+
 def install_extension(path, text):
-    """Write the extension file atomically. Returns "created" | "replaced" | "unchanged"."""
+    """Write the extension file atomically. Returns "created" | "replaced" | "unchanged".
+    Raises InitError, writing nothing, when the file exists and is not Rookery's own."""
+    check_extension(path)
     try:
         with open(path, "r", encoding="utf-8", errors="surrogateescape", newline="") as fh:
             old = fh.read()
@@ -539,6 +560,7 @@ def main(args):
                 ext_path = os.path.join(d, EXTENSION_DIRS[args.harness], "extensions",
                                         "rookery.ts")
                 ext_text = _extension_text(project)
+                check_extension(ext_path)             # before any write
             settings = (merge_hooks(sp, project, with_permissions=True)
                         if claude else None)
             try:
