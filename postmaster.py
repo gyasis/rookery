@@ -234,12 +234,15 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
         tpath = os.path.join(root, "agents", ident["sname"], ident["name"], "state", "turn.json")
         try:
             with open(tpath) as fh:
-                state = json.load(fh).get("state")
+                tdoc = json.load(fh)
+            state = tdoc.get("state")
         except (OSError, ValueError, AttributeError):
             skip("no-idle-state")
             continue
         if state != "idle":
-            continue                       # busy: wait quietly for the turn to end
+            if state != "busy" or not _busy_is_over(conn, config, ident, tdoc, now()):
+                continue                   # busy: wait quietly for the turn to end
+            _log_busy_end(root, skip_logged, aid, tdoc, now(), log_f)
         entry = None
         for b in conn.execute(
                 "SELECT kind, value FROM bindings WHERE session_id=? AND owner_type='identity' "
@@ -281,6 +284,43 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
                              mail_id=newest, count=len(rows), **log_f)
         pushed += 1
     return pushed
+
+
+def _busy_is_over(conn, config, ident, tdoc, now_ts):
+    """True when a `busy` turn state should count as idle for the push. A killed turn never
+    writes idle, so: (1) the optional status probe of a herdr-pane binding says idle/done
+    (config herdr_probe, default true), or (2) the state is older than busy_stale_s (1800).
+    Sets tdoc["_end"] to "probe" or "stale". Core needs no probe: no plugin means no call."""
+    cfg = config or {}
+    if cfg.get("herdr_probe", True):
+        for b in conn.execute(
+                "SELECT value FROM bindings WHERE session_id=? AND owner_type='identity' "
+                "AND owner_id=? AND kind='herdr-pane' ORDER BY created_at, rowid",
+                (ident["session_id"], ident["agent_id"])):
+            if plugins.probe_status("herdr-pane", b["value"]) in ("idle", "done"):
+                tdoc["_end"] = "probe"
+                return True
+            break
+    since = tdoc.get("since")
+    limit = cfg.get("busy_stale_s", 1800)
+    if isinstance(since, (int, float)) and isinstance(limit, (int, float)) and now_ts - since > limit:
+        tdoc["_end"] = "stale"
+        return True
+    return False
+
+
+def _log_busy_end(root, skip_logged, aid, tdoc, now_ts, log_f):
+    """Log busy-stale / busy-corrected once per (agent, since)."""
+    kind = tdoc["_end"]
+    since = tdoc.get("since")
+    if skip_logged.get((aid, kind)) == since:
+        return
+    skip_logged[(aid, kind)] = since
+    extra = {"source": "herdr"} if kind == "probe" else {}
+    turn_block.log_event(root, "postmaster",
+                         outcome="busy-corrected" if kind == "probe" else "busy-stale",
+                         since=since, age=int(now_ts - since) if isinstance(since, (int, float)) else None,
+                         **extra, **log_f)
 
 
 def _write_pushed(root, agent_id, pending_ids, announced):

@@ -112,7 +112,9 @@ rookery hook session-start --project NAME
 - stdout (becomes context): `[rookery] You are <name> (<agent_id>) in Rookery session <session name>.`,
   then the newest `runs/*/HANDOFF.md` of the identity, then the unread summary line, then one line for
   each new failed block (research D23).
-- It writes `state/turn.json` = `{"state": "idle", "since": ts}` (research D8).
+- It writes `state/turn.json` = `{"state": "idle", "since": ts}` (research D8) and logs `state-reset`
+  with reason `session-start`. A new session cannot be in a turn, so this clears a `busy` state that a
+  killed turn left (FR-040).
 
 ## `rookery hook prompt` (FR-016, RQ-1.13)
 
@@ -174,7 +176,12 @@ rookery turn --project NAME [--json] < turn-output.txt
   itself, never push. They stay `pending` and show in the next prompt notice. Kind `answer` pushes only
   when it answers an open `ask`. The recipient sent that ask on the same task, and no earlier answer
   from that agent followed it. Bounces and mail with no `kind` push. A mail that is not pushed is not written to the pushed file.
-  A busy agent gets no push until its turn ends. No such binding → log `no-wake-binding`. No
+  A busy agent gets no push until its turn ends, with two exceptions (FR-040). A `busy` state older than
+  `busy_stale_s` (default 1800) counts as idle, and the postmaster logs `busy-stale` (`agent`, `since`,
+  `age`) once for each agent and `since`. If the identity has a `herdr-pane` binding, `herdr` is on `PATH`
+  and `herdr_probe` is true (default), the postmaster first asks the plugin probe (`herdr agent list`,
+  2 seconds at most). The status `idle` or `done` counts as idle and logs `busy-corrected` (source
+  `herdr`). Any other answer or a failure uses the stale rule. No herdr, no call. No such binding → log `no-wake-binding`. No
   `state/turn.json` → log `no-idle-state`. Either way the mail waits (research D10).
 
 ## Bounce `note` texts

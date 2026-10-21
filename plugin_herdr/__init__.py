@@ -22,6 +22,9 @@ injector is the human's on-ramp and the terminal-node watcher's delivery path â€
 never how two agents talk. Rookery keeps owning the messaging; herdr only
 renders it and hands the human a keyboard.
 """
+import json
+import subprocess
+
 import plugins
 
 from . import bridge as H
@@ -42,6 +45,23 @@ def _check() -> None:
 
 def _sink(event: str, title: str, body: str | None = None, **meta) -> bool:
     return H.notify(title, body=body, sound=_SOUNDS.get(event))
+
+
+def _probe(pane: str) -> str | None:
+    """herdr's agent_status for one pane, or None. Runs `herdr agent list` with a 2 s
+    limit; absent herdr, ROOKERY_HERDR=off, any failure or an unknown pane give None."""
+    if H._mode() == "off" or not H.available():
+        return None
+    try:
+        r = subprocess.run(["herdr", "agent", "list"], capture_output=True, text=True, timeout=2)
+        if r.returncode != 0:
+            return None
+        for a in (json.loads(r.stdout).get("result") or {}).get("agents") or []:
+            if a.get("pane_id") == pane:
+                return a.get("agent_status")
+    except Exception:
+        pass
+    return None
 
 
 def _commands(subparsers) -> None:
@@ -138,4 +158,5 @@ def register() -> None:
     # rather than a bare "unknown injector".
     plugins.injector("herdr", _send, check=_check)
     plugins.sink(_sink)
+    plugins.status_probe("herdr-pane", _probe)
     plugins.command(_commands)

@@ -338,6 +338,9 @@ def session_start(args):
                                         [it["file"] for it in failed])
         _flush_events(turn_block, root, events)
         turn_block.log_event(root, adapter="session-start", session=session_id,
+                             agent_id=agent_id, name=name, outcome="state-reset",
+                             reason="session-start")
+        turn_block.log_event(root, adapter="session-start", session=session_id,
                              agent_id=agent_id, outcome="session-start",
                              source=hook_input.get("source"), failed_shown=len(failed))
     except Exception as exc:                # D16: log and exit 0, no stdout

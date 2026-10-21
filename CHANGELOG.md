@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- A turn that is killed in the middle no longer leaves an agent `busy` forever. The postmaster now treats a `busy` state older than `busy_stale_s` (default 1800 seconds) as idle for the push, and logs `busy-stale` once. The session-start hook now logs `state-reset` when it writes `idle`. If the identity has a `herdr-pane` binding and `herdr` is on `PATH`, the postmaster also asks herdr (2 seconds at most), and a pane that is `idle` or `done` is pushed at once and logged as `busy-corrected`. Set `herdr_probe` to `false` to turn the probe off. Rookery does not need herdr for this. The probe uses a new plugin point, `plugins.status_probe`.
+
 ### Added
 
 - Push gate. The postmaster now wakes an idle agent only for mail that needs action: kinds `ask`, `handoff`, `recruit` and `decline`, bounces, and an `answer` to an open `ask` of the recipient. Mail of kind `status`, other answers, and mail an agent sends to itself wait for the next turn. Plain mail with no `kind` still pushes.

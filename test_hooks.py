@@ -190,6 +190,17 @@ class SessionStartTests(Base):
         self.assertEqual(out.splitlines()[-1].count("unread"), 1, out)
         self.assertNotIn("SECRET-BODY-TEXT", out)
 
+    def test_session_start_resets_a_busy_state_and_logs_state_reset(self):
+        os.makedirs(os.path.dirname(self.turn_file()), exist_ok=True)
+        with open(self.turn_file(), "w") as fh:
+            json.dump({"state": "busy", "since": 1}, fh)
+        self.start()
+        self.assertEqual(self.turn_state(), "idle")
+        ev = [x for x in self.log_lines() if x.get("outcome") == "state-reset"]
+        self.assertEqual(len(ev), 1, self.log_lines())
+        self.assertEqual(ev[0]["reason"], "session-start")
+        self.assertEqual(ev[0]["name"], "me")
+
     def test_registers_node_as_persistent_pane(self):
         self.start()
         c = sqlite3.connect(self.db)
