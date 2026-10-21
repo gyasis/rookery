@@ -22,6 +22,8 @@ injector is the human's on-ramp and the terminal-node watcher's delivery path â€
 never how two agents talk. Rookery keeps owning the messaging; herdr only
 renders it and hands the human a keyboard.
 """
+import time
+
 import plugins
 
 from . import bridge as H
@@ -42,6 +44,27 @@ def _check() -> None:
 
 def _sink(event: str, title: str, body: str | None = None, **meta) -> bool:
     return H.notify(title, body=body, sound=_SOUNDS.get(event))
+
+
+PROBE_TTL = 5.0     # seconds: one `herdr agent list` serves every identity of a tick
+
+
+def _probe(pane: str, cache: dict | None = None) -> str | None:
+    """herdr's agent_status for one pane, or None. `cache` is a dict the caller keeps
+    ({"now": ts} is set by the caller); the listing in it is reused for PROBE_TTL seconds.
+    Uses the bridge, so a disabled or absent herdr (enabled() false) gives None and no call."""
+    if not H.enabled():
+        return None
+    cache = {} if cache is None else cache
+    ts = cache.get("now", time.time())
+    if "agents" not in cache or ts - cache.get("at", -1e18) >= PROBE_TTL or ts < cache["at"]:
+        doc = H._run_json(["agent", "list"], timeout=2)
+        cache["at"] = ts
+        cache["agents"] = ((doc or {}).get("result") or {}).get("agents") or []
+    for a in cache["agents"]:
+        if a.get("pane_id") == pane:
+            return a.get("agent_status")
+    return None
 
 
 def _commands(subparsers) -> None:
@@ -138,4 +161,5 @@ def register() -> None:
     # rather than a bare "unknown injector".
     plugins.injector("herdr", _send, check=_check)
     plugins.sink(_sink)
+    plugins.status_probe("herdr-pane", _probe)
     plugins.command(_commands)

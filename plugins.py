@@ -9,7 +9,7 @@ dependency only ever points ONE way:
 Core never imports a plugin by name. Plugins import core and attach themselves
 here. Deleting every plugin file leaves a working messenger.
 
-Three extension points, deliberately few:
+Four extension points, deliberately few:
 
     injector(name, send, check=None)  a way to type into a pane
                                       send(target, text) -> bool
@@ -20,6 +20,10 @@ Three extension points, deliberately few:
                                       fn(event, title, body, **meta) -> bool
     command(fn)                       extra `rookery <...>` subcommands
                                       fn(subparsers) -> None
+    status_probe(kind, fn)            an outside view of whether the agent behind a
+                                      binding of `kind` is idle (the postmaster may
+                                      correct a stale `busy` turn state with it)
+                                      fn(value[, cache]) -> "idle" | "working" | ... | None
 
 Plugins are DISCOVERED, not named: any `plugin_*` module or package beside this
 file is tried. Loading is best-effort and quiet — one that is broken, or whose
@@ -40,6 +44,7 @@ PLUGIN_PREFIX = "plugin_"
 _INJECTORS: dict[str, dict] = {}
 _SINKS: list = []
 _COMMANDS: list = []
+_PROBES: dict[str, list] = {}
 _loaded = False
 
 
@@ -57,6 +62,11 @@ def sink(fn) -> None:
 def command(fn) -> None:
     """Contribute `rookery` subcommands; fn(subparsers) is called at parse time."""
     _COMMANDS.append(fn)
+
+
+def status_probe(kind: str, fn) -> None:
+    """Contribute a status probe for bindings of `kind` (e.g. 'herdr-pane')."""
+    _PROBES.setdefault(kind, []).append(fn)
 
 
 # --- loading (called BY core) ----------------------------------------------
@@ -148,3 +158,18 @@ def add_commands(subparsers) -> None:
             fn(subparsers)
         except Exception:
             continue
+
+
+def probe_status(kind: str, value: str, cache: dict | None = None) -> str | None:
+    """Ask every probe registered for binding `kind` about `value`; the first
+    answer wins. `cache` is a dict the caller keeps between calls, so a probe can reuse one
+    listing for many values. No probe (the standalone case), or a probe that fails, gives None."""
+    load()
+    for fn in _PROBES.get(kind, ()):
+        try:
+            got = fn(value, cache) if cache is not None else fn(value)
+        except Exception:
+            continue
+        if got:
+            return got
+    return None

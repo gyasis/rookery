@@ -1,4 +1,4 @@
-{"loop_limit": 10, "loop_pair_limit": 30,
+{"loop_limit": 10, "busy_stale_s": 1800, "herdr_probe": true, "loop_pair_limit": 30,
  "_comment": "TMUX_PANE is UNTESTED: no tmux pane ran in the session that wrote this default (research D19).",
  "identity_binding_sources": {"HERDR_PANE_ID": "herdr-pane", "TMUX_PANE": "tmux-pane"},
  "session_binding_sources": {"HERDR_WORKSPACE_ID": "herdr-workspace"},

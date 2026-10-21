@@ -99,6 +99,10 @@ is phase 3; phase 1 only stamps the session ID.
   More than 10 mails on one task between agents with no human prompt in between are held with reason loop
   (FR-038, FR-039).
 
+### Session 2026-10-21
+
+- Q: What happens to an agent left `busy` by a killed turn? → A: Busy older than busy_stale_s (30 min) is stale; a session start (startup or clear) resets it; an optional herdr probe may correct it sooner. Rookery does not depend on herdr (FR-040).
+
 ## User Scenarios & Testing *(mandatory)*
 
 Actors: **the user** (one person running the user's own agents in herdr/tmux panes) and **Rookery** (mailroom +
@@ -404,6 +408,25 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   It MUST use the wake command of a binding (FR-028). An identity without such a binding or without idle
   state gets no push in phase 1. Rookery logs `no-wake-binding` or `no-idle-state`, and the mail waits for
   the prompt notice or `rookery inbox`.
+- **FR-040**: A killed turn never writes `idle`, so `busy` can stay forever. The postmaster MUST treat a
+  `busy` state as stale, and so as idle for the push, when the last sign of life is older than
+  `busy_stale_s` (configuration, default 1800 seconds). It MUST log `busy-stale` once for each agent and
+  `since`. The last sign of life is the later of `since` and the modification time of the file named by
+  `transcript` in `state/turn.json`. The prompt hook stores `transcript` from the `transcript_path` field
+  of its input. A long turn that still writes its transcript is therefore not stale. An unreadable
+  transcript is ignored. A `since` that is not a number, is a boolean or NaN, or is more than 300 seconds
+  in the future is not trusted: the modification time of `turn.json` takes its place. The session-start
+  hook MUST write `idle` when its `source` is `startup`, `clear` or missing, and MUST log `state-reset`
+  (reason `session-start`) when the state was `busy`. It MUST keep a `busy` state for `compact` and
+  `resume`, which can fire inside a turn. An optional probe MAY correct `busy` sooner: only when the
+  identity has a `herdr-pane` binding (the first one only), the postmaster runs inside a herdr pane (`HERDR_ENV=1`) or with `ROOKERY_HERDR=force`, and the configuration
+  `herdr_probe` is true (default), the postmaster asks for the status of the pane (2 seconds at most, one
+  listing every 5 seconds for all identities). The turn must look busy for 60 seconds or more, and the
+  status `idle` or `done` must show on two probes at least 10 seconds apart in the same turn, with no other
+  status between them. Then the push goes and Rookery logs `busy-corrected` (source `herdr`). Any other answer, a
+  failure or a timeout leaves the stale rule in force. The probe attaches through the plugin registry.
+  Rookery does not depend on herdr, and an install without herdr makes no herdr call. A missing
+  `state/turn.json` is still `no-idle-state`.
 - **FR-037** (RQ-1.9, RQ-1.13): Rookery MUST tell the sender about each of its blocks that ends as failed
   (`send-failed`, `remote-unsupported` or `interrupted`). The next session-start or prompt notice names the
   task, the reason and the file path, once for each block. The agent can then fix the cause and send the

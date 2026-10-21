@@ -177,7 +177,7 @@ def _load_pushed(root, agent_id):
 
 
 def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, backoff=None,
-                    now=time.time, nopush=None):
+                    now=time.time, nopush=None, probe_state=None):
     """Push a notice into each idle identity (open session) with pending mail not yet announced
     in <root>/postmaster/pushed/<agent_id>.json (D10, FR-018, FR-028). The file holds the pending
     ids already announced, so mail released from held/quarantined (an older id) is pushed too.
@@ -190,6 +190,7 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
     Returns the number of identities pushed."""
     skip_logged = {} if skip_logged is None else skip_logged
     backoff = {} if backoff is None else backoff
+    probe_state = {} if probe_state is None else probe_state   # busy streaks + herdr listing cache
     nopush = {} if nopush is None else nopush    # agent_id -> ids judged "no push"; kept in memory
     wake_cfg = (config or {}).get("wake") or {}
     pushed = 0
@@ -234,12 +235,17 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
         tpath = os.path.join(root, "agents", ident["sname"], ident["name"], "state", "turn.json")
         try:
             with open(tpath) as fh:
-                state = json.load(fh).get("state")
+                tdoc = json.load(fh)
+            state = tdoc.get("state")
         except (OSError, ValueError, AttributeError):
             skip("no-idle-state")
             continue
+        if state != "busy":
+            probe_state.get("streak", {}).pop(aid, None)       # no busy turn: drop its streak
         if state != "idle":
-            continue                       # busy: wait quietly for the turn to end
+            if state != "busy" or not _busy_is_over(conn, config, ident, tdoc, tpath, now(), probe_state):
+                continue                   # busy: wait quietly for the turn to end
+            _log_busy_end(root, skip_logged, aid, tdoc, log_f)
         entry = None
         for b in conn.execute(
                 "SELECT kind, value FROM bindings WHERE session_id=? AND owner_type='identity' "
@@ -281,6 +287,94 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
                              mail_id=newest, count=len(rows), **log_f)
         pushed += 1
     return pushed
+
+
+PROBE_MIN_AGE = 60       # seconds a turn must look busy before a probe may correct it
+PROBE_GAP = 10           # idle must show on two probes at least this far apart
+SKEW = 300               # a `since` further in the future than this is not trusted
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and abs(v) != float("inf")
+
+
+def _mtime(path, now_ts):
+    try:
+        m = os.path.getmtime(path)
+    except (OSError, TypeError, ValueError):
+        return None
+    return m if m <= now_ts + SKEW else None
+
+
+def _busy_alive_at(tdoc, tpath, now_ts):
+    """Last sign of life of a busy turn: the later of `since` and the mtime of the transcript
+    the prompt hook recorded. A bad `since` (not a number, bool, NaN, > now+300 s) falls back to
+    the mtime of turn.json. An unreadable transcript is ignored. None when nothing is usable."""
+    since = tdoc.get("since")
+    base = since if _num(since) and since <= now_ts + SKEW else _mtime(tpath, now_ts)
+    tr = tdoc.get("transcript")
+    tm = _mtime(tr, now_ts) if isinstance(tr, str) and tr else None
+    cands = [x for x in (base, tm) if x is not None]
+    return max(cands) if cands else None
+
+
+def _busy_is_over(conn, config, ident, tdoc, tpath, now_ts, probe):
+    """True when a `busy` turn state should count as idle for the push (FR-040). A killed turn
+    never writes idle, so: (1) stale: now - last sign of life > busy_stale_s (default 1800), or
+    (2) the optional status probe of the first herdr-pane binding (config herdr_probe, default
+    true) says idle/done on two probes at least PROBE_GAP s apart while the turn looks busy for
+    at least PROBE_MIN_AGE s. `probe` is the caller's memory (streaks, listing cache).
+    Sets tdoc["_end"] ("probe"|"stale") and tdoc["_age"]."""
+    cfg = config or {}
+    alive = _busy_alive_at(tdoc, tpath, now_ts)
+    if alive is None:
+        return False
+    age = now_ts - alive
+    tdoc["_age"] = int(age)
+    streaks = probe.setdefault("streak", {})     # agent_id -> (turn since, first idle reading)
+    aid = ident["agent_id"]
+    turn_key = repr(tdoc.get("since"))
+    if aid in streaks and streaks[aid][0] != turn_key:
+        del streaks[aid]                         # a different turn: its readings do not count
+    limit = cfg.get("busy_stale_s", 1800)
+    if _num(limit) and age > limit:
+        streaks.pop(aid, None)
+        tdoc["_end"] = "stale"
+        return True
+    if cfg.get("herdr_probe", True) and age >= PROBE_MIN_AGE:
+        row = conn.execute(
+            "SELECT value FROM bindings WHERE session_id=? AND owner_type='identity' "
+            "AND owner_id=? AND kind='herdr-pane' ORDER BY created_at, rowid LIMIT 1",
+            (ident["session_id"], aid)).fetchone()
+        if row is None:
+            streaks.pop(aid, None)
+        else:
+            cache = probe.setdefault("cache", {})
+            cache["now"] = now_ts
+            if plugins.probe_status("herdr-pane", row["value"], cache) in ("idle", "done"):
+                first = streaks.setdefault(aid, (turn_key, now_ts))[1]
+                if now_ts - first >= PROBE_GAP:
+                    streaks.pop(aid, None)
+                    tdoc["_end"] = "probe"
+                    return True
+            else:
+                streaks.pop(aid, None)
+    else:
+        streaks.pop(aid, None)                   # probe off or turn too young
+    return False
+
+
+def _log_busy_end(root, skip_logged, aid, tdoc, log_f):
+    """Log busy-stale / busy-corrected once per (agent, since)."""
+    kind = tdoc["_end"]
+    since = tdoc.get("since")
+    if skip_logged.get((aid, kind)) == since:
+        return
+    skip_logged[(aid, kind)] = since
+    extra = {"source": "herdr"} if kind == "probe" else {}
+    turn_block.log_event(root, "postmaster",
+                         outcome="busy-corrected" if kind == "probe" else "busy-stale",
+                         since=since, age=tdoc["_age"], **extra, **log_f)
 
 
 def _write_pushed(root, agent_id, pending_ids, announced):
@@ -325,14 +419,15 @@ def scan_outbox_roots(conn, root=None):
 def run_identities_only(root, poll):
     """No --nodes (D10, FR-018): skip every roster step; run only the outbox scan and the wake step."""
     wake_conn = turn_block.open_db()      # same db_path() as the hooks (D6)
-    skip_logged, backoff, nopush = {}, {}, {}
+    skip_logged, backoff, nopush, probe_state = {}, {}, {}, {}
     log("online. no roster: outbox scan + identity wake step only.")
     try:
         while True:
             scan_outbox_roots(wake_conn, root)
             try:
                 wake_identities(wake_conn, root, rookery_identity.load_config(persist=False),
-                                skip_logged=skip_logged, backoff=backoff, nopush=nopush)
+                                skip_logged=skip_logged, backoff=backoff, nopush=nopush,
+                                    probe_state=probe_state)
             except Exception as exc:     # never kill the loop; retried next tick
                 turn_block.log_event(root, "postmaster", outcome="wake-step-error", reason=str(exc))
             time.sleep(poll)
@@ -352,6 +447,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
     skip_logged = {}
     backoff = {}
     nopush = {}
+    probe_state = {}
     nodes = list(node_engine)
 
     def lifecycle(n):
@@ -468,7 +564,8 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                 scan_outbox_roots(wake_conn, root)
                 try:
                     wake_identities(wake_conn, root, rookery_identity.load_config(persist=False),
-                                    skip_logged=skip_logged, backoff=backoff, nopush=nopush)
+                                    skip_logged=skip_logged, backoff=backoff, nopush=nopush,
+                                    probe_state=probe_state)
                 except Exception as exc:     # never kill the loop; retried next tick
                     turn_block.log_event(root, "postmaster", outcome="wake-step-error",
                                          reason=str(exc))

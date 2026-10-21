@@ -190,6 +190,55 @@ class SessionStartTests(Base):
         self.assertEqual(out.splitlines()[-1].count("unread"), 1, out)
         self.assertNotIn("SECRET-BODY-TEXT", out)
 
+    def test_session_start_resets_a_busy_state_and_logs_state_reset(self):
+        os.makedirs(os.path.dirname(self.turn_file()), exist_ok=True)
+        with open(self.turn_file(), "w") as fh:
+            json.dump({"state": "busy", "since": 1}, fh)
+        self.start()
+        self.assertEqual(self.turn_state(), "idle")
+        ev = [x for x in self.log_lines() if x.get("outcome") == "state-reset"]
+        self.assertEqual(len(ev), 1, self.log_lines())
+        self.assertEqual(ev[0]["reason"], "session-start")
+        self.assertEqual(ev[0]["name"], "me")
+
+    def test_compact_and_resume_leave_a_busy_state(self):
+        for source in ("compact", "resume"):
+            with self.subTest(source=source):
+                os.makedirs(os.path.dirname(self.turn_file()), exist_ok=True)
+                with open(self.turn_file(), "w") as fh:
+                    json.dump({"state": "busy", "since": 1}, fh)
+                self.start(source=source)
+                self.assertEqual(self.turn_state(), "busy")
+        self.assertEqual([x for x in self.log_lines() if x.get("outcome") == "state-reset"], [])
+
+    def test_clear_and_missing_source_reset_busy(self):
+        for payload in ({"source": "clear", "session_id": "c1"}, {"session_id": "c1"}):
+            with self.subTest(payload=payload):
+                os.makedirs(os.path.dirname(self.turn_file()), exist_ok=True)
+                with open(self.turn_file(), "w") as fh:
+                    json.dump({"state": "busy", "since": 1}, fh)
+                self.hook("session-start", payload)
+                self.assertEqual(self.turn_state(), "idle")
+
+    def test_state_reset_is_logged_only_when_it_was_busy(self):
+        self.start()
+        self.assertEqual(self.turn_state(), "idle")
+        self.assertEqual([x for x in self.log_lines() if x.get("outcome") == "state-reset"], [])
+
+    def test_compact_creates_idle_when_there_is_no_state_file(self):
+        self.start(source="compact")
+        self.assertEqual(self.turn_state(), "idle")
+
+    def test_prompt_hook_stores_transcript_path(self):
+        self.hook("prompt", {"prompt": "hi", "session_id": "c1", "transcript_path": "/x/y.jsonl"})
+        with open(self.turn_file()) as fh:
+            doc = json.load(fh)
+        self.assertEqual(doc["state"], "busy")
+        self.assertEqual(doc["transcript"], "/x/y.jsonl")
+        self.hook("prompt", {"prompt": "hi", "session_id": "c1"})
+        with open(self.turn_file()) as fh:
+            self.assertNotIn("transcript", json.load(fh))
+
     def test_registers_node_as_persistent_pane(self):
         self.start()
         c = sqlite3.connect(self.db)
