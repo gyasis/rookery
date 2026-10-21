@@ -460,11 +460,12 @@ def _default_project(d):
     return os.path.basename(d)
 
 
-def _section_text(root, project):
-    path = os.path.join(_HERE, "rookery_section.md")
+def _data_text(name):
+    """Text of a data file shipped beside this module (or inside the zipapp)."""
+    path = os.path.join(_HERE, name)
     try:
         with open(path, encoding="utf-8") as fh:
-            tpl = fh.read()
+            return fh.read()
     except OSError as exc:
         # Inside the zipapp open() cannot reach a path in the archive: use the loader,
         # as rookery._load_schema() does.
@@ -472,11 +473,41 @@ def _section_text(root, project):
         if loader is None or not hasattr(loader, "get_data"):
             raise _oserr(path, exc)
         try:
-            tpl = loader.get_data(os.path.join(getattr(loader, "archive", _HERE),
-                                              "rookery_section.md")).decode("utf-8")
+            return loader.get_data(os.path.join(getattr(loader, "archive", _HERE),
+                                                name)).decode("utf-8")
         except OSError as exc2:
             raise _oserr(path, exc2)
-    return tpl.replace("{root}", root).replace("{project}", project)
+
+
+def _section_text(root, project):
+    return _data_text("rookery_section.md").replace("{root}", root).replace("{project}", project)
+
+
+# pi and omp load a TypeScript extension that calls the same `rookery hook` commands
+# as the Claude Code hooks. Project-level folders: pi `.pi/extensions/`, omp `.omp/extensions/`.
+EXTENSION_FILE = "rookery_pi_extension.ts"
+EXTENSION_DIRS = {"pi": ".pi", "omp": ".omp"}
+_EXTENSION_PLACEHOLDER = "__ROOKERY_PROJECT__"
+
+
+def _extension_text(project):
+    return _data_text(EXTENSION_FILE).replace(_EXTENSION_PLACEHOLDER, project)
+
+
+def install_extension(path, text):
+    """Write the extension file atomically. Returns "created" | "replaced" | "unchanged"."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            old = fh.read()
+    except FileNotFoundError:
+        write_text_atomic(path, text)
+        return "created"
+    except OSError as exc:
+        raise _oserr(path, exc)
+    if old == text:
+        return "unchanged"
+    write_text_atomic(path, text)
+    return "replaced"
 
 
 def main(args):
@@ -503,6 +534,11 @@ def main(args):
             # to fail), then the context file: a failure never half-installs Rookery.
             check_section(ctx)
             text = _section_text(root, project)   # load before any write
+            ext_path = ext_text = None
+            if args.harness in EXTENSION_DIRS:
+                ext_path = os.path.join(d, EXTENSION_DIRS[args.harness], "extensions",
+                                        "rookery.ts")
+                ext_text = _extension_text(project)
             settings = (merge_hooks(sp, project, with_permissions=True)
                         if claude else None)
             try:
@@ -512,6 +548,13 @@ def main(args):
                                  or settings["permissions"]["added"]):
                     raise InitError(f"Rookery updated {sp} but not {ctx}: {exc}") from exc
                 raise
+            extension = None
+            if ext_path is not None:
+                try:
+                    extension = {"path": ext_path,
+                                 "action": install_extension(ext_path, ext_text)}
+                except InitError as exc:
+                    raise InitError(f"Rookery updated {ctx} but not {ext_path}: {exc}") from exc
     except InitError as exc:
         print(f"rookery init: {exc}", file=sys.stderr)
         sys.exit(2)
@@ -519,7 +562,8 @@ def main(args):
         settings = {"path": sp, **settings}
     if args.json:
         print(json.dumps({"ok": True, "context_file": {"path": ctx, "action": action},
-                          "settings": settings, "project": project}))
+                          "settings": settings, "project": project,
+                          **({"extension": extension} if extension else {})}))
         return
     print(f"Project: {project}")
     print(f"{ctx}: {action}")
@@ -533,6 +577,8 @@ def main(args):
         if pm["skipped"]:
             line += f"; skipped {len(pm['skipped'])} (in deny or ask): {', '.join(pm['skipped'])}"
         print(line)
+    if extension is not None:
+        print(f"{extension['path']}: {extension['action']}")
     print(_NEXT)
 
 
