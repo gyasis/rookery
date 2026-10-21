@@ -42,7 +42,7 @@ is phase 3; phase 1 only stamps the session ID.
   reason `wrong-recipient`. The bounce `suggest` field lists the closest existing names.
 - Q: Which command do agents use to read their mail? → A: New `rookery inbox` (read only, with an ack line),
   `rookery ack` (mark read) and `rookery peek` (read only) in the `rookery` CLI, with identity resolution as in FR-027 and `--json`. All
-  notices point to them. `rk` stays as it is.
+  notices point to them. `rk` (retired on 2026-10-21; use `rookery`) stays as it is.
 - Q: What is the unit that agents work in? → A: A Rookery session. Rookery generates its ID
   (constitution IX). It is one team, with one monitor (phase 3) and one boundary. An identity belongs to one
   session. Each new session gives each agent a new ID. Names are unique inside a session. Bindings resolve
@@ -341,7 +341,7 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   prompt notice and the pane notice MUST name `rookery inbox` as the way to read mail.
   No command MAY show the mail of any identity other than the resolved one: there is no `--as` flag and no
   `--all` flag. Each read MUST log the identity and the bindings that Rookery used to resolve it. This phase MUST NOT
-  change `rk`.
+  change `rk` (retired on 2026-10-21; use `rookery`).
 - **Security note (phase 1 scope)**: FR-031 scopes reads; it does not enforce them. All agents run as one
   Unix user, so an agent can set `ROOKERY_NODE` to another name or open the database file directly. Phase 1
   makes such a read visible in the log, not impossible. Enforcement needs a per-identity secret checked by a
@@ -528,7 +528,7 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   identities, bindings and the session ID on mail MUST be additive. Run each one on a COPY of the live
   database before merge (constitution I).
 - **FR-034** (RQ-1.25): Rookery MUST stamp the sender's Rookery session ID on every mail row that it
-  writes. Rows that exist before this phase MUST belong to one `legacy` session, so `rk` and the MCP server
+  writes. Rows that exist before this phase MUST belong to one `legacy` session, so `rk` (retired on 2026-10-21; use `rookery`) and the MCP server
   keep working on them.
 - **FR-033** (RQ-1.25): Sometimes `to` names an identity that exists only in another Rookery session.
   Then Rookery MUST record the mail as quarantined with the reason `off-team` and send a bounce. Mail never crosses a

@@ -535,44 +535,15 @@ def turn(args):
         if _no_session_possible(turn_block, rookery_identity):
             _turn_exit(args, 3, "no-session", "no session", human=_NO_SESSION_MSG)
         root = turn_block.project_root(args.project)
-        try:
-            conn = turn_block.open_db()
-            try:
-                ended = rookery_identity.find_session(
-                    conn, os.environ, rookery_identity.load_config(persist=False))
-                if ended is not None and ended["state"] != "open":
-                    turn_block.log_event(root, adapter="turn", session=ended["session_id"],
-                                         outcome="session-ended")
-                    _turn_exit(args, 3, "no-session", "session-ended",
-                               human=f"The Rookery session \"{ended['name']}\" has ended. "
-                                     "Start a new one with: rookery session new")
-                try:
-                    resolved = rookery_identity.resolve(
-                        conn, os.environ, {}, root, create=True)
-                except rookery_identity.SessionEnded as exc:   # ended between check and lock
-                    turn_block.log_event(root, adapter="turn", outcome="session-ended")
-                    _turn_exit(args, 3, "no-session", "session-ended", human=str(exc))
-                if resolved is None:
-                    _turn_exit(args, 3, "no-session", "no session", human=_NO_SESSION_MSG)
-                session, identity, _bindings = resolved
-                if identity is None:
-                    _turn_exit(args, 2, "bad-input", "no identity",
-                               human="No agent identity found. Set ROOKERY_NODE to an "
-                                     "agent name in the session.")
-                ctx = {"root": root, "session": session, "identity": identity,
-                       "adapter": "turn"}
-                res = turn_block.dispatch_text(conn, text, ctx)
-            finally:
-                conn.close()
-        except sqlite3.OperationalError as exc:
-            msg = str(exc).lower()
-            if "locked" in msg or "busy" in msg:
-                kept = _turn_keep_busy(root, text)
-                _turn_exit(args, 4, "db-busy", str(exc),
-                           human="The database is busy. "
-                                 + ("The block is back in your outbox. " if kept else "")
-                                 + "Run rookery turn again with the same text.")
-            raise
+
+        def on_busy():
+            kept = _turn_keep_busy(root, text)
+            return ("The database is busy. "
+                    + ("The block is back in your outbox. " if kept else "")
+                    + "Run rookery turn again with the same text.")
+
+        res = _dispatch_cli(args, root, "turn",
+                            lambda conn, ctx: turn_block.dispatch_text(conn, text, ctx), on_busy)
         outcome = res.get("outcome")
         if outcome == "db-busy":
             _turn_exit(args, 4, outcome, res.get("reason"), res.get("msg_id"),
@@ -587,6 +558,97 @@ def turn(args):
     except Exception as exc:
         _turn_exit(args, 2, "error", f"{type(exc).__name__}: {exc}",
                    human=f"rookery turn failed: {type(exc).__name__}: {exc}")
+
+
+def _dispatch_cli(args, root, adapter, run, on_busy, create=True):
+    """Resolve the current session and identity, then return run(conn, ctx). Shared by
+    `rookery turn` and `rookery send`. create=False never makes a new identity.
+    Exits 3 on no/ended session, 2 on no identity, 4 when the database is busy
+    (on_busy() gives the message)."""
+    import turn_block
+    import rookery_identity
+    try:
+        conn = turn_block.open_db()
+        try:
+            ended = rookery_identity.find_session(
+                conn, os.environ, rookery_identity.load_config(persist=False))
+            if ended is not None and ended["state"] != "open":
+                turn_block.log_event(root, adapter=adapter, session=ended["session_id"],
+                                     outcome="session-ended")
+                _turn_exit(args, 3, "no-session", "session-ended",
+                           human=f"The Rookery session \"{ended['name']}\" has ended. "
+                                 "Start a new one with: rookery session new")
+            try:
+                resolved = rookery_identity.resolve(
+                    conn, os.environ, {}, root, create=create)
+            except rookery_identity.SessionEnded as exc:   # ended between check and lock
+                turn_block.log_event(root, adapter=adapter, outcome="session-ended")
+                _turn_exit(args, 3, "no-session", "session-ended", human=str(exc))
+            if resolved is None:
+                _turn_exit(args, 3, "no-session", "no session", human=_NO_SESSION_MSG)
+            session, identity, _bindings = resolved
+            if identity is None:
+                _turn_exit(args, 2, "bad-input", "no identity",
+                           human="No agent identity found. Set ROOKERY_NODE to an "
+                                 "agent name in the session.")
+            ctx = {"root": root, "session": session, "identity": identity,
+                   "adapter": adapter}
+            return run(conn, ctx)
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "locked" in msg or "busy" in msg:
+            _turn_exit(args, 4, "db-busy", str(exc), human=on_busy())
+        raise
+
+
+def send(args):
+    """`rookery send TO SAY [--task T] [--kind K] ...` builds one block and sends it
+    through the same dispatch_block() gate as the Stop hook and `rookery turn`, adapter
+    `send`. The sender is always the resolved identity; there is no --as or --from.
+    Exit: 0 sent, 1 not sent (quarantined, held, ...), 2 bad input, 3 no/ended session,
+    4 db-busy."""
+    try:
+        import turn_block
+        import rookery_identity
+
+        block = {"to": args.to, "task": args.task, "kind": args.kind, "say": args.say,
+                 "status": args.status}
+        if args.thread:
+            block["thread"] = args.thread
+        if args.read:
+            block["read"] = args.read
+        raw = json.dumps(block, ensure_ascii=False)
+        root = turn_block.project_root(args.project or os.path.basename(os.getcwd()))
+        _block, note = turn_block.validate(raw, root)
+        if note:    # the sender is right here: refuse, store nothing, no bounce
+            _turn_exit(args, 2, "bad-input", note, human=note)
+        if _no_session_possible(turn_block, rookery_identity):
+            _turn_exit(args, 3, "no-session", "no session", human=_NO_SESSION_MSG)
+        res = _dispatch_cli(
+            args, root, "send",
+            lambda conn, ctx: turn_block.dispatch_block(conn, raw, ctx),
+            lambda: "The database is busy. Rookery sent nothing. Run rookery send again.",
+            create=False)    # sending never registers a new sender (rk did)
+        outcome, reason, msg_id = res.get("outcome"), res.get("reason"), res.get("msg_id")
+        if outcome == "sent":
+            _turn_exit(args, 0, outcome, None, msg_id, human=f"sent #{msg_id} to {args.to}")
+        if outcome == "db-busy":
+            _turn_exit(args, 4, outcome, reason, msg_id,
+                       human="The database is busy. Rookery sent nothing. Run rookery send again.")
+        human = {
+            "quarantined": f"Not sent. Rookery quarantined the mail ({reason}). "
+                           "The bounce in rookery inbox tells you what to fix.",
+            "loop-held": "Not sent. Too many mails with no human prompt. Rookery held this "
+                         "mail. Do not send it again until a human gives a prompt.",
+        }.get(outcome, f"Not sent: {outcome}" + (f": {reason}" if reason else ""))
+        _turn_exit(args, 1, outcome, reason, msg_id, human=human)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        _turn_exit(args, 2, "error", f"{type(exc).__name__}: {exc}",
+                   human=f"rookery send failed: {type(exc).__name__}: {exc}")
 
 
 def add_parser(sub):
@@ -605,3 +667,18 @@ def add_parser(sub):
     tp.add_argument("--project", required=True, help="Rookery project name")
     tp.add_argument("--json", action="store_true", help="Print one JSON object.")
     tp.set_defaults(func=turn)
+
+    sp = sub.add_parser(
+        "send", help="Send mail to an agent in my session. Exit 1 not sent, 3 no session.")
+    sp.add_argument("to", metavar="TO", help="Agent name in my session.")
+    sp.add_argument("say", metavar="SAY", help="The message (the block's \"say\").")
+    sp.add_argument("--task", default="message", help="Task name (default: message).")
+    sp.add_argument("--kind", default="ask", help="ask, answer, decline, handoff, status "
+                    "or recruit (default: ask).")
+    sp.add_argument("--status", default="done", help="done or in-progress (default: done).")
+    sp.add_argument("--thread", help="Thread name.")
+    sp.add_argument("--read", action="append", metavar="PATH",
+                    help="A file the recipient reads. Repeatable.")
+    sp.add_argument("--project", help="Rookery project name (default: the current folder).")
+    sp.add_argument("--json", action="store_true", help="Print one JSON object.")
+    sp.set_defaults(func=send)

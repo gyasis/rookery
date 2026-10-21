@@ -22,7 +22,7 @@ ROOKERY_DB=/tmp/rookery-copy.db python3 test_sessions_migration.py
 ```
 
 Pass = the new tables exist, every old row has `session_id='legacy'`, old data is byte-identical, a second
-run changes nothing, and `rk peek --as <old node>` still lists that node's mail.
+run changes nothing, and `rk peek --as <old node>` (retired on 2026-10-21; use `rookery`) still lists that node's mail.
 
 ## 3. Install into a project, then start a Rookery session
 
