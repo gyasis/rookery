@@ -22,8 +22,7 @@ injector is the human's on-ramp and the terminal-node watcher's delivery path â€
 never how two agents talk. Rookery keeps owning the messaging; herdr only
 renders it and hands the human a keyboard.
 """
-import json
-import subprocess
+import time
 
 import plugins
 
@@ -47,20 +46,24 @@ def _sink(event: str, title: str, body: str | None = None, **meta) -> bool:
     return H.notify(title, body=body, sound=_SOUNDS.get(event))
 
 
-def _probe(pane: str) -> str | None:
-    """herdr's agent_status for one pane, or None. Runs `herdr agent list` with a 2 s
-    limit; absent herdr, ROOKERY_HERDR=off, any failure or an unknown pane give None."""
-    if H._mode() == "off" or not H.available():
+PROBE_TTL = 5.0     # seconds: one `herdr agent list` serves every identity of a tick
+
+
+def _probe(pane: str, cache: dict | None = None) -> str | None:
+    """herdr's agent_status for one pane, or None. `cache` is a dict the caller keeps
+    ({"now": ts} is set by the caller); the listing in it is reused for PROBE_TTL seconds.
+    Uses the bridge, so a disabled or absent herdr (enabled() false) gives None and no call."""
+    if not H.enabled():
         return None
-    try:
-        r = subprocess.run(["herdr", "agent", "list"], capture_output=True, text=True, timeout=2)
-        if r.returncode != 0:
-            return None
-        for a in (json.loads(r.stdout).get("result") or {}).get("agents") or []:
-            if a.get("pane_id") == pane:
-                return a.get("agent_status")
-    except Exception:
-        pass
+    cache = {} if cache is None else cache
+    ts = cache.get("now", time.time())
+    if "agents" not in cache or ts - cache.get("at", -1e18) >= PROBE_TTL or ts < cache["at"]:
+        doc = H._run_json(["agent", "list"], timeout=2)
+        cache["at"] = ts
+        cache["agents"] = ((doc or {}).get("result") or {}).get("agents") or []
+    for a in cache["agents"]:
+        if a.get("pane_id") == pane:
+            return a.get("agent_status")
     return None
 
 

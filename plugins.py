@@ -23,7 +23,7 @@ Four extension points, deliberately few:
     status_probe(kind, fn)            an outside view of whether the agent behind a
                                       binding of `kind` is idle (the postmaster may
                                       correct a stale `busy` turn state with it)
-                                      fn(value) -> "idle" | "working" | ... | None
+                                      fn(value[, cache]) -> "idle" | "working" | ... | None
 
 Plugins are DISCOVERED, not named: any `plugin_*` module or package beside this
 file is tried. Loading is best-effort and quiet — one that is broken, or whose
@@ -160,13 +160,14 @@ def add_commands(subparsers) -> None:
             continue
 
 
-def probe_status(kind: str, value: str) -> str | None:
+def probe_status(kind: str, value: str, cache: dict | None = None) -> str | None:
     """Ask every probe registered for binding `kind` about `value`; the first
-    answer wins. No probe (the standalone case), or a probe that fails, gives None."""
+    answer wins. `cache` is a dict the caller keeps between calls, so a probe can reuse one
+    listing for many values. No probe (the standalone case), or a probe that fails, gives None."""
     load()
     for fn in _PROBES.get(kind, ()):
         try:
-            got = fn(value)
+            got = fn(value, cache) if cache is not None else fn(value)
         except Exception:
             continue
         if got:

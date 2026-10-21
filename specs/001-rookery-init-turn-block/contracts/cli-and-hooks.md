@@ -112,9 +112,10 @@ rookery hook session-start --project NAME
 - stdout (becomes context): `[rookery] You are <name> (<agent_id>) in Rookery session <session name>.`,
   then the newest `runs/*/HANDOFF.md` of the identity, then the unread summary line, then one line for
   each new failed block (research D23).
-- It writes `state/turn.json` = `{"state": "idle", "since": ts}` (research D8) and logs `state-reset`
-  with reason `session-start`. A new session cannot be in a turn, so this clears a `busy` state that a
-  killed turn left (FR-040).
+- It writes `state/turn.json` = `{"state": "idle", "since": ts}` (research D8) when `source` is `startup`,
+  `clear` or missing, or when no state file exists. For `compact` and `resume` it keeps an existing
+  state, because these can fire inside a turn. It logs `state-reset` (reason `session-start`) only when
+  the state it replaced was `busy` (FR-040).
 
 ## `rookery hook prompt` (FR-016, RQ-1.13)
 
@@ -124,7 +125,10 @@ rookery hook session-start --project NAME
 - A new failed block adds one line (research D23), for example
   `[rookery] Your block for TASK-12 failed (send-failed). It is kept in <path>. Fix the cause, then send the block again.`
 - It never prints a mail body. It never changes a mail status.
-- With a session, it writes `state/turn.json` = `{"state": "busy", "since": ts}` (research D8).
+- With a session, it writes `state/turn.json` = `{"state": "busy", "since": ts}` (research D8). When the
+  input has a string `transcript_path`, the file also has `"transcript": "<that path>"`. The postmaster
+  uses its modification time as a sign that the turn is alive (FR-040). A harness with no hooks puts the
+  path of its session file in the same `transcript_path` field.
 - Loop breaker (FR-039): the stdin `prompt` text can start with `[rookery] new mail for`. Leading white
   space and one bracketed-paste wrapper (`ESC[200~` ... `ESC[201~`) do not count. If the text does not
   start so, the hook sets the loop counters of this identity to 0 and logs `loop-reset`. It writes
@@ -176,12 +180,17 @@ rookery turn --project NAME [--json] < turn-output.txt
   itself, never push. They stay `pending` and show in the next prompt notice. Kind `answer` pushes only
   when it answers an open `ask`. The recipient sent that ask on the same task, and no earlier answer
   from that agent followed it. Bounces and mail with no `kind` push. A mail that is not pushed is not written to the pushed file.
-  A busy agent gets no push until its turn ends, with two exceptions (FR-040). A `busy` state older than
-  `busy_stale_s` (default 1800) counts as idle, and the postmaster logs `busy-stale` (`agent`, `since`,
-  `age`) once for each agent and `since`. If the identity has a `herdr-pane` binding, `herdr` is on `PATH`
-  and `herdr_probe` is true (default), the postmaster first asks the plugin probe (`herdr agent list`,
-  2 seconds at most). The status `idle` or `done` counts as idle and logs `busy-corrected` (source
-  `herdr`). Any other answer or a failure uses the stale rule. No herdr, no call. No such binding → log `no-wake-binding`. No
+  A busy agent gets no push until its turn ends, with two exceptions (FR-040). (1) The last sign of life
+  is older than `busy_stale_s` (default 1800). That is the later of `since` and the modification time
+  of the `transcript` file in `turn.json`. A `since` that is not a number, is a boolean or NaN, or is
+  more than 300 seconds ahead gives way to the modification time of `turn.json`. The state then counts
+  as idle, and the postmaster logs `busy-stale` (`agent`, `since`, `age`) once for each agent and
+  `since`. (2) The identity has a `herdr-pane` binding (only the first one is probed), `herdr` is on
+  `PATH`, `herdr_probe` is true (default) and the turn has looked busy for 60 seconds or more. The
+  plugin probe (`herdr agent list`, 2 seconds at most, one listing every 5 seconds for all identities)
+  must then report `idle` or `done` on two probes at least 10 seconds apart, with no other status
+  between them. The state then counts as idle, and the postmaster logs `busy-corrected` (source
+  `herdr`). Any other answer or a failure uses rule (1). No herdr, no call. No such binding → log `no-wake-binding`. No
   `state/turn.json` → log `no-idle-state`. Either way the mail waits (research D10).
 
 ## Bounce `note` texts

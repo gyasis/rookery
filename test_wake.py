@@ -522,11 +522,13 @@ class TestStaleBusy(WakeBase):
         import plugins
         self.plugins = plugins
         self.skip_logged = {}          # the postmaster keeps one across loops
+        self.probe_state = {}
         self._probes = dict(plugins._PROBES) if hasattr(plugins, "_PROBES") else {}
         self._loaded = plugins._loaded
         if hasattr(plugins, "_PROBES"):
             plugins._PROBES.clear()
         os.environ["HERDR_STATUS"] = ""
+        os.environ["HERDR_ENV"] = "1"
 
     def tearDown(self):
         if hasattr(self.plugins, "_PROBES"):
@@ -535,14 +537,16 @@ class TestStaleBusy(WakeBase):
         self.plugins._loaded = self._loaded
         super().tearDown()
 
-    def busy(self, name="law-counsel", since=None):
+    def busy(self, name="law-counsel", since=None, transcript=None):
         ws = TB.workspace(self.root, "alpha", name)
-        TB.write_json_atomic(os.path.join(ws, "state", "turn.json"),
-                             {"state": "busy", "since": self.T0 if since is None else since})
+        doc = {"state": "busy", "since": self.T0 if since is None else since}
+        if transcript:
+            doc["transcript"] = transcript
+        TB.write_json_atomic(os.path.join(ws, "state", "turn.json"), doc)
 
     def tick(self, age, config=None):
         PM.wake_identities(self.conn, self.root, config or self.config, now=lambda: self.T0 + age,
-                           skip_logged=self.skip_logged)
+                           skip_logged=self.skip_logged, probe_state=self.probe_state)
 
     def load_herdr_plugin(self):
         self.plugins._loaded = False
@@ -586,14 +590,24 @@ class TestStaleBusy(WakeBase):
         self.assertEqual(self.config.get("busy_stale_s"), 1800)
         self.assertIs(self.config.get("herdr_probe"), True)
 
-    def test_herdr_idle_corrects_fresh_busy(self):
+    def probe_ticks(self, status, ages):
+        os.environ["HERDR_STATUS"] = status
+        for age in ages:
+            self.tick(age)
+
+    def prompts(self):
+        return [c for c in self.calls() if c[:2] == ["agent", "prompt"]]
+
+    def test_herdr_idle_needs_two_readings_10s_apart(self):
         self.load_herdr_plugin()
-        os.environ["HERDR_STATUS"] = "idle"
         self.busy()
         self.mail()
-        self.tick(5)
-        pushes = [c for c in self.calls() if c[:2] == ["agent", "prompt"]]
-        self.assertEqual(len(pushes), 1, self.calls())
+        self.probe_ticks("idle", [70])               # first reading only
+        self.assertEqual(self.prompts(), [])
+        self.probe_ticks("idle", [75])               # second reading, only 5 s later
+        self.assertEqual(self.prompts(), [])
+        self.probe_ticks("idle", [81])               # >= 10 s after the first
+        self.assertEqual(len(self.prompts()), 1, self.calls())
         ev = self.events("busy-corrected")
         self.assertEqual(len(ev), 1, ev)
         self.assertEqual(ev[0]["source"], "herdr")
@@ -601,30 +615,93 @@ class TestStaleBusy(WakeBase):
 
     def test_herdr_done_also_corrects(self):
         self.load_herdr_plugin()
-        os.environ["HERDR_STATUS"] = "done"
         self.busy()
         self.mail()
-        self.tick(5)
+        self.probe_ticks("done", [70, 81])
         self.assertEqual(len(self.events("busy-corrected")), 1)
+
+    def test_herdr_idle_before_60s_busy_age_is_ignored(self):
+        self.load_herdr_plugin()
+        self.busy()
+        self.mail()
+        self.probe_ticks("idle", [5, 20, 40, 59])
+        self.assertEqual(self.prompts(), [])
+        self.assertEqual(self.probes(), [])
+
+    def test_herdr_working_between_resets_the_streak(self):
+        self.load_herdr_plugin()
+        self.busy()
+        self.mail()
+        self.probe_ticks("idle", [70])
+        self.probe_ticks("working", [76])
+        self.probe_ticks("idle", [82])               # new streak starts here
+        self.assertEqual(self.prompts(), [])
+        self.probe_ticks("idle", [93])
+        self.assertEqual(len(self.prompts()), 1)
 
     def test_herdr_working_blocks_push_until_stale(self):
         self.load_herdr_plugin()
-        os.environ["HERDR_STATUS"] = "working"
         self.busy()
         self.mail()
-        self.tick(5)
-        self.assertEqual([c for c in self.calls() if c[:2] == ["agent", "prompt"]], [])
+        self.probe_ticks("working", [5, 70, 200])
+        self.assertEqual(self.prompts(), [])
         self.assertEqual(self.events("busy-corrected"), [])
         self.tick(1801)
-        self.assertEqual(len([c for c in self.calls() if c[:2] == ["agent", "prompt"]]), 1)
+        self.assertEqual(len(self.prompts()), 1)
         self.assertEqual(len(self.events("busy-stale")), 1)
+
+    def test_one_herdr_list_per_tick_serves_every_identity(self):
+        self.load_herdr_plugin()
+        other = RI.new_identity(self.conn, self.sid, "other")
+        RI.bind(self.conn, self.sid, other["agent_id"], "herdr-pane", "w1:p3")
+        self.busy()
+        self.busy("other")
+        self.mail()
+        self.mail(to=other)
+        os.environ["HERDR_STATUS"] = "working"
+        self.tick(70)
+        self.assertEqual(len(self.probes()), 1, self.probes())
+
+    def test_transcript_mtime_keeps_a_long_turn_alive(self):
+        tr = os.path.join(self.tmp.name, "session.jsonl")
+        open(tr, "w").close()
+        os.utime(tr, (self.T0 + 1500, self.T0 + 1500))
+        self.busy(transcript=tr)
+        self.mail()
+        self.tick(1801)                              # since is stale, transcript is 301 s old
+        self.assertEqual(self.calls(), [])
+        self.tick(1500 + 1801)
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(self.events("busy-stale")[0]["age"], 1801)
+
+    def test_unreadable_transcript_falls_back_to_since(self):
+        self.busy(transcript="/nonexistent/x.jsonl")
+        self.mail()
+        self.tick(1801)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_malformed_since_uses_turn_json_mtime(self):
+        tp = os.path.join(TB.workspace(self.root, "alpha", "law-counsel"), "state", "turn.json")
+        for i, bad in enumerate((None, "soon", True, float("nan"), self.T0 + 99999)):
+            with self.subTest(since=bad):
+                with open(tp, "w") as fh:
+                    json.dump({"state": "busy", "since": bad}, fh)
+                os.utime(tp, (self.T0, self.T0))
+                self.skip_logged.clear()
+                self.mail(topic=f"T{i}")
+                n = len(self.calls())
+                self.tick(100)                      # young by mtime: no push
+                self.assertEqual(len(self.calls()), n)
+                self.tick(1801)                     # old by mtime: push
+                self.assertEqual(len(self.calls()), n + 1)
 
     def test_herdr_probe_switch_off_makes_no_herdr_call(self):
         self.load_herdr_plugin()
         os.environ["HERDR_STATUS"] = "idle"
         self.busy()
         self.mail()
-        self.tick(5, dict(self.config, herdr_probe=False))
+        self.tick(70, dict(self.config, herdr_probe=False))
+        self.tick(90, dict(self.config, herdr_probe=False))
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.probes(), [])
 
@@ -633,7 +710,8 @@ class TestStaleBusy(WakeBase):
         os.environ["PATH"] = "/usr/bin:/bin"           # now herdr is gone
         self.busy()
         self.mail()
-        self.tick(5)
+        self.tick(70)
+        self.tick(90)
         self.assertFalse(os.path.exists(self.record))  # fake never invoked, not even to probe
         self.tick(1801)                                # rule 1 still works (push cmd is herdr: fails)
         self.assertEqual(len(self.events("busy-stale")), 1)
@@ -645,7 +723,8 @@ class TestStaleBusy(WakeBase):
         self.busy("me")
         RI.bind(self.conn, self.sid, self.me["agent_id"], "tmux-pane", "%3")
         self.mail(to=self.me, sender=self.lc)
-        self.tick(5)
+        self.tick(70)
+        self.tick(90)
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.probes(), [])
 

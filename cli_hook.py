@@ -318,9 +318,20 @@ def session_start(args):
             env_file = os.environ.get("CLAUDE_ENV_FILE")
             if env_file:
                 _write_env_file(env_file, session_id, agent_id)
-            turn_block.write_json_atomic(
-                os.path.join(ws, "state", "turn.json"),
-                {"state": "idle", "since": rookery.now()})
+            # A fresh session cannot be mid-turn, but compact and resume can fire inside one:
+            # reset only on startup / clear (or an unknown source), and keep a live busy otherwise.
+            tpath = os.path.join(ws, "state", "turn.json")
+            prev = None
+            try:
+                with open(tpath) as fh:
+                    prev = json.load(fh).get("state")
+            except (OSError, ValueError, AttributeError):
+                pass
+            src = hook_input.get("source")
+            reset_state = None
+            if src in (None, "startup", "clear") or prev is None:
+                turn_block.write_json_atomic(tpath, {"state": "idle", "since": rookery.now()})
+                reset_state = prev == "busy"
             handoff = _newest_handoff(ws)
             if handoff:
                 lines.append(handoff)
@@ -337,9 +348,10 @@ def session_start(args):
             turn_block.mark_failed_seen(root, session["name"], name,
                                         [it["file"] for it in failed])
         _flush_events(turn_block, root, events)
-        turn_block.log_event(root, adapter="session-start", session=session_id,
-                             agent_id=agent_id, name=name, outcome="state-reset",
-                             reason="session-start")
+        if reset_state:
+            turn_block.log_event(root, adapter="session-start", session=session_id,
+                                 agent_id=agent_id, name=name, outcome="state-reset",
+                                 reason="session-start")
         turn_block.log_event(root, adapter="session-start", session=session_id,
                              agent_id=agent_id, outcome="session-start",
                              source=hook_input.get("source"), failed_shown=len(failed))
@@ -413,9 +425,11 @@ def prompt(args):
             agent_id, name = identity["agent_id"], identity["name"]
             ids = {"agent_id": agent_id, "name": name}
             ws = turn_block.workspace(root, session["name"], name)
-            turn_block.write_json_atomic(
-                os.path.join(ws, "state", "turn.json"),
-                {"state": "busy", "since": rookery.now()})
+            busy_doc = {"state": "busy", "since": rookery.now()}
+            tr = hook_input.get("transcript_path")      # liveness for the postmaster (FR-040)
+            if isinstance(tr, str) and tr:
+                busy_doc["transcript"] = tr
+            turn_block.write_json_atomic(os.path.join(ws, "state", "turn.json"), busy_doc)
             reset = 0
             if not _is_push_prompt(hook_input.get("prompt")):
                 try:
