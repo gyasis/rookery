@@ -77,6 +77,7 @@ _DATA_FILES = [
     "schema.sql",
     "rookery_section.md",
     "rookery_config.default.json",
+    "rookery_pi_extension.ts",
 ]
 
 _MAIN_PY = """\

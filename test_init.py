@@ -16,6 +16,8 @@ import tempfile
 import time
 import unittest
 
+import cli_init
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLI = os.path.join(HERE, "rookery_cli.py")
 DEVKID = os.path.join(HERE, "fixtures", "settings", "devkid.json")
@@ -406,16 +408,50 @@ class TestContextFileEdgeCases(InitBase):
         self.assertEqual(self.tree(), before)
         self.assertIn(self.p("CLAUDE.md"), r.stderr)
 
-    def test_pi_and_omp_write_agents_md_only(self):
-        for harness in ("pi", "omp"):
+    def test_pi_and_omp_write_agents_md_and_extension(self):
+        for harness, folder in (("pi", ".pi"), ("omp", ".omp")):
             with self.subTest(harness=harness):
                 shutil.rmtree(self.dir)
                 os.makedirs(self.dir)
                 out = self.run_json("--harness", harness)
+                rel = os.path.join(folder, "extensions", "rookery.ts")
                 self.assertIs(out["ok"], True)
                 self.assertEqual(out["context_file"]["path"], self.p("AGENTS.md"))
                 self.assertIsNone(out["settings"])
-                self.assertEqual(set(self.tree()), {"AGENTS.md"})
+                self.assertEqual(out["extension"], {"path": self.p(rel), "action": "created"})
+                self.assertEqual(set(self.tree()), {"AGENTS.md", rel})
+                text = self.read(rel).decode()
+                self.assertIn('BAKED_PROJECT = "p"', text)   # --project p baked in
+                # idempotent: second run changes nothing
+                before, ids = self.tree(), self.stat_ids(rel)
+                again = self.run_json("--harness", harness)
+                self.assertEqual(again["extension"]["action"], "unchanged")
+                self.assertEqual(self.tree(), before)
+                self.assertEqual(self.stat_ids(rel), ids)
+                # a stale copy is replaced
+                with open(self.p(rel), "w") as f:
+                    f.write(cli_init.EXTENSION_HEADER + " (old)\nold\n")
+                self.assertEqual(self.run_json("--harness", harness)["extension"]["action"],
+                                 "replaced")
+                self.assertEqual(self.read(rel).decode(), text)
+
+    def test_users_own_rookery_ts_is_not_overwritten(self):
+        for harness, folder in (("pi", ".pi"), ("omp", ".omp")):
+            with self.subTest(harness=harness):
+                shutil.rmtree(self.dir)
+                os.makedirs(self.p(folder, "extensions"))
+                rel = os.path.join(folder, "extensions", "rookery.ts")
+                with open(self.p(rel), "w") as f:
+                    f.write("// my own extension\nexport default () => {}\n")
+                before = self.tree()
+                r = self.run_init("--harness", harness)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn(self.p(rel), r.stderr)
+                self.assertEqual(self.tree(), before)   # nothing written, AGENTS.md included
+
+    def test_other_harnesses_have_no_extension(self):
+        for harness in ("claude", "codex"):
+            self.assertNotIn("extension", self.run_json("--harness", harness))
 
 
 def ev_cmd(event):
