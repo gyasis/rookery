@@ -1,0 +1,11 @@
+The review is finished and handed over.
+
+```rookery
+{
+  "to": "law-counsel",
+  "task": "TASK-12",
+  "kind": "handoff",
+  "say": "Lease review complete. Handing over the final notes.",
+  "status": "done"
+}
+```

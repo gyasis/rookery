@@ -1,0 +1,6 @@
+{"loop_limit": 10, "loop_pair_limit": 30,
+ "_comment": "TMUX_PANE is UNTESTED: no tmux pane ran in the session that wrote this default (research D19).",
+ "identity_binding_sources": {"HERDR_PANE_ID": "herdr-pane", "TMUX_PANE": "tmux-pane"},
+ "session_binding_sources": {"HERDR_WORKSPACE_ID": "herdr-workspace"},
+ "wake": {"herdr-pane": [["herdr","agent","prompt","{value}","{text}"]],
+          "tmux-pane": [["tmux","send-keys","-t","{value}","-l","{text}"],["tmux","send-keys","-t","{value}","Enter"]]}}

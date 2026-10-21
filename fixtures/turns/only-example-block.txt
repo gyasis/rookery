@@ -1,0 +1,13 @@
+Here is my question for the lawyer.
+
+```rookery
+{
+  "to": "law-counsel",
+  "task": "TASK-12",
+  "kind": "ask",
+  "say": "MIDDLE-BLOCK: ask about clause 4.",
+  "status": "in-progress"
+}
+```
+
+I will keep working on the summary while I wait for the answer.

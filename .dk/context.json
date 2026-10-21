@@ -1,5 +1,5 @@
 {
-  "tasks_file": "/home/gyasis/Documents/code/rookery/tasks.md",
-  "reason": "lightweight mode (.dk/tasks.md marker)",
-  "branch": "master"
+  "tasks_file": "/home/gyasis/.rookery/projects/rookery/wt/rookery-init/rookery/specs/001-rookery-init-turn-block/tasks.md",
+  "reason": "existing-symlink (honored \u2014 pass --force-symlink to override)",
+  "branch": "001-rookery-init-turn-block"
 }

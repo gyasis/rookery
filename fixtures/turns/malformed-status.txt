@@ -1,0 +1,11 @@
+I reviewed the lease and have a question for the lawyer.
+
+```rookery
+{
+  "to": "law-counsel",
+  "task": "TASK-12",
+  "kind": "ask",
+  "say": "Does clause 4 of the lease allow subletting without consent?",
+  "status": "blocked"
+}
+```

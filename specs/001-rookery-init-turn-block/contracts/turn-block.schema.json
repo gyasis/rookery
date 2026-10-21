@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rookery/turn-block/v1",
+  "title": "Rookery turn block (RQ-1.2, C1, C2)",
+  "description": "One JSON object in a fenced block with the info string `rookery`. Compact JSON is at most 4096 bytes (research D12). Phase 1 validates with stdlib code that applies these same rules; this file is the reference.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["to", "task", "kind", "say", "status"],
+  "properties": {
+    "to":     {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+    "task":   {"type": "string", "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,64}$"},
+    "thread": {"type": "string", "maxLength": 128},
+    "kind":   {"enum": ["ask", "answer", "decline", "handoff", "status", "recruit"]},
+    "say":    {"type": "string", "minLength": 1, "maxLength": 1200},
+    "status": {"enum": ["done", "in-progress"]},
+    "read": {
+      "type": "array",
+      "items": {"type": "string", "maxLength": 256, "pattern": "^[^\\n\\r]+$"}
+    },
+    "self_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_complete":   {"type": "boolean"},
+        "gap":             {"type": "string"},
+        "gap_in_my_scope": {"type": "boolean"},
+        "evidence":        {"type": "string"}
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {"path": {"type": "string"}, "note": {"type": "string"}}
+      }
+    }
+  }
+}

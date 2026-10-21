@@ -12,9 +12,25 @@ import tempfile
 
 import bootstrap
 
-# Cache for the built zipapp bytes (rebuilt once per process lifetime).
-# TODO: invalidate when source-file mtimes change.
+# Cache for the built zipapp bytes. Reuse only while bundled source mtimes match.
 _CACHED_PYZ = None  # bytes | None
+_CACHED_PYZ_SOURCE_KEY = None  # tuple | None
+
+
+def _pyz_source_key():
+    """Return a fingerprint for the files bootstrap.build_pyz bundles."""
+    root = bootstrap._ROOKERY_DIR
+    names = tuple(bootstrap._PY_MODULES) + tuple(bootstrap._DATA_FILES)
+    key = []
+    for name in names:
+        path = os.path.join(root, name)
+        try:
+            st = os.stat(path)
+        except OSError:
+            key.append((name, None))
+        else:
+            key.append((name, st.st_mtime_ns, st.st_size))
+    return tuple(key)
 
 
 def handle_bootstrap(handler, public_url):
@@ -24,18 +40,20 @@ def handle_bootstrap(handler, public_url):
         handler    – BaseHTTPRequestHandler instance (for headers / wfile).
         public_url – The server's public URL (used in the installer script).
     """
-    global _CACHED_PYZ
+    global _CACHED_PYZ, _CACHED_PYZ_SOURCE_KEY
     from urllib.parse import urlparse, parse_qs
 
     q = parse_qs(urlparse(handler.path).query)
     if q.get("pyz"):
         # Return the zipapp bytes.
-        if _CACHED_PYZ is None:
+        source_key = _pyz_source_key()
+        if _CACHED_PYZ is None or _CACHED_PYZ_SOURCE_KEY != source_key:
             tmp = tempfile.mktemp(suffix=".pyz")
             try:
                 bootstrap.build_pyz(tmp)
                 with open(tmp, "rb") as fh:
                     _CACHED_PYZ = fh.read()
+                _CACHED_PYZ_SOURCE_KEY = source_key
             finally:
                 try:
                     os.unlink(tmp)
