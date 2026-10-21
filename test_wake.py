@@ -639,6 +639,30 @@ class TestStaleBusy(WakeBase):
         self.probe_ticks("idle", [93])
         self.assertEqual(len(self.prompts()), 1)
 
+    def test_idle_blip_of_an_earlier_turn_does_not_count(self):
+        self.load_herdr_plugin()
+        self.busy()
+        self.mail()
+        self.probe_ticks("idle", [70])               # blip in turn 1
+        self.busy(since=self.T0 + 3000)              # turn 1 ended, turn 2 began
+        self.probe_ticks("idle", [3070])             # ONE reading in turn 2
+        self.assertEqual(self.prompts(), [])
+        self.probe_ticks("idle", [3081])             # second reading, same turn
+        self.assertEqual(len(self.prompts()), 1)
+
+    def test_turn_end_drops_the_streak(self):
+        self.load_herdr_plugin()
+        self.busy()
+        self.mail()
+        self.probe_ticks("idle", [70])
+        self.set_state("law-counsel", "idle")        # the turn ended (no mail yet pushed: loop)
+        self.tick(100)
+        n = len(self.prompts())
+        self.mail(topic="TASK-9")
+        self.busy(since=self.T0)                     # a new turn with the same since value
+        self.probe_ticks("idle", [200])              # ONE reading
+        self.assertEqual(len(self.prompts()), n)
+
     def test_herdr_working_blocks_push_until_stale(self):
         self.load_herdr_plugin()
         self.busy()

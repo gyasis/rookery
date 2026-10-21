@@ -185,11 +185,11 @@ rookery turn --project NAME [--json] < turn-output.txt
   of the `transcript` file in `turn.json`. A `since` that is not a number, is a boolean or NaN, or is
   more than 300 seconds ahead gives way to the modification time of `turn.json`. The state then counts
   as idle, and the postmaster logs `busy-stale` (`agent`, `since`, `age`) once for each agent and
-  `since`. (2) The identity has a `herdr-pane` binding (only the first one is probed), `herdr` is on
-  `PATH`, `herdr_probe` is true (default) and the turn has looked busy for 60 seconds or more. The
+  `since`. (2) The identity has a `herdr-pane` binding (only the first one is probed), the postmaster
+  runs inside a herdr pane (`HERDR_ENV=1`) or with `ROOKERY_HERDR=force`, `herdr_probe` is true (default) and the turn has looked busy for 60 seconds or more. The
   plugin probe (`herdr agent list`, 2 seconds at most, one listing every 5 seconds for all identities)
-  must then report `idle` or `done` on two probes at least 10 seconds apart, with no other status
-  between them. The state then counts as idle, and the postmaster logs `busy-corrected` (source
+  must then report `idle` or `done` on two probes at least 10 seconds apart in the same turn, with no other status
+  between them. A turn ending, or a new `since`, drops the readings. The state then counts as idle, and the postmaster logs `busy-corrected` (source
   `herdr`). Any other answer or a failure uses rule (1). No herdr, no call. No such binding → log `no-wake-binding`. No
   `state/turn.json` → log `no-idle-state`. Either way the mail waits (research D10).
 

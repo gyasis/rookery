@@ -101,7 +101,7 @@ is phase 3; phase 1 only stamps the session ID.
 
 ### Session 2026-10-21
 
-- Q: What happens to an agent left `busy` by a killed turn? → A: Busy older than busy_stale_s (30 min) is stale; session start resets it; an optional herdr probe may correct it sooner. Rookery does not depend on herdr (FR-040).
+- Q: What happens to an agent left `busy` by a killed turn? → A: Busy older than busy_stale_s (30 min) is stale; a session start (startup or clear) resets it; an optional herdr probe may correct it sooner. Rookery does not depend on herdr (FR-040).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -419,11 +419,11 @@ Conflicts C1, C2, C4, C6 and C7 apply here. Conflicts C3, C5, C8 and C9 belong t
   hook MUST write `idle` when its `source` is `startup`, `clear` or missing, and MUST log `state-reset`
   (reason `session-start`) when the state was `busy`. It MUST keep a `busy` state for `compact` and
   `resume`, which can fire inside a turn. An optional probe MAY correct `busy` sooner: only when the
-  identity has a `herdr-pane` binding (the first one only), `herdr` is on `PATH` and the configuration
+  identity has a `herdr-pane` binding (the first one only), the postmaster runs inside a herdr pane (`HERDR_ENV=1`) or with `ROOKERY_HERDR=force`, and the configuration
   `herdr_probe` is true (default), the postmaster asks for the status of the pane (2 seconds at most, one
   listing every 5 seconds for all identities). The turn must look busy for 60 seconds or more, and the
-  status `idle` or `done` must show on two probes at least 10 seconds apart with no other status between
-  them. Then the push goes and Rookery logs `busy-corrected` (source `herdr`). Any other answer, a
+  status `idle` or `done` must show on two probes at least 10 seconds apart in the same turn, with no other
+  status between them. Then the push goes and Rookery logs `busy-corrected` (source `herdr`). Any other answer, a
   failure or a timeout leaves the stale rule in force. The probe attaches through the plugin registry.
   Rookery does not depend on herdr, and an install without herdr makes no herdr call. A missing
   `state/turn.json` is still `no-idle-state`.

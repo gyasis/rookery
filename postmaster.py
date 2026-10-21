@@ -240,6 +240,8 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
         except (OSError, ValueError, AttributeError):
             skip("no-idle-state")
             continue
+        if state != "busy":
+            probe_state.get("streak", {}).pop(aid, None)       # no busy turn: drop its streak
         if state != "idle":
             if state != "busy" or not _busy_is_over(conn, config, ident, tdoc, tpath, now(), probe_state):
                 continue                   # busy: wait quietly for the turn to end
@@ -329,8 +331,11 @@ def _busy_is_over(conn, config, ident, tdoc, tpath, now_ts, probe):
         return False
     age = now_ts - alive
     tdoc["_age"] = int(age)
-    streaks = probe.setdefault("streak", {})
+    streaks = probe.setdefault("streak", {})     # agent_id -> (turn since, first idle reading)
     aid = ident["agent_id"]
+    turn_key = repr(tdoc.get("since"))
+    if aid in streaks and streaks[aid][0] != turn_key:
+        del streaks[aid]                         # a different turn: its readings do not count
     limit = cfg.get("busy_stale_s", 1800)
     if _num(limit) and age > limit:
         streaks.pop(aid, None)
@@ -341,17 +346,21 @@ def _busy_is_over(conn, config, ident, tdoc, tpath, now_ts, probe):
             "SELECT value FROM bindings WHERE session_id=? AND owner_type='identity' "
             "AND owner_id=? AND kind='herdr-pane' ORDER BY created_at, rowid LIMIT 1",
             (ident["session_id"], aid)).fetchone()
-        if row is not None:
+        if row is None:
+            streaks.pop(aid, None)
+        else:
             cache = probe.setdefault("cache", {})
             cache["now"] = now_ts
             if plugins.probe_status("herdr-pane", row["value"], cache) in ("idle", "done"):
-                first = streaks.setdefault(aid, now_ts)
+                first = streaks.setdefault(aid, (turn_key, now_ts))[1]
                 if now_ts - first >= PROBE_GAP:
                     streaks.pop(aid, None)
                     tdoc["_end"] = "probe"
                     return True
             else:
                 streaks.pop(aid, None)
+    else:
+        streaks.pop(aid, None)                   # probe off or turn too young
     return False
 
 
