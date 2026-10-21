@@ -6,6 +6,7 @@ AND the audit log. Every helper here is small and stdlib-only so any node
 (headless Claude, raw-API daemon, or a human at a terminal) can read/write the
 same bus.
 """
+import json
 import os
 import shutil
 import sqlite3
@@ -59,7 +60,9 @@ def _load_schema() -> str:
     except OSError:
         loader = globals().get("__loader__")
         if loader is not None and hasattr(loader, "get_data"):
-            return loader.get_data(_SCHEMA_PATH).decode("utf-8")
+            # zipimport wants the path under loader.archive, which may be relative (./rookery)
+            return loader.get_data(os.path.join(getattr(loader, "archive", _HERE),
+                                                "schema.sql")).decode("utf-8")
         raise
 
 
@@ -75,11 +78,74 @@ except Exception:                      # tolerate an odd import context
     _SCHEMA_SQL = None
 
 
+_INBOX_SCREENING_COLS = ("verdict TEXT", "reason TEXT", "decided_by TEXT", "decided_at INTEGER")
+
+
+# D18: Rookery sessions, session-scoped identities and bindings (additive only).
+_SESSION_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS rookery_sessions (
+  session_id TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  state      TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  ended_at   TEXT
+);
+CREATE TABLE IF NOT EXISTS identities (
+  agent_id    TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  previous_id TEXT,
+  created_at  TEXT NOT NULL,
+  UNIQUE(session_id, name)
+);
+CREATE TABLE IF NOT EXISTS bindings (
+  session_id TEXT NOT NULL,
+  owner_type TEXT NOT NULL,
+  owner_id   TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  value      TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(session_id, owner_type, kind, value)
+);
+-- Loop breaker (FR-039): mails sent on one task between two agents since the last human prompt.
+-- a <= b, so both directions share a row; a = b is a self-send.
+CREATE TABLE IF NOT EXISTS loop_counts (
+  session_id TEXT NOT NULL,
+  task       TEXT NOT NULL,
+  a          TEXT NOT NULL,
+  b          TEXT NOT NULL,
+  count      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(session_id, task, a, b)
+);
+"""
+
+
+def _add_column(conn: sqlite3.Connection, alter_sql: str) -> None:
+    """Run an ALTER TABLE ADD COLUMN; a concurrent init_db may have added it first."""
+    try:
+        conn.execute(alter_sql)
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc):
+            raise
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     global _SCHEMA_SQL
     if _SCHEMA_SQL is None:
         _SCHEMA_SQL = _load_schema()
     conn.executescript(_SCHEMA_SQL)
+    # CREATE TABLE IF NOT EXISTS won't add columns to an existing DB — migrate.
+    have = {r[1] for r in conn.execute("PRAGMA table_info(inbox)")}
+    for col in _INBOX_SCREENING_COLS:
+        if col.split()[0] not in have:
+            _add_column(conn, f"ALTER TABLE inbox ADD COLUMN {col}")
+    conn.executescript(_SESSION_TABLES_SQL)
+    if "session_id" not in have:
+        _add_column(conn, "ALTER TABLE inbox ADD COLUMN session_id TEXT DEFAULT 'legacy'")
+    conn.execute(
+        "INSERT OR IGNORE INTO rookery_sessions(session_id, name, state, created_at) "
+        "VALUES('legacy', 'legacy', 'open', strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+    )
     conn.commit()
 
 
@@ -142,14 +208,50 @@ def set_session_ref(conn, node_id, session_ref):
 
 
 # --- mail ------------------------------------------------------------------
-def send(conn, sender, recipient, body, topic=None):
+# Mail from the mesh's own plumbing is never held — a bounce or a wake notice
+# stuck behind the screener it reports on would deadlock the loop.
+SYSTEM_SENDERS = {"postmaster", "relay", "rookery"}
+
+
+def hold_enabled() -> bool:
+    """ROOKERY_HOLD=1 turns on comms screening: agent mail lands 'held' until a
+    screener releases or quarantines it. Off by default (mail goes straight to
+    'pending', as before)."""
+    return os.environ.get("ROOKERY_HOLD", "").lower() in ("1", "true", "yes", "on")
+
+
+def send(conn, sender, recipient, body, topic=None, hold=None, session_id=None,
+         commit=True):
+    if hold is None:
+        hold = hold_enabled() and sender not in SYSTEM_SENDERS
     cur = conn.execute(
-        "INSERT INTO inbox(sender, recipient, body, topic, delivered, created_at) "
-        "VALUES(?,?,?,?,0,?)",
-        (sender, recipient, body, topic, now()),
+        "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at, session_id) "
+        "VALUES(?,?,?,?,?,0,?,?)",
+        (sender, recipient, body, topic, "held" if hold else "pending", now(),
+         session_id or "legacy"),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return cur.lastrowid
+
+
+def count_loop(conn, session_id, keys) -> bool:
+    """Loop breaker counters (FR-039). keys = [(task, a, b, limit), ...]; a and b are put in order
+    here. Runs inside the caller's transaction and never commits. If any counter is at its limit
+    the result is True and nothing moves. Otherwise every counter goes up by one and the result is
+    False."""
+    keys = [(t, *sorted((a, b)), lim) for t, a, b, lim in keys]
+    for t, a, b, lim in keys:
+        row = conn.execute("SELECT count FROM loop_counts WHERE session_id=? AND task=? AND a=? AND b=?",
+                           (session_id, t, a, b)).fetchone()
+        if row is not None and row[0] >= lim:
+            return True
+    for t, a, b, _lim in keys:
+        conn.execute(
+            "INSERT INTO loop_counts(session_id, task, a, b, count) VALUES(?,?,?,?,1) "
+            "ON CONFLICT(session_id, task, a, b) DO UPDATE SET count=count+1",
+            (session_id, t, a, b))
+    return False
 
 
 def fetch_undelivered(conn, recipient):
@@ -169,7 +271,7 @@ def fetch_thread(conn, node):
     ).fetchall()
 
 
-def claim(conn, ids):
+def claim(conn, ids, commit=True):
     """Mark messages IN-FLIGHT when a node picks them up, so the poller won't
     re-inject them while they're being processed. If the node crashes before
     ack(), requeue_stale() returns them to 'pending' (no lost mail)."""
@@ -177,16 +279,18 @@ def claim(conn, ids):
         "UPDATE inbox SET status='inflight', claimed_at=? WHERE id=?",
         [(now(), i) for i in ids],
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
-def ack(conn, ids):
+def ack(conn, ids, commit=True):
     """Mark in-flight messages DONE after the turn handled them successfully."""
     conn.executemany(
         "UPDATE inbox SET status='done', delivered=1, delivered_at=? WHERE id=?",
         [(now(), i) for i in ids],
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def dlq(conn, msg_id, reason):
@@ -228,6 +332,109 @@ def requeue_stale(conn, dead_after):
     )
     conn.commit()
     return cur.rowcount
+
+
+# --- comms screening: held -> pending | quarantined -------------------------
+# A screener (human, typed-decision classifier, or comms-monitor agent) decides
+# each held message. Quarantine is a labelled folder, not a delete: every row
+# keeps (message, verdict, reason, decided_by) as training data, and the sender
+# gets a bounce so it can fix its routing instead of waiting forever.
+QUARANTINE_REASONS = (
+    "wrong-recipient", "task-already-done", "unneeded", "off-team",
+    "malformed", "injection-suspect", "loop",
+)
+
+
+def list_held(conn):
+    return conn.execute("SELECT * FROM inbox WHERE status='held' ORDER BY created_at, id").fetchall()
+
+
+def get_message(conn, msg_id):
+    return conn.execute("SELECT * FROM inbox WHERE id=?", (msg_id,)).fetchone()
+
+
+def _decide(conn, msg_id, from_status, to_status, verdict, reason, decided_by,
+            commit=True):
+    cur = conn.execute(
+        "UPDATE inbox SET status=?, verdict=?, reason=?, decided_by=?, decided_at=? "
+        "WHERE id=? AND status=?",
+        (to_status, verdict, reason, decided_by, now(), msg_id, from_status),
+    )
+    if commit:
+        conn.commit()
+    if cur.rowcount != 1:
+        row = get_message(conn, msg_id)
+        state = row["status"] if row else "missing"
+        raise ValueError(f"message #{msg_id} is {state}, expected {from_status}")
+
+
+def release(conn, msg_id, decided_by):
+    """Approve a held message: it becomes 'pending', so the postmaster wakes the recipient."""
+    _decide(conn, msg_id, "held", "pending", "release", None, decided_by)
+
+
+def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce=True,
+               commit=True, bounce_limit=None):
+    """Reject a held message into quarantine and (by default) bounce it to the
+    sender with the reason and an optional suggested recipient. Returns the
+    bounce message id, or None."""
+    if reason not in QUARANTINE_REASONS:
+        raise ValueError(f"reason must be one of {QUARANTINE_REASONS}, got {reason!r}")
+    _decide(conn, msg_id, "held", "quarantined", "quarantine", reason, decided_by,
+            commit=commit)
+    if note:
+        conn.execute("UPDATE inbox SET note=? WHERE id=?", (note, msg_id))
+        if commit:
+            conn.commit()
+    if not bounce:
+        return None
+    m = get_message(conn, msg_id)
+    body = json.dumps({
+        "kind": "bounce", "msg_id": msg_id, "to": m["recipient"], "reason": reason,
+        "note": note, "suggest": suggest, "decided_by": decided_by,
+    })
+    held = bounce_limit is not None and count_loop(
+        conn, m["session_id"], [("~bounce", "rookery", m["sender"], bounce_limit)])
+    bid = send(conn, "rookery", m["sender"], body, topic=m["topic"],
+               session_id=m["session_id"], hold=True if held else None, commit=False)
+    if held:                                  # FR-039: a bounce loop is held, not delivered
+        conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
+                     ("Held: too many bounces to this agent with no human prompt in between.", bid))
+    if commit:
+        conn.commit()
+    return bid
+
+
+def unquarantine(conn, msg_id, decided_by):
+    """Overrule a quarantine (the screener was wrong): deliver it after all.
+    The original reason is kept on the row next to verdict='unquarantine' —
+    that pair is a correction label."""
+    cur = conn.execute(
+        "UPDATE inbox SET status='pending', verdict='unquarantine', decided_by=?, decided_at=? "
+        "WHERE id=? AND status='quarantined'",
+        (decided_by, now(), msg_id),
+    )
+    conn.commit()
+    if cur.rowcount != 1:
+        raise ValueError(f"message #{msg_id} is not quarantined")
+
+
+def list_quarantined(conn, reason=None):
+    if reason:
+        return conn.execute(
+            "SELECT * FROM inbox WHERE status='quarantined' AND reason=? ORDER BY id", (reason,)
+        ).fetchall()
+    return conn.execute("SELECT * FROM inbox WHERE status='quarantined' ORDER BY id").fetchall()
+
+
+def screening_labels(conn):
+    """Every screened message with its decision — the training/eval set for the
+    screener (release = positive, quarantine = negative, unquarantine = the
+    screener's false positive)."""
+    return conn.execute(
+        "SELECT id, sender, recipient, topic, body, verdict, reason, decided_by, decided_at "
+        "FROM inbox WHERE verdict IS NOT NULL ORDER BY decided_at, id"
+    ).fetchall()
 
 
 # --- credentials (the CIBA phone-home) -------------------------------------

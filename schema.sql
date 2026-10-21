@@ -18,13 +18,19 @@ CREATE TABLE IF NOT EXISTS inbox (
   recipient    TEXT NOT NULL,
   body         TEXT NOT NULL,
   topic        TEXT,
-  status       TEXT NOT NULL DEFAULT 'pending',  -- pending -> inflight -> done | dlq
+  status       TEXT NOT NULL DEFAULT 'pending',  -- [held ->] pending -> inflight -> done | dlq ; held -> quarantined
   attempts     INTEGER NOT NULL DEFAULT 0,       -- relay forward attempts (for DLQ)
   note         TEXT,                             -- dead-letter reason, etc.
   claimed_at   INTEGER,                          -- when a node picked it up (for stale requeue)
   delivered    INTEGER NOT NULL DEFAULT 0,       -- 1 once status=done (kept for transcript queries)
   created_at   INTEGER NOT NULL,
-  delivered_at INTEGER
+  delivered_at INTEGER,
+  -- comms screening (held mail). Every decision is kept: quarantined rows are
+  -- labelled examples for training the screener, never deleted.
+  verdict      TEXT,                             -- release | quarantine | unquarantine
+  reason       TEXT,                             -- one of rookery.QUARANTINE_REASONS
+  decided_by   TEXT,                             -- screener id (human, classifier, monitor)
+  decided_at   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_pending ON inbox(recipient, status);
 

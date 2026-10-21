@@ -1,0 +1,11 @@
+I am pausing here and handing the review over.
+
+```rookery
+{
+  "to": "law-counsel",
+  "task": "TASK-12",
+  "kind": "handoff",
+  "say": "Handing over the lease review. Clauses 1-3 are done.",
+  "status": "in-progress"
+}
+```

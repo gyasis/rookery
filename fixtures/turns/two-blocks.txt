@@ -1,0 +1,23 @@
+First draft of my message.
+
+```rookery
+{
+  "to": "law-counsel",
+  "task": "TASK-12",
+  "kind": "ask",
+  "say": "FIRST-BLOCK: ask about clause 4.",
+  "status": "in-progress"
+}
+```
+
+On reflection I changed the question.
+
+```rookery
+{
+  "to": "law-counsel",
+  "task": "TASK-12",
+  "kind": "ask",
+  "say": "SECOND-BLOCK: ask about clause 9 instead.",
+  "status": "in-progress"
+}
+```

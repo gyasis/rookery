@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Test double for herdr (T035). Appends json.dumps(sys.argv[1:]) as one line to the file named by env
+HERDR_RECORD, then exits 0. It does nothing else and never talks to a real herdr."""
+import json
+import os
+import sys
+
+with open(os.environ["HERDR_RECORD"], "a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\n")
