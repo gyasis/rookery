@@ -27,13 +27,17 @@ rookery init [--harness claude|codex|pi|omp] [--project NAME] [--dir PATH] [--js
 - `claude`: upserts the section in `CLAUDE.md` and merges three hooks and a `permissions.allow` list into
   `.claude/settings.json`. The list holds 10 rules for the `rookery` mail commands, `herdr pane read` and
   `herdr agent` control. It holds no `send-keys` or `send-text` rule. It only pre-approves these commands. It blocks nothing else.
-- `codex`, `pi`, `omp`: upserts the section in `AGENTS.md` only.
+- `codex`: upserts the section in `AGENTS.md` only.
+- `pi`, `omp`: upserts the section in `AGENTS.md` and installs the extension `rookery_pi_extension.ts` as
+  `.pi/extensions/rookery.ts` (pi) or `.omp/extensions/rookery.ts` (omp), with the project name baked in. The
+  extension calls the three `rookery hook` commands on `session_start`, `before_agent_start` and `agent_end`.
+  `--json` adds `"extension": {"path": "...", "action": "created|replaced|unchanged"}`.
 - `--json` output:
   `{"ok": true, "context_file": {"path": "...", "action": "created|inserted|replaced|unchanged"},
   "settings": {"path": "...", "added": ["Stop"], "updated": [], "unchanged": ["SessionStart"],
   "permissions": {"added": ["Bash(rookery inbox:*)"], "unchanged": [], "skipped": []}},
   "project": "..."}`
-- `settings` is `null` for harnesses with no hook settings file (`codex`, `pi`, `omp`). Those agents get
+- `settings` is `null` for harnesses with no hook settings file (`codex`, `pi`, `omp`). `codex` agents get
   mail through `rookery turn` or the postmaster push.
 - `permissions.added` lists the rules init appended to `allow`. `unchanged` lists the rules already in
   `allow`. `skipped` lists the rules init left out because they are in `deny` or `ask`. Init keeps every

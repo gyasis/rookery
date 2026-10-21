@@ -1,19 +1,19 @@
 # skills/
 
-Agent-facing skills shipped with Rookery. A skill teaches **any** agent session the
-mail discipline before it ever joins a mesh — distinct from a **node briefing**
-(`docs/NODE_BRIEFING.md`), which tells one specific node its name, its siblings, and
-its mailroom at runtime.
+Agent-facing skills that ship with Rookery. A skill teaches any agent session how to
+use Rookery mail. It differs from the project section, which tells one project's
+agents who they are.
 
-| | Skill (`skills/rookery/SKILL.md`) | Node briefing (`docs/NODE_BRIEFING.md`) |
+| | Skill (`skills/rookery/SKILL.md`) | Project section + session-start hook (0.7) |
 |---|---|---|
-| Scope | any session, before joining | one node, at runtime |
-| Carries | the discipline, the protocol, the commands | identity, siblings, mailroom URL + token |
-| Delivered | installed once into the harness | system prompt / first message / task body |
-| Survives restart | yes (it is on disk) | no — re-send with `rookery herdr rebrief` |
+| Scope | any session, loaded on demand | one project, every session |
+| Carries | how to read mail, send a block, never poll, the loop breaker | the same rules, plus your identity (`rookery init` writes `rookery_section.md` into CLAUDE.md or AGENTS.md) |
+| Delivered | installed once into the harness | project file, and the hook at session start |
+| Survives restart | yes (it is on disk) | yes (it is on disk) |
 
-You want both. The skill stops an agent busy-waiting or re-processing stale mail; the
-briefing stops it forgetting which node it is.
+In 0.7 the project section and the session-start hook take the place of the old node briefing (`docs/NODE_BRIEFING.md`). The briefing now applies only to the legacy node mesh.
+
+The skill and the section say the same thing. Install the skill so an agent knows Rookery before it joins a project.
 
 ## Install
 
@@ -22,9 +22,8 @@ mkdir -p ~/.claude/skills/rookery
 cp skills/rookery/SKILL.md ~/.claude/skills/rookery/SKILL.md
 ```
 
-Skills must be **directory-form** — `~/.claude/skills/<name>/SKILL.md`. A flat
-`~/.claude/skills/<name>.md` is silently ignored by the loader. Restart the agent
-afterwards; the skills directory is read at startup only.
+Use the directory form: `~/.claude/skills/<name>/SKILL.md`. The loader ignores a flat
+`~/.claude/skills/<name>.md`. Restart the agent afterwards. The agent reads the skills
+directory only at startup.
 
-For other harnesses, paste the file into whatever global-instructions mechanism they
-provide.
+For other harnesses, paste the file into their global-instructions setting.

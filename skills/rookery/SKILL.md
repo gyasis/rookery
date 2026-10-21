@@ -1,156 +1,55 @@
 ---
 name: rookery
-description: "Operate as a node in a Rookery agent mesh — durable async mail between coding agents (SQLite mailroom, Ed25519 identity, NEEDCRED credential phone-home). Use when the user mentions Rookery, a mailroom, a mesh of agents, mailctl/send_mail/read_mail, MAILTO:/NEEDCRED:/ACK: directives, or asks you to coordinate with another agent by mail. Also covers the herdr console plugin. Do NOT use merely because a task could involve multiple agents or background work."
+description: "How to read and send mail in a Rookery 0.7 session. Use when a line starts with `[rookery] new mail for`, or when the user mentions Rookery, a Rookery session, or handing work to another agent in the session. Do NOT use merely because a task could involve multiple agents or background work."
 ---
 
-# Rookery
+# Rookery (0.7)
 
-Rookery is **durable, asynchronous mail checked in bursts** — like email, not a phone
-call. Messages persist in a SQLite mailroom until the recipient reads them; nothing is
-lost no matter when that happens. You do your own work, drain your inbox at natural
-points, handle the batch, reply, and go back to work.
+This skill is the one source of Rookery instructions for agents. Rookery gives agents durable mail. The project section in CLAUDE.md or AGENTS.md has the same rules.
 
-**Latency is expected and fine.** Do not reach for instant-delivery machinery.
+## When this applies
 
-## The mail discipline — this is what makes it work
+Run `rookery identity show`. It prints who you are.
 
-Follow all five. Breaking 1 or 3 is what actually goes wrong in practice.
+If it prints no session, Rookery mail is not on for you. Do nothing with Rookery unless the user asks.
 
-1. **Send, then STOP.** After sending, do not loop on inbox, and **never** chain
-   `sleep` + inbox. The host blocks repeated identical calls (circuit breaker). Replies
-   are durable — you cannot lose one by not waiting.
-2. **If you expect a reply, schedule a *bounded* check.** Use `/loop` or
-   `ScheduleWakeup` — e.g. every 4 min for 20 min, then stop. That is a scheduled wake
-   (idle and $0 between checks), not a poll loop.
-3. **Track the highest message id you have handled; act only on `id > last`.** Inbox
-   is a **non-destructive read** — old messages re-surface every time. Ignore anything
-   `<=` your cursor or you will redo work.
-4. **Check your inbox at the START of each turn or wake**, before anything else.
-5. **Reply by name** to the sender when you finish work they need.
+Take your name from Rookery (`identity show` or the session start). Never guess a name.
 
-## Knowing who you are
+## Read mail
 
-You need three things: **your node name**, **your siblings' names**, and the
-**mailroom location**. These arrive in your briefing (system prompt, first message, or
-task body for a headless node).
+1. Run `rookery inbox`. It changes nothing.
+2. Act on the mail.
+3. Run the command on the last line of the output: `rookery ack ID ...`.
 
-**If you do not know your node name, stop and ask — do not guess.** A restart wipes
-your briefing while your mail survives, so a confused node reports an empty inbox it
-cannot actually read and may mistake another agent for its peer. That exact failure
-has happened. Recovery: `rookery herdr rebrief <node>`, or ask the human.
+Run `rookery peek` to look at your mail and change nothing.
 
-Inside a herdr pane, `HERDR_PANE_ID` gives your own pane address, and pane names are
-bound to node identities — identity survives a restart of whatever runs inside the pane.
+## Send mail
 
-## Commands
+End your FINAL message of the turn with one fenced block. The info string is `rookery`. The block holds one JSON object. Put nothing after it.
 
-Two paths. Use the local one when you share a box with the mailroom.
+- No block means Rookery sends no mail.
+- Do not send a block only to say that you read mail. Run `rookery ack` instead.
+- You must set these fields: `to`, `task`, `kind` (`ask`, `answer`, `decline`, `handoff`, `status`, `recruit`), `say`, `status` (`done` or `in-progress`).
+- Optional fields: `read` (a list of file paths in the Rookery root) and `thread`.
+- Put long text in a file under the Rookery root. List its path in `read`.
+- Put the task ID in the path of each file you write, and a `task:` line inside it.
 
-**Local DB** (no `--url` needed):
+On a long task, end each turn with `kind` `handoff` and `status` `in-progress`. This updates HANDOFF.md and sends no mail. When you finish the task, use `status` `done`. Rookery then sends the hand-off mail.
 
-```bash
-python3 send_mail.py --to <node> --from <me> --body "<text>"
-python3 read_mail.py --node <me>              # non-destructive; --since <id> to filter
-python3 read_mail.py --node <me> --ack        # mark handled
-python3 read_mail.py --node <me> --json       # machine-readable
-```
+## Never poll
 
-**Remote mailroom over HTTP:**
+Do not loop. Do not sleep. Do not schedule inbox checks.
 
-```bash
-python3 mailctl.py send  --url <URL> --token <TOKEN> --to <node> --from <me> --body "<text>"
-python3 mailctl.py inbox --url <URL> --token <TOKEN> --node <me>
-```
+The postmaster pushes a line that starts with `[rookery] new mail for` into an idle agent when mail needs action. When you see it, read your mail as above.
 
-`read_mail.py` exists because `mailctl inbox` requires `--url` — a node on a local DB
-had no supported way to read its own mail, and the first agent briefed against this
-repo had to write one itself.
+Mail of kind `status`, and most mail of kind `answer`, waits for your next turn. Nothing is lost.
 
-## Wire protocol — directives inside a message body
+## Loop breaker
 
-| Line | Meaning |
-|---|---|
-| `MAILTO:<node>:<text>` | send mail to another node |
-| `NEEDCRED:<resource>` | phone home for a credential, then **pause** until approved |
-| `ACK: …` | acknowledgement — never auto-replied to (loop prevention) |
+Rookery stops agent-to-agent loops. The limits are 10 mails for each task and pair, and 30 for each pair. A human prompt resets them.
 
-The postmaster also watches for **`@<node>`** mentions in any message and notifies that
-node ("they're talking about you"), even when it is not the recipient.
+If a block comes back `loop-held`, stop. Wait for the human.
 
-`NEEDCRED` is how you get a secret without one ever entering a prompt: you pause, a
-human approves, and you receive a JIT token **pointer** (`env://VAR` or
-`keychain://service/account`) — resolve it at use time via `rookery.resolve_secret()`.
-Never ask for a raw secret in mail.
+## Legacy mesh (pre-0.7)
 
-## The rule that governs everything: who is driving
-
-| Direction | Mechanism |
-|---|---|
-| Human → agent | pane injection (a human typing, or `rookery herdr focus`) |
-| **Agent → agent** | **mail** — regardless of distance |
-| Agent → agent (observation) | `herdr agent read <node>` — read-only, safe |
-
-**This is not a distance rule.** Two agents in two panes on one laptop still use mail.
-Injection is lossy both ways (no structured payload, no return value), has no
-backpressure, dies with the pane, and carries no identity.
-
-**Never type into another agent's pane to send it information.** If you need a peer to
-know something, mail it. If you need to *see* what a peer is doing, `herdr agent read`.
-
-## Pacing: you cannot both refuse to poll and pace yourself
-
-The discipline forbids looping and sleeping — so you have **no timer**. An instruction
-like "narrate 3–6 times as its state changes" is impossible to follow, and the correct
-response is to say so rather than to fake it by looping.
-
-Something with a clock — the human, or the postmaster — must be the scheduler. When
-you are a watcher, expect: *wake → do exactly one pass → STOP*. Keep a running note of
-what you have already covered so passes do not repeat.
-
-## herdr console (optional plugin)
-
-When herdr is present, `rookery herdr …` gives you a console over the mesh:
-
-| Command | Purpose |
-|---|---|
-| `status` | panes, herdr state, node, mesh status, pending mail; lists every `NEEDCRED` with its pane and the exact approve command |
-| `bind [--sync-status]` | enroll **named** panes as mesh nodes (`herdr agent rename <pane> <node>` first) |
-| `focus <node>` | jump the human to that node's pane |
-| `rebrief <node>` | re-send a briefing after a restart |
-| `start`, `template`, `notify` | start an agent in a pane · briefing template · fire a notification |
-
-`ROOKERY_HERDR=auto` (default) requires both the herdr binary and `HERDR_ENV=1`. Use
-`force` only for a mesh process that legitimately runs outside a pane (launchd,
-systemd, ssh).
-
-**Known trap:** `herdr agent prompt` fills the input box and returns rc=0 **without
-submitting**. Always follow with `herdr agent send-keys <target> enter`. A watcher that
-acks mail on the strength of that rc=0 silently loses the message.
-
-## Rules for you
-
-- **Verify by running, not by reading.** The worst failures here report success — a
-  prompt that never submitted, a file truncated mid-function. If you claim something
-  works, have run it and looked at the artifact.
-- **Never report readiness as a result.** "The mailroom is up and the node is briefed"
-  is not "the exercise produced a working artifact." Show the artifact.
-- **Do not modify the rookery checkout** when asked to write a script — put it outside
-  the repo (e.g. `~/.rookery/`) unless told otherwise.
-- **Open the mailroom DB read-only** for anything analytical:
-  `sqlite3.connect("file:<path>?mode=ro", uri=True)`. A live mailroom is serving from
-  it.
-- **Read `schema.sql` rather than guessing** table or column names.
-- **One agent per working tree.** Two sessions in one checkout on one branch will
-  collide; use a git worktree.
-- **Core stays stdlib-only.** `cryptography` is needed only for the TLS / signed-card /
-  hardened-policy tier, and herdr is an optional plugin — never add a dependency from
-  core to either.
-
-## Reference
-
-- `docs/NODE_BRIEFING.md` — the briefing block to hand each agent, with a filled
-  `architect ↔ triage` example and an MCP variant
-- `docs/QUICKSTART.md` — same machine · same network · internet
-- `docs/COOKBOOK.md` — 22 recipes
-- `docs/HERDR_INTEGRATION.md` — the console-over-the-mesh design
-- `schema.sql` — the real column names
+Use this only when there is NO Rookery session and the user works with the old node mesh, `rk` or `mailctl`. The old mesh has a different design. See `docs/NODE_BRIEFING.md`. The old commands are `mailctl.py`, `send_mail.py` and `read_mail.py`. Do not use old mesh habits in a 0.7 session.
