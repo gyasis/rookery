@@ -83,7 +83,7 @@ session-scoped identities (constitution IX).
 ## D6. Where the database and the workspace are (revised)
 
 - **Database**: `ROOKERY_DB` when set, else `~/Documents/code/rookery/rookery.db`. This is the same
-  default as `rk` (`~/.local/bin/rk:6`). The `rookery.py` default ("next to the module") is wrong inside
+  default as `rk` (retired on 2026-10-21; use `rookery`) (`~/.local/bin/rk:6`). The `rookery.py` default ("next to the module") is wrong inside
   the zipapp, so the new code never uses it.
 - **Workspace**: `$ROOKERY_ROOT/agents/<session>/<name>/` when `ROOKERY_ROOT` exists (phase 2 sets it),
   else `~/.rookery/projects/<project>/agents/<session>/<name>/`. Phase 1 creates only `runs/<TASK-ID>/`,
@@ -240,7 +240,7 @@ session-scoped identities (constitution IX).
   `quarantine()` sends its bounce to `m["sender"]`, which is then the right agent ID (`rookery.py:249`).
 - **ID format**: agent `ag-` + 10 hex chars, session `rs-` + 8 hex chars, from `secrets.token_hex`.
   Insert checks uniqueness. Never reused (FR-025, FR-032).
-- **Legacy**: rows that `rk`, MCP and `send_mail.py` write keep plain names and belong to `legacy`.
+- **Legacy**: rows that `rk` (retired on 2026-10-21; use `rookery`), MCP and `send_mail.py` write keep plain names and belong to `legacy`.
 - **Alternatives considered**: Names in `recipient` plus a session filter in every reader. Rejected:
   it changes `fetch_undelivered`, `has_mail`, `claim` and `node_runner`, and a missed reader leaks mail
   across sessions.

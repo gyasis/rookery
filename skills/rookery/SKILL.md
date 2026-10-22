@@ -34,6 +34,8 @@ End your FINAL message of the turn with one fenced block. The info string is `ro
 - Put long text in a file under the Rookery root. List its path in `read`.
 - Put the task ID in the path of each file you write, and a `task:` line inside it.
 
+To send one mail now, outside the end of a turn, run `rookery send TO "SAY" --task TASK --kind KIND`. It goes through the same checks as a block. Rookery takes the sender from your identity. There is no `--as`. Exit 0 means sent. Exit 1 means not sent, and the reason is on stderr.
+
 On a long task, end each turn with `kind` `handoff` and `status` `in-progress`. This updates HANDOFF.md and sends no mail. When you finish the task, use `status` `done`. Rookery then sends the hand-off mail.
 
 ## Never poll
@@ -52,4 +54,4 @@ If a block comes back `loop-held`, stop. Wait for the human.
 
 ## Legacy mesh (pre-0.7)
 
-Use this only when there is NO Rookery session and the user works with the old node mesh, `rk` or `mailctl`. The old mesh has a different design. See `docs/NODE_BRIEFING.md`. The old commands are `mailctl.py`, `send_mail.py` and `read_mail.py`. Do not use old mesh habits in a 0.7 session.
+Use this only when there is NO Rookery session and the user works with the old node mesh or `mailctl`. The old mesh has a different design. See `docs/NODE_BRIEFING.md`. The old commands are `mailctl.py`, `send_mail.py` and `read_mail.py`. Do not use old mesh habits in a 0.7 session.

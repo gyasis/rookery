@@ -3550,7 +3550,7 @@
             "task_id": "T049",
             "authored_id": "T049",
             "agent_role": "Developer",
-            "instruction": "T049 Prove the migration on a COPY of the live database (quickstart \u00a72). Copy `~/Documents/code/rookery/rookery.db` to `/tmp/rookery-copy.db`. Run `ROOKERY_DB=/tmp/rookery-copy.db python3 test_sessions_migration.py`. Then run `rk peek --as <old node>` on the copy. Put the output in the PR.",
+            "instruction": "T049 Prove the migration on a COPY of the live database (quickstart \u00a72). Copy `~/Documents/code/rookery/rookery.db` to `/tmp/rookery-copy.db`. Run `ROOKERY_DB=/tmp/rookery-copy.db python3 test_sessions_migration.py`. Then run `rk peek --as <old node>` (retired on 2026-10-21; use `rookery`) on the copy. Put the output in the PR.",
             "file_locks": [
               "tmp/rookery-copy.db",
               "~/Documents/code/rookery/rookery.db",
@@ -3618,7 +3618,7 @@
               "can_test_now": true,
               "test_hint": "integration-post-deps"
             },
-            "completion_handshake": "Upon success, update tasks.md line containing 'T049 Prove the migration on a COPY of the live database (quickstart \u00a72). Copy `~/Documents/code/rookery/rookery.db` to `/tmp/rookery-copy.db`. Run `ROOKERY_DB=/tmp/rookery-copy.db python3 test_sessions_migration.py`. Then run `rk peek --as <old node>` on the copy. Put the output in the PR.' to [x]",
+            "completion_handshake": "Upon success, update tasks.md line containing 'T049 Prove the migration on a COPY of the live database (quickstart \u00a72). Copy `~/Documents/code/rookery/rookery.db` to `/tmp/rookery-copy.db`. Run `ROOKERY_DB=/tmp/rookery-copy.db python3 test_sessions_migration.py`. Then run `rk peek --as <old node>` (retired on 2026-10-21; use `rookery`) on the copy. Put the output in the PR.' to [x]",
             "dependencies": [
               "T058",
               "T008",

@@ -384,7 +384,7 @@ Stop, it gets one push. Without a session, every hook gives 0 bytes.
 ## Phase 8: Polish and cross-cutting concerns
 
 - [x] T048 Add `turn_block.py`, `rookery_identity.py`, `cli_init.py`, `cli_hook.py` and `cli_rookery_session.py` to `_PY_MODULES` in `bootstrap.py`. Add `rookery_section.md` and `rookery_config.default.json` to `_DATA_FILES` (D14). Run `python3 bootstrap.py`. Then run `rookery init --help` and `rookery hook stop --help` from a folder outside the repo.
-- [x] T049 Prove the migration on a COPY of the live database (quickstart §2). Copy `~/Documents/code/rookery/rookery.db` to `/tmp/rookery-copy.db`. Run `ROOKERY_DB=/tmp/rookery-copy.db python3 test_sessions_migration.py`. Then run `rk peek --as <old node>` on the copy. Put the output in the PR.
+- [x] T049 Prove the migration on a COPY of the live database (quickstart §2). Copy `~/Documents/code/rookery/rookery.db` to `/tmp/rookery-copy.db`. Run `ROOKERY_DB=/tmp/rookery-copy.db python3 test_sessions_migration.py`. Then run `rk peek --as <old node>` (retired on 2026-10-21; use `rookery`) on the copy. Put the output in the PR.
 - [x] T050 [P] Add a timing case to `test_hooks.py`. With 10,000 inbox rows, each hook must finish in less than 1 s (the performance goal of the plan).
 - [x] T051 [P] Write `CHANGELOG.md` with a 0.7.0 entry for this phase.
 - [x] T052 [P] Add a short section "rookery init and sessions" to `README.md`, with the commands of quickstart §3.
@@ -480,5 +480,5 @@ Task: "US3: test_init.py and rookery_section.md (T028, T029)"
 
 - `[P]` tasks use different files and have no open dependency.
 - Commit after each task or each checkpoint.
-- Do not change `rk` (FR-031).
+- Do not change `rk` (retired on 2026-10-21; use `rookery`) (FR-031).
 - Do not add herdr or tmux code. Those names live only in `rookery_config.default.json` (constitution IX).

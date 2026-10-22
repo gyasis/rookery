@@ -60,7 +60,7 @@ session binding has `session_id` = its own session.
 | `session_id` | the sender's session (FR-034); bounces inherit it |
 | `status`, `verdict`, `reason`, `decided_by`, `note` | from `send()` and `quarantine()` |
 
-Rows that `rk`, MCP or `send_mail.py` write keep names and get `session_id='legacy'`.
+Rows that `rk` (retired on 2026-10-21; use `rookery`), MCP or `send_mail.py` write keep names and get `session_id='legacy'`.
 
 ## Rookery block (FR-002 to FR-004, RQ-1.2, RQ-1.3)
 

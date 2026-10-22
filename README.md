@@ -329,6 +329,8 @@ Without `--nodes`, it runs only the outbox scan and the idle wake.
 
 Note: do not run `rookery turn` for a turn in a Claude Code session that has the Rookery hooks installed. The Stop hook already sends the block of that turn, so `rookery turn` sends it a second time. Use `rookery turn` for agents that have no hooks, such as Codex.
 
+To send one mail now, without a turn, run `rookery send TO "SAY" --task TASK --kind KIND`. It goes through the same checks as a block. The sender is always your identity: there is no `--as`.
+
 ## Federation — multiple mailrooms (`node@mailroom`)
 
 Run several independent mailrooms (one per machine / trust domain) and relay
