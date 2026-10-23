@@ -88,6 +88,8 @@ def cmd_serve(args):
     import security
     from http.server import ThreadingHTTPServer
 
+    mailroom_server.check_start(args)  # same start rules as mailroom_server.main(); exits 2 on refusal
+
     # Seed module-level globals mailroom_server expects before we start it.
     mailroom_server.PUBLIC_URL = args.public_url or f"http://{args.host}:{args.port}"
     mailroom_server.DEFAULT_NODE = "mailroom"

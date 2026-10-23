@@ -60,9 +60,12 @@ class Start(unittest.TestCase):
         env.update(extra)
         return env
 
+    def command(self):
+        return [sys.executable, os.path.join(HERE, "mailroom_server.py"), "--port", str(self.port)]
+
     def launch(self, *args, env=None):
         p = subprocess.Popen(
-            [sys.executable, os.path.join(HERE, "mailroom_server.py"), "--port", str(self.port), *args],
+            [*self.command(), *args],
             env=env or self.env(), cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.procs.append(p)
         return p
@@ -199,6 +202,13 @@ class Start(unittest.TestCase):
         self.assertNotIn(code, (401, 500))
         code, _ = self.call("POST", "/approve", {}, token=TOKEN)
         self.assertNotIn(code, (401, 500))
+
+
+class ServeStart(Start):
+    """T028a: `rookery serve` follows the same start rules -- every case above, run through the CLI."""
+
+    def command(self):
+        return [sys.executable, os.path.join(HERE, "rookery_cli.py"), "serve", "--port", str(self.port)]
 
 
 if __name__ == "__main__":
