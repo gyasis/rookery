@@ -87,7 +87,7 @@ does not change.
 | `send(to, body, topic="")` | `submit(path="mcp-stdio" or "mcp-http")`. Returns the outcome text. A refusal returns the reason |
 | `check_inbox()` | `unread(with_body=True)` for the caller. Changes nothing. Ends with `Mark read: ack([<ids>])` |
 | `await_message(timeout=30)` | polls `unread` until mail exists or the time ends. Changes nothing |
-| `ack(ids)` | NEW. `mail_gate.ack`, or `ack_legacy(NODE)` for a reader with no identity. Returns the counts of `ok`, `already` and `skipped` |
+| `ack(ids)` | NEW. `mail_gate.ack`, or `ack_legacy(NODE)` for a reader with no identity. Returns the IDs in `ok`, `already` and `skipped` |
 | `roster()` | no change in code. It lists only registered nodes, because `_register` goes |
 
 - **stdio**: the caller is `principal_from_env` of the server process. With no identity, reads use

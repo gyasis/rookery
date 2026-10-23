@@ -481,5 +481,88 @@ class Ack(GateBase):
         self.assertEqual(TB.unread_summary(self.conn, self.me["agent_id"])["count"], 0)
 
 
+class LoopReset(GateBase):
+    """T041a, FR-037: `rookery loop reset [NAME] [--json]`."""
+
+    def cli(self, *a):
+        import subprocess
+        import sys
+        from test_hooks import CLI
+        return subprocess.run([sys.executable, "-W", "ignore", CLI, *a], env=self.env(),
+                              cwd=self.root, capture_output=True, text=True, timeout=60)
+
+    def hold(self):
+        limit, _ = TB.loop_limits()
+        for _ in range(limit):
+            self.assertEqual(self.submit(path="mcp-stdio", task="t1")["outcome"], "sent")
+        r = self.submit(path="mcp-stdio", task="t1")
+        self.assertEqual(r["outcome"], "loop-held")
+        return r["msg_id"]
+
+    def test_reset_release_then_send(self):
+        held = self.hold()
+        inbox_before = self.cli("inbox", "--json").stdout
+        r = self.cli("loop", "reset")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertRegex(r.stdout, r"^Reset \d+ loop counters for me\.$")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM loop_counts WHERE count>0").fetchone()[0], 0)
+        R.release(self.conn, held, "test")
+        self.assertEqual(R.get_message(self.conn, held)["status"], "pending")
+        self.assertEqual(self.submit(path="mcp-stdio", task="t1")["outcome"], "sent")
+        self.assertEqual(self.cli("inbox", "--json").stdout, inbox_before)   # no bounce
+
+    def test_by_name_and_json(self):
+        self.hold()
+        r = self.cli("loop", "reset", "me", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        o = json.loads(r.stdout)
+        self.assertEqual((o["name"], o["agent_id"], o["session"]),
+                         ("me", self.me["agent_id"], self.alpha["session_id"]))
+        self.assertGreater(o["reset"], 0)
+        self.assertEqual(json.loads(self.cli("loop", "reset", "--json").stdout)["reset"], 0)
+
+    def test_other_session_untouched(self):
+        self.hold()
+        for _ in range(2):
+            self.submit(principal=(self.beta, self.beta_me), to="beta-only", path="mcp-stdio", task="t1")
+        self.cli("loop", "reset")
+        rows = self.conn.execute(
+            "SELECT count FROM loop_counts WHERE session_id=? AND count>0",
+            (self.beta["session_id"],)).fetchall()
+        self.assertTrue(rows)
+
+    def test_unknown_name_exits_2(self):
+        r = self.cli("loop", "reset", "nobody")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(self.cli("loop", "reset", "nobody").stdout, "")
+
+    def test_one_gate_log_record(self):
+        self.hold()
+        self.cli("loop", "reset")
+        recs = [x for x in self.gate_log() if x.get("outcome") == "loop-reset"]
+        self.assertEqual(len(recs), 1)
+        self.assertEqual((recs[0]["name"], recs[0]["session"]),
+                         ("me", self.alpha["session_id"]))
+
+    def test_text_passes_ste_lint(self):
+        import shutil
+        import subprocess
+        import tempfile
+        if not shutil.which("ste-lint"):
+            self.skipTest("ste-lint is not on PATH")
+        self.hold()
+        out = self.cli("loop", "reset").stdout
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
+            fh.write(out)
+        try:
+            r = subprocess.run(["ste-lint", fh.name, "--max-score", "2.0", "--glossary",
+                                "ste-glossary.txt"], capture_output=True, text=True,
+                               cwd=os.path.dirname(os.path.abspath(__file__)))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        finally:
+            os.unlink(fh.name)
+
+
 if __name__ == "__main__":
     unittest.main()

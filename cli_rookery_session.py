@@ -397,6 +397,40 @@ def cmd_ack(args):
     _run(args, go)
 
 
+# ------------------------------------------------------------ loop reset
+
+
+def cmd_loop_reset(args):
+    """Human command (FR-037): zero the loop counters of the pairs of NAME in the current session."""
+    import rookery_identity as ri
+    import turn_block
+
+    root = _mail_root()
+
+    def go(conn):
+        if args.name:
+            s = _env_session(conn)
+            i = _row(ri.get_identity(conn, args.name, s["session_id"]))
+            if not i:
+                _die(f'No agent "{args.name}" in session {s["name"]}. '
+                     "List them with: rookery identity list")
+        else:
+            s, i, _b = _current_identity(conn, root)
+        cur = conn.execute(
+            "UPDATE loop_counts SET count=0 WHERE session_id=? AND count>0 AND (a=? OR b=?)",
+            (s["session_id"], i["agent_id"], i["agent_id"]))
+        n = cur.rowcount
+        conn.commit()
+        turn_block.log_event(None, "gate", outcome="loop-reset", path="cli",
+                             session=s["session_id"], agent_id=i["agent_id"], name=i["name"],
+                             reset=n)
+        _out(args, {"agent_id": i["agent_id"], "name": i["name"], "session": s["session_id"],
+                    "reset": n},
+             f"Reset {n} loop counters for {i['name']}.")
+
+    _run(args, go)
+
+
 # ---------------------------------------------------------------- parser
 
 
@@ -472,3 +506,11 @@ def add_parser(subparsers):
     p.add_argument("ids", nargs="+", type=int, metavar="ID")
     _json_flag(p)
     p.set_defaults(func=cmd_ack)
+
+    pl = subparsers.add_parser("loop", help="Manage the loop counters.")
+    sl = pl.add_subparsers(dest="loop_cmd", metavar="<action>")
+    sl.required = True
+    p = sl.add_parser("reset", help="Reset the loop counters of an agent in the current session.")
+    p.add_argument("name", nargs="?", metavar="NAME", help="Default: my own name.")
+    _json_flag(p)
+    p.set_defaults(func=cmd_loop_reset)

@@ -64,9 +64,10 @@ if URL:
     def _pending(node):
         return mailctl.call(URL, "/inbox?node=" + node, "GET")["messages"]
 
-    def _consume(ids, node):
-        mailctl.call(URL, "/claim", "POST", {"node": node, "ids": ids})
-        mailctl.call(URL, "/ack", "POST", {"node": node, "ids": ids})
+    def _ack(ids, node, ctx=None):
+        # reads stay read-only (GET /inbox); this is the only call that marks mail read
+        res = mailctl.call(URL, "/ack", "POST", {"node": node, "ids": ids})
+        return {k: res.get(k, []) for k in ("ok", "already", "skipped")}
 
     def _roster():
         card = mailctl.call(URL, "/.well-known/agent-card.json", "GET")
@@ -74,14 +75,34 @@ if URL:
 
 else:
 
-    def _pending(node):
+    def _pending(node, ctx=None):
+        """Unread mail for the caller, with bodies. Reads only (FR-032).
+        stdio: the session identity, else legacy mail to the node name.
+        Shared HTTP: no principal, so mail to the asked node name in any session (`unread_by_name`),
+        the rows the mailroom's /inbox shows for that name. A session filter would hide every
+        session mail from a caller that has no identity."""
         c = R.connect()
-        return [dict(m) for m in R.fetch_undelivered(c, node)]
+        try:
+            if HTTP:
+                return mail_gate.unread_by_name(c, node, with_body=True)
+            who = mail_gate.principal_from_env(c, os.environ, _root())
+            if who is None:
+                return mail_gate.unread_legacy(c, node, with_body=True)
+            return mail_gate.unread(c, who[1], with_body=True)
+        finally:
+            c.close()
 
-    def _consume(ids, node=None):
+    def _ack(ids, node, ctx=None):
         c = R.connect()
-        R.claim(c, ids)
-        R.ack(c, ids)
+        try:
+            if HTTP:
+                return mail_gate.ack_by_name(c, node, ids, from_inflight=False)
+            who = mail_gate.principal_from_env(c, os.environ, _root())
+            if who is None:
+                return mail_gate.ack_legacy(c, node, ids)
+            return mail_gate.ack(c, who[1], ids)
+        finally:
+            c.close()
 
     def _roster():
         c = R.connect()
@@ -112,12 +133,10 @@ def _root():
     return turn_block.gate_root()          # the gate log lives in one place (D15)
 
 
-def _drain(node):
-    """Return + consume new mail addressed to this session's node."""
-    msgs = _pending(node)
-    if msgs:
-        _consume([m["id"] for m in msgs], node)
-    return [{"from": m["sender"], "body": m["body"]} for m in msgs]
+def _read(node):
+    """Unread mail for this session's node. Never marks anything read (FR-032)."""
+    return [{"id": m["id"], "from": m.get("sender_name") or m["sender"], "body": m["body"]}
+            for m in _pending(node)]
 
 
 mcp = FastMCP("rookery")
@@ -150,25 +169,39 @@ def send(to: str, body: str, ctx: Context, topic: str = "") -> str:
 
 
 @mcp.tool()
-def check_inbox(ctx: Context) -> list:
-    """Return (and consume) any new messages addressed to this session."""
-    return _drain(_node(ctx))
+def check_inbox(ctx: Context) -> str:
+    """List the unread messages addressed to this session. Changes nothing: the mail stays
+    unread until you call ack(ids)."""
+    msgs = _read(_node(ctx))
+    if not msgs:
+        return "No unread mail."
+    lines = [f"#{m['id']} from {m['from']}: {m['body']}" for m in msgs]
+    lines.append("Mark read: ack([%s])" % ", ".join(str(m["id"]) for m in msgs))
+    return "\n".join(lines)
 
 
 @mcp.tool()
 async def await_message(ctx: Context, timeout: float = 30.0) -> list:
-    """Block up to `timeout` seconds for new mail to this session; return it
-    (consumed). Empty list on timeout. Use after send() to get a reply."""
+    """Block up to `timeout` seconds for unread mail to this session; return it (still unread:
+    call ack(ids) to mark it read). Empty list on timeout. Use after send() to get a reply."""
     # async + asyncio.sleep: a sync sleep here would stall the shared server's
     # event loop, freezing every OTHER session's calls for up to `timeout`.
     node = _node(ctx)
     deadline = time.time() + timeout
     while time.time() < deadline:
-        got = _drain(node)
+        got = _read(node)
         if got:
             return got
         await asyncio.sleep(1.0)
     return []
+
+
+@mcp.tool()
+def ack(ids: list[int], ctx: Context) -> dict:
+    """Mark mail read, by the ids that check_inbox / await_message showed. Returns the ids that
+    were marked (ok), were already read (already), or are not yours to ack (skipped)."""
+    res = _ack(list(ids), _node(ctx))
+    return {k: list(res.get(k, [])) for k in ("ok", "already", "skipped")}
 
 
 @mcp.tool()
