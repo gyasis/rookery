@@ -319,6 +319,57 @@ def ack_by_name(conn, name, ids, *, from_inflight=True) -> dict:
     return out
 
 
+def _ack_visible(conn, cond, params, ids, from_inflight) -> dict:
+    """Ack the rows of `ids` that `cond` selects (the `unread` row set, any status). One
+    transaction. pending (and inflight, with `from_inflight`) -> done; done and inflight-without-flag
+    -> already; every other id -> skipped."""
+    ids = list(dict.fromkeys(ids))
+    out = {"ok": [], "already": [], "skipped": []}
+    _begin(conn)
+    try:
+        status = {}
+        for k in range(0, len(ids), 500):          # stay under SQLite's variable limit
+            part = ids[k:k + 500]
+            q = ",".join("?" * len(part))
+            for r in conn.execute(
+                    "SELECT m.id, m.status FROM inbox m WHERE (" + cond + ") AND m.id IN (" + q + ")",
+                    [*params, *part]):
+                status[r["id"]] = r["status"]
+        movable = ("pending", "inflight") if from_inflight else ("pending",)
+        for i in ids:
+            st = status.get(i)
+            if st in movable:
+                out["ok"].append(i)
+            elif st in ("inflight", "done"):
+                out["already"].append(i)
+            else:
+                out["skipped"].append(i)
+        t = rookery.now()
+        conn.executemany(
+            "UPDATE inbox SET status='done', delivered=1, delivered_at=? WHERE id=?",
+            [(t, i) for i in out["ok"]])
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return out
+
+
+def ack(conn, identity, ids, *, from_inflight=False) -> dict:
+    """Move to `done` the rows `unread` returns for `identity` (its session's mail to its agent ID,
+    and `legacy` mail to its name or agent ID). inflight counts as already read unless
+    `from_inflight`. Other ids are `skipped`."""
+    sid, aid, name = identity["session_id"], identity["agent_id"], identity["name"]
+    return _ack_visible(
+        conn, "(m.session_id = ? AND m.recipient = ?) OR (m.session_id = ? AND m.recipient IN (?, ?))",
+        (sid, aid, LEGACY, name, aid), ids, from_inflight)
+
+
+def ack_legacy(conn, raw_name, ids) -> dict:
+    """Move to `done` the pending rows `unread_legacy(raw_name)` returns. Other ids are `skipped`."""
+    return _ack_visible(conn, "m.session_id = ? AND m.recipient = ?", (LEGACY, raw_name), ids, False)
+
+
 def claim_by_name(conn, name, ids=None) -> dict:
     """Move the pending rows of `unread_by_name(name)` (only `ids`, when given) to `inflight`."""
     cond, params = _addressed_to(name)

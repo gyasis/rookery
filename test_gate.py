@@ -415,5 +415,71 @@ class PrincipalFromEnv(GateBase):
         self.assertEqual(i["agent_id"], self.beta_me["agent_id"])
 
 
+class Ack(GateBase):
+    """T038: ack acts on exactly the rows `unread` returns for the identity."""
+
+    def put(self, sender, recipient, sid, status="pending"):
+        i = R.send(self.conn, sender, recipient, "b", hold=False, session_id=sid)
+        if status != "pending":
+            self.conn.execute("UPDATE inbox SET status=? WHERE id=?", (status, i))
+            self.conn.commit()
+        return i
+
+    def status(self, i):
+        self.conn.rollback()
+        return self.conn.execute("SELECT status FROM inbox WHERE id=?", (i,)).fetchone()[0]
+
+    def test_ack_marks_only_the_identity_session(self):
+        a = self.alpha["session_id"]
+        mine = self.put(self.swe["agent_id"], self.me["agent_id"], a)
+        other = self.put(self.swe["agent_id"], self.me["agent_id"], self.beta["session_id"])
+        res = G.ack(self.conn, self.me, [mine, other])
+        self.assertEqual(res, {"ok": [mine], "already": [], "skipped": [other]})
+        self.assertEqual((self.status(mine), self.status(other)), ("done", "pending"))
+
+    def test_ack_legacy_row_to_the_readers_name(self):
+        l = self.put("old", "me", "legacy")
+        self.assertEqual(G.ack(self.conn, self.me, [l])["ok"], [l])
+        self.assertEqual(self.status(l), "done")
+
+    def test_ack_inflight_depends_on_flag(self):
+        i = self.put(self.swe["agent_id"], self.me["agent_id"], self.alpha["session_id"], "inflight")
+        self.assertEqual(G.ack(self.conn, self.me, [i]),
+                         {"ok": [], "already": [i], "skipped": []})
+        self.assertEqual(self.status(i), "inflight")
+        self.assertEqual(G.ack(self.conn, self.me, [i], from_inflight=True)["ok"], [i])
+        self.assertEqual(self.status(i), "done")
+
+    def test_ack_done_already_unknown_skipped(self):
+        d = self.put(self.swe["agent_id"], self.me["agent_id"], self.alpha["session_id"], "done")
+        res = G.ack(self.conn, self.me, [d, 99999])
+        self.assertEqual(res, {"ok": [], "already": [d], "skipped": [99999]})
+
+    def test_ack_legacy_only_raw_name_pending_legacy(self):
+        l = self.put("old", "ghost", "legacy")
+        other_name = self.put("old", "someone", "legacy")
+        sess = self.put(self.swe["agent_id"], self.me["agent_id"], self.alpha["session_id"])
+        res = G.ack_legacy(self.conn, "ghost", [l, other_name, sess])
+        self.assertEqual(res, {"ok": [l], "already": [], "skipped": [other_name, sess]})
+        self.assertEqual(G.ack_legacy(self.conn, "ghost", [l])["already"], [l])
+
+    def test_cli_ack_legacy_row_clears_inbox_and_notice(self):
+        import subprocess
+        import sys
+        from test_hooks import CLI
+        l = self.put("old", "me", "legacy")
+        self.assertEqual(TB.unread_summary(self.conn, self.me["agent_id"])["count"], 1)
+
+        def run(*a):
+            return subprocess.run([sys.executable, "-W", "ignore", CLI, *a], env=self.env(),
+                                  cwd=self.root, capture_output=True, text=True, timeout=60)
+        self.assertEqual(json.loads(run("inbox", "--json").stdout)["ids"], [l])
+        r = run("ack", str(l))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("1 marked read.", r.stdout)
+        self.assertEqual(json.loads(run("inbox", "--json").stdout)["ids"], [])
+        self.assertEqual(TB.unread_summary(self.conn, self.me["agent_id"])["count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

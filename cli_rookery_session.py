@@ -367,36 +367,15 @@ def cmd_peek(args):
 
 
 def cmd_ack(args):
-    import rookery
+    import mail_gate
     import turn_block
 
     root = _mail_root()
 
     def go(conn):
         s, i, bindings = _current_identity(conn, root)
-        want = list(dict.fromkeys(args.ids))
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            status = {}
-            for k in range(0, len(want), 500):      # stay under SQLite's variable limit
-                part = want[k:k + 500]
-                q = ",".join("?" * len(part))
-                for r in conn.execute(
-                        f"SELECT id, status FROM inbox WHERE recipient=? AND id IN ({q})",
-                        [i["agent_id"], *part]):
-                    status[r["id"]] = r["status"]
-            ok = [n for n in want if status.get(n) == "pending"]
-            # inflight and done mean read. held, quarantined, dlq and unknown ids are skipped.
-            already = [n for n in want if status.get(n) in ("inflight", "done")]
-            skipped = [n for n in want if n not in status or
-                       status[n] not in ("pending", "inflight", "done")]
-            if ok:
-                rookery.claim(conn, ok, commit=False)     # pending -> inflight
-                rookery.ack(conn, ok, commit=False)       # inflight -> done
-            conn.commit()
-        except BaseException:
-            conn.rollback()
-            raise
+        res = mail_gate.ack(conn, i, args.ids, from_inflight=False)
+        ok, already, skipped = res["ok"], res["already"], res["skipped"]
         if root:
             turn_block.log_event(root, event="inbox-ack", session=s["session_id"],
                                  agent_id=i["agent_id"], name=i["name"],
