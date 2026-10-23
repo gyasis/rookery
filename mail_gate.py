@@ -228,6 +228,43 @@ def system_send(conn, sender, recipient, body, *, topic=None, session_id, root=N
     return msg_id
 
 
+# --- reads (FR-015, FR-016, D11) ------------------------------------------
+def _unread_rows(conn, sql, params, with_body):
+    out = []
+    for r in conn.execute(sql, params).fetchall():
+        row = {"id": r["id"], "sender": r["sender"],
+               "sender_name": r["sender_name"] or r["sender"], "topic": r["topic"],
+               "created_at": r["created_at"], "session_id": r["session_id"]}
+        if with_body:
+            row["body"] = r["body"]
+        out.append(row)
+    return out
+
+
+def unread(conn, identity, *, with_body=False) -> list:
+    """Pending mail of the identity's session to its agent ID, plus pending `legacy` mail to its
+    name or agent ID. Nothing else. The sender shows as an identity name when the stored sender is
+    the agent ID of an identity in the reader's session; otherwise as stored."""
+    sid, aid, name = identity["session_id"], identity["agent_id"], identity["name"]
+    return _unread_rows(
+        conn,
+        "SELECT m.id, m.sender, m.topic, m.created_at, m.session_id, m.body, d.name AS sender_name "
+        "FROM inbox m LEFT JOIN identities d ON d.agent_id = m.sender AND d.session_id = ? "
+        "WHERE m.status='pending' AND ((m.session_id = ? AND m.recipient = ?) "
+        "OR (m.session_id = ? AND m.recipient IN (?, ?))) ORDER BY m.created_at, m.id",
+        (sid, sid, aid, LEGACY, name, aid), with_body)
+
+
+def unread_legacy(conn, raw_name, *, with_body=False) -> list:
+    """Pending `legacy` mail to the raw name only. For a reader with no identity."""
+    return _unread_rows(
+        conn,
+        "SELECT m.id, m.sender, m.topic, m.created_at, m.session_id, m.body, NULL AS sender_name "
+        "FROM inbox m WHERE m.status='pending' AND m.session_id = ? AND m.recipient = ? "
+        "ORDER BY m.created_at, m.id",
+        (LEGACY, raw_name), with_body)
+
+
 def principal_from_env(conn, env, root):
     """(session, identity) for the caller, or None. Only an `open` session whose identity already
     exists counts. Reads only: it never creates an identity (FR-011)."""

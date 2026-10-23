@@ -729,23 +729,16 @@ MAX_FAILED_LISTED = 20   # newest failed blocks one notice pass will list
 
 
 def unread(conn, agent_id) -> list:
-    """Unread mail of agent_id (D7): recipient=agent_id and status='pending', oldest first.
+    """Unread mail of agent_id (D7, D11): `mail_gate.unread` for its identity, so only its own
+    session's mail plus `legacy` mail to its name or agent ID. Oldest first.
     Rows: id, sender (raw), sender_name, topic, created_at, session_id. No body.
-    sender_name: identities.name for an agent ID; the string itself otherwise
-    ("rookery" for a bounce or other system sender, a node name for legacy mail)."""
-    rows = conn.execute(
-        "SELECT i.id, i.sender, i.topic, i.created_at, i.session_id, d.name AS sender_name "
-        "FROM inbox i LEFT JOIN identities d ON d.agent_id = i.sender "
-        "WHERE i.recipient=? AND i.status='pending' ORDER BY i.created_at, i.id",
-        (agent_id,)).fetchall()
-    out = []
-    for r in rows:
-        r = dict(r) if not isinstance(r, dict) else r
-        out.append({"id": r["id"], "sender": r["sender"],
-                    "sender_name": r["sender_name"] or r["sender"],
-                    "topic": r["topic"], "created_at": r["created_at"],
-                    "session_id": r["session_id"]})
-    return out
+    An agent ID with no identity has no session, so it reads nothing."""
+    import mail_gate
+    ident = conn.execute("SELECT agent_id, session_id, name FROM identities WHERE agent_id=?",
+                         (agent_id,)).fetchone()
+    if ident is None:
+        return []
+    return mail_gate.unread(conn, dict(ident))
 
 
 def unread_summary(conn, agent_id) -> dict:
