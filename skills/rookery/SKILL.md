@@ -23,6 +23,8 @@ Take your name from Rookery (`identity show` or the session start). Never guess 
 
 Run `rookery peek` to look at your mail and change nothing.
 
+In an MCP session, the `check_inbox` tool also marks nothing read. Call the `ack` tool with the IDs it lists. This is the same as `rookery ack ID ...`.
+
 ## Send mail
 
 End your FINAL message of the turn with one fenced block. The info string is `rookery`. The block holds one JSON object. Put nothing after it.
@@ -54,4 +56,10 @@ If a block comes back `loop-held`, stop. Wait for the human.
 
 ## Legacy mesh (pre-0.7)
 
-Use this only when there is NO Rookery session and the user works with the old node mesh or `mailctl`. The old mesh has a different design. See `docs/NODE_BRIEFING.md`. The old commands are `mailctl.py`, `send_mail.py` and `read_mail.py`. Do not use old mesh habits in a 0.7 session.
+Use this only when there is NO Rookery session and the user works with the old node mesh or `mailctl`. The old mesh has a different design. See `docs/NODE_BRIEFING.md`. These old commands are legacy. Each has a `rookery` command:
+
+- `send_mail.py` is legacy. Use `rookery send TO "SAY"`.
+- `read_mail.py` is legacy. Use `rookery inbox`, then `rookery ack ID ...`.
+- `mailctl.py` is legacy. Use `rookery send`, `rookery inbox` and `rookery ack`.
+
+Do not use old mesh habits in a 0.7 session.

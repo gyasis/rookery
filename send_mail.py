@@ -54,7 +54,7 @@ def main():
         finally:
             conn.close()
     except sqlite3.OperationalError as exc:
-        print(f"database busy: {exc}. Rookery sent nothing. Run send_mail.py again.", file=sys.stderr)
+        print("database busy. Rookery sent nothing. Run send_mail.py again.", file=sys.stderr)
         return 4
     outcome, reason = res["outcome"], res["reason"]
     if outcome == "sent":
