@@ -52,6 +52,8 @@ _PY_MODULES = [
     "cli_init.py",
     "cli_hook.py",
     "cli_rookery_session.py",
+    # spec 002: every send path goes through the mail gate
+    "mail_gate.py",
 ]
 
 

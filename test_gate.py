@@ -564,5 +564,126 @@ class LoopReset(GateBase):
             os.unlink(fh.name)
 
 
+class TextLint(GateBase):
+    """T046, FR-031: every user-visible text of the feature passes ste-lint. Each text is taken
+    from the code that builds it, so a later wording change is linted too."""
+
+    cli = LoopReset.cli
+    hold = LoopReset.hold
+
+    def _collect(self):
+        import argparse
+        import contextlib
+        import io
+        import json as _json
+        import sqlite3
+        import sys
+        import urllib.error
+        from unittest import mock
+
+        import mailctl
+        import mailroom_server as MS
+        import postmaster as PM
+        import send_mail
+
+        t = {}
+        sid = self.alpha["session_id"]
+        # bounce notes (the gate builds them)
+        _, (_, t["wrong-recipient"], _) = G._find_recipient(
+            self.conn, sid, self.me["agent_id"], "researchr")
+        _, (_, t["wrong-recipient-no-suggest"], _) = G._find_recipient(
+            self.conn, sid, self.me["agent_id"], "zzzzzzzz")
+        _, (_, t["off-team"], _) = G._find_recipient(
+            self.conn, sid, self.me["agent_id"], "beta-only")
+        t["injection-suspect"] = G._INJECTION_NOTE
+        # refusal texts
+        for key, (_code, detail) in MS._SEND_ERRORS.items():
+            t["send-error-" + key] = detail
+        t["bad-ids"] = MS._BAD_IDS
+        try:
+            RI.new_identity(self.conn, sid, "postmaster")
+        except ValueError as exc:
+            t["system-name-identity"] = str(exc)
+        else:
+            self.fail("new_identity accepted a system name")
+        # mailctl error message, built from every /send error body
+        for key in MS._SEND_ERRORS:
+            _status, body = MS._send_error({"outcome": "refused" if key in (
+                "system-name", "bad-input") else key, "reason": key})
+            err = urllib.error.HTTPError("http://x/send", 400, "Bad", {},
+                                         io.BytesIO(_json.dumps(body).encode()))
+            t["mailctl-" + key] = mailctl._http_error_text(err)
+        # mention notice and pane notice, from sample rows
+        cause = {"sender": self.researcher["agent_id"], "recipient": self.swe["agent_id"],
+                 "topic": "TASK-1", "session_id": sid}
+        mid = PM._mention_mail(self.conn, self.me["agent_id"], cause)
+        mid = mid["msg_id"] if isinstance(mid, dict) else mid
+        t["mention"] = _json.loads(R.get_message(self.conn, mid)["body"]).get("say") \
+            if R.get_message(self.conn, mid)["body"].startswith("{") \
+            else R.get_message(self.conn, mid)["body"]
+        rows = [{"sender": self.researcher["agent_id"], "topic": "TASK-1"},
+                {"sender": self.swe["agent_id"], "topic": ""}]
+        t["pane"] = PM._notice(self.conn, self.me, rows)
+        # rookery loop reset
+        self.hold()
+        t["loop-reset"] = self.cli("loop", "reset").stdout
+        t["loop-reset-unknown"] = self.cli("loop", "reset", "nobody").stderr
+        # mailroom start messages and warnings
+        def start(**kw):
+            a = argparse.Namespace(host="127.0.0.1", token=None, allow_public=False,
+                                   allow_no_auth=False)
+            a.__dict__.update(kw)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                    mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("ROOKERY_TOKEN", None)
+                try:
+                    MS.check_start(a)
+                except SystemExit:
+                    pass
+            return out.getvalue() + err.getvalue()
+        t["start-refuse"] = start(host="10.0.0.5")
+        t["start-warn"] = start(host="10.0.0.5", allow_public=True, allow_no_auth=True)
+        # send_mail.py outcome and busy messages
+        def sm(result=None, exc=None, extra=()):
+            out, err = io.StringIO(), io.StringIO()
+            res = result and dict({"reason": None, "warning": None, "msg_id": 7,
+                                   "bounce_id": None}, **result)
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                    mock.patch.object(sys, "argv", ["send_mail.py", "--to", "swe", "--body", "x",
+                                                    *extra]), \
+                    mock.patch.object(G, "submit", side_effect=exc, return_value=res):
+                send_mail.main()
+            return out.getvalue() + err.getvalue()
+        t["send-mail-sent"] = sm({"outcome": "sent"})
+        t["send-mail-busy"] = sm({"outcome": "db-busy"})
+        t["send-mail-locked"] = sm(exc=sqlite3.OperationalError("database is locked"))
+        t["send-mail-failed"] = sm({"outcome": "send-failed", "reason": "disk-error"})
+        t["send-mail-refused"] = sm({"outcome": "refused", "reason": "system-name"})
+        t["send-mail-held"] = sm({"outcome": "loop-held"})
+        return t
+
+    def test_all_user_text_passes_ste_lint(self):
+        import shutil
+        import subprocess
+        import tempfile
+        if not shutil.which("ste-lint"):
+            self.skipTest("ste-lint is not on PATH")
+        texts = self._collect()
+        self.assertGreaterEqual(len(texts), 20)
+        for k, v in texts.items():
+            self.assertTrue(v.strip(), f"empty text: {k}")
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
+            fh.write("\n\n".join(v.strip() for v in texts.values()) + "\n")
+        try:
+            r = subprocess.run(["ste-lint", fh.name, "--max-score", "2.0", "--glossary",
+                                "ste-glossary.txt"], capture_output=True, text=True,
+                               cwd=os.path.dirname(os.path.abspath(__file__)))
+            self.assertEqual(r.returncode, 0, "texts: " + ", ".join(texts) + "\n"
+                             + r.stdout + r.stderr)
+        finally:
+            os.unlink(fh.name)
+
+
 if __name__ == "__main__":
     unittest.main()
