@@ -180,5 +180,94 @@ class A2aMapping(GateHttpBase):
             self.assertEqual(self.rpc("BOOM-ME", method=method)["error"]["code"], -32603)
 
 
+class ReadsByName(GateHttpBase):
+    """T033: /inbox, /claim, /ack by node name; SC-009 read paths change no status."""
+
+    def get(self, path):
+        req = urllib.request.Request(self.url + path,
+                                     headers={"Authorization": f"Bearer {TOKEN}"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read())
+
+    def put(self, recipient, sid, body="b"):
+        import rookery as R
+        return R.send(self.conn, "x", recipient, body, hold=False, session_id=sid)
+
+    def snap(self):
+        with sqlite3.connect(self.db) as c:
+            return c.execute("SELECT id, status, delivered, claimed_at, delivered_at "
+                             "FROM inbox ORDER BY id").fetchall()
+
+    def status(self, i):
+        return {r[0]: r[1] for r in self.snap()}[i]
+
+    def setUp(self):
+        super().setUp()
+        self.sid = self.alpha["session_id"]
+        self.legacy = self.put("N", "legacy")
+        self.sess = self.put("N", self.sid)
+        self.byid = self.put(self.researcher["agent_id"], self.sid)
+        self.other = self.put("M", "legacy")
+
+    def test_old_mailctl_without_node_still_works(self):
+        with sqlite3.connect(self.db) as c:
+            mid = c.execute("INSERT INTO inbox(sender, recipient, body, status, delivered, created_at,"
+                            " session_id) VALUES('x','oldpeer','hi','pending',0,'2026-01-01','legacy')"
+                            ).lastrowid
+        self.assertEqual(self.post("/claim", {"ids": [mid]}), {"ok": True})
+        self.assertEqual(self.post("/ack", {"ids": [mid]}), {"ok": True})
+        with sqlite3.connect(self.db) as c:
+            self.assertEqual(c.execute("SELECT status FROM inbox WHERE id=?", (mid,)).fetchone()[0],
+                             "done")
+
+    def test_inbox_returns_rows_to_name_and_agent_id_only_and_changes_nothing(self):
+        before = self.snap()
+        rows = self.get("/inbox?node=N")["messages"]
+        self.assertEqual({r["id"] for r in rows}, {self.legacy, self.sess})
+        for r in rows:
+            self.assertEqual((r["recipient"], r["status"]), ("N", "pending"))
+            self.assertIn("body", r)
+        rows = self.get("/inbox?node=researcher")["messages"]
+        self.assertEqual([r["id"] for r in rows], [self.byid])
+        self.assertEqual(self.snap(), before)
+
+    def test_claim_and_ack_skip_ids_of_other_names(self):
+        before = self.snap()
+        self.assertEqual(self.post("/claim", {"node": "N", "ids": [self.other]})["skipped"],
+                         [self.other])
+        self.assertEqual(self.post("/ack", {"node": "N", "ids": [self.other]})["skipped"],
+                         [self.other])
+        self.assertEqual(self.snap(), before)
+
+    def test_claim_all_then_ack_leaves_none_inflight(self):
+        ids = [m["id"] for m in self.get("/inbox?node=N")["messages"]]
+        self.assertEqual(sorted(self.post("/claim", {"node": "N", "ids": ids})["ok"]), sorted(ids))
+        self.assertEqual(self.status(self.legacy), "inflight")
+        self.assertEqual(self.status(self.other), "pending")
+        res = self.post("/ack", {"node": "N", "ids": ids})
+        self.assertEqual(sorted(res["ok"]), sorted(ids))
+        self.assertEqual([r for r in self.snap() if r[1] == "inflight"], [])
+        self.assertEqual(self.status(self.legacy), "done")
+
+    def test_claim_without_ids_takes_all_pending_of_name(self):
+        self.post("/claim", {"node": "N"})
+        self.assertEqual({self.status(self.legacy), self.status(self.sess)}, {"inflight"})
+        self.assertEqual(self.status(self.byid), "pending")
+
+    def test_read_paths_change_no_row(self):
+        import subprocess, sys
+        before = self.snap()
+        self.get("/inbox?node=N")
+        out = subprocess.run([sys.executable, "mailctl.py", "inbox", "--url", self.url,
+                              "--node", "N", "--token", TOKEN], capture_output=True, text=True,
+                             cwd=os.path.dirname(os.path.abspath(__file__)))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("N", out.stdout)
+        res = self.raw("/a2a", {"jsonrpc": "2.0", "id": 1, "method": "tasks/get",
+                                "params": {"id": f"task-{self.legacy}"}})[1]
+        self.assertIn("result", res)
+        self.assertEqual(self.snap(), before)
+
+
 if __name__ == "__main__":
     unittest.main()

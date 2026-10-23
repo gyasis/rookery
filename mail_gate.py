@@ -265,6 +265,78 @@ def unread_legacy(conn, raw_name, *, with_body=False) -> list:
         (LEGACY, raw_name), with_body)
 
 
+def _addressed_to(name):
+    """SQL for rows whose recipient is `name` or the agent ID of an identity named `name`."""
+    return ("(m.recipient = ? OR m.recipient IN (SELECT agent_id FROM identities WHERE name = ?))",
+            (name, name))
+
+
+def unread_by_name(conn, name, *, with_body=False) -> list:
+    """Pending mail in ANY session addressed to `name` or to the agent ID of an identity named
+    `name`. Needs no identity. Same rows as `unread`, plus `recipient` and `status`. Reads only."""
+    cond, params = _addressed_to(name)
+    rows = _unread_rows(
+        conn,
+        "SELECT m.id, m.sender, m.topic, m.created_at, m.session_id, m.body, m.recipient, m.status, "
+        "(SELECT d.name FROM identities d WHERE d.agent_id = m.sender AND d.session_id = m.session_id) "
+        "AS sender_name FROM inbox m WHERE m.status='pending' AND " + cond +
+        " ORDER BY m.created_at, m.id", params, with_body)
+    meta = {r["id"]: r for r in conn.execute(
+        "SELECT id, recipient, status FROM inbox WHERE id IN (%s)" % ",".join("?" * len(rows)),
+        [r["id"] for r in rows])} if rows else {}
+    for r in rows:
+        r["recipient"], r["status"] = meta[r["id"]]["recipient"], meta[r["id"]]["status"]
+    return rows
+
+
+def ack_by_name(conn, name, ids, *, from_inflight=True) -> dict:
+    """Move to `done` the pending (and, with `from_inflight`, inflight) rows addressed to `name`.
+    Other IDs are `skipped`; rows already done are `already`. One transaction."""
+    cond, params = _addressed_to(name)
+    ids = list(ids)
+    out = {"ok": [], "already": [], "skipped": []}
+    _begin(conn)
+    try:
+        owned = {r["id"]: r["status"] for r in conn.execute(
+            "SELECT m.id, m.status FROM inbox m WHERE " + cond, params)}
+        movable = ("pending", "inflight") if from_inflight else ("pending",)
+        for i in ids:
+            st = owned.get(i)
+            if st in movable:
+                out["ok"].append(i)
+            elif st == "done":
+                out["already"].append(i)
+            else:
+                out["skipped"].append(i)
+        t = rookery.now()
+        conn.executemany(
+            "UPDATE inbox SET status='done', delivered=1, delivered_at=? WHERE id=?",
+            [(t, i) for i in out["ok"]])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return out
+
+
+def claim_by_name(conn, name, ids=None) -> dict:
+    """Move the pending rows of `unread_by_name(name)` (only `ids`, when given) to `inflight`."""
+    cond, params = _addressed_to(name)
+    _begin(conn)
+    try:
+        pend = [r["id"] for r in conn.execute(
+            "SELECT m.id FROM inbox m WHERE m.status='pending' AND " + cond, params)]
+        want = pend if ids is None else [i for i in ids if i in set(pend)]
+        t = rookery.now()
+        conn.executemany("UPDATE inbox SET status='inflight', claimed_at=? WHERE id=?",
+                         [(t, i) for i in want])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"ok": want, "skipped": [] if ids is None else [i for i in ids if i not in set(want)]}
+
+
 def principal_from_env(conn, env, root):
     """(session, identity) for the caller, or None. Only an `open` session whose identity already
     exists counts. Reads only: it never creates an identity (FR-011)."""

@@ -64,9 +64,9 @@ if URL:
     def _pending(node):
         return mailctl.call(URL, "/inbox?node=" + node, "GET")["messages"]
 
-    def _consume(ids):
-        mailctl.call(URL, "/claim", "POST", {"ids": ids})
-        mailctl.call(URL, "/ack", "POST", {"ids": ids})
+    def _consume(ids, node):
+        mailctl.call(URL, "/claim", "POST", {"node": node, "ids": ids})
+        mailctl.call(URL, "/ack", "POST", {"node": node, "ids": ids})
 
     def _roster():
         card = mailctl.call(URL, "/.well-known/agent-card.json", "GET")
@@ -78,7 +78,7 @@ else:
         c = R.connect()
         return [dict(m) for m in R.fetch_undelivered(c, node)]
 
-    def _consume(ids):
+    def _consume(ids, node=None):
         c = R.connect()
         R.claim(c, ids)
         R.ack(c, ids)
@@ -116,7 +116,7 @@ def _drain(node):
     """Return + consume new mail addressed to this session's node."""
     msgs = _pending(node)
     if msgs:
-        _consume([m["id"] for m in msgs])
+        _consume([m["id"] for m in msgs], node)
     return [{"from": m["sender"], "body": m["body"]} for m in msgs]
 
 

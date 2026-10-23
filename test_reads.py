@@ -90,6 +90,53 @@ class ReadsTest(Base):
         self.assertEqual(G.unread_legacy(self.conn, "rawname", with_body=True)[0]["body"], "body-T")
 
 
+class ByNameTest(ReadsTest):
+    """T033: reads by node name. No identity needed; any session; read-only."""
+
+    def status(self, i):
+        return self.conn.execute("SELECT status FROM inbox WHERE id=?", (i,)).fetchone()[0]
+
+    def test_unread_by_name_sees_legacy_name_session_name_and_agent_id_of_named_identity(self):
+        a = self.put("x", "beta", G.LEGACY, "RAW")
+        b = self.put("x", self.bid, self.sid_b, "SESS")
+        c = self.put("x", self.me["agent_id"], self.sid_a, "ME")
+        self.put("x", "gamma", G.LEGACY, "OTHER")
+        self.put("x", self.beta_peer["agent_id"], self.sid_b, "PEER")
+        rows = G.unread_by_name(self.conn, "beta", with_body=True)
+        self.assertEqual({r["id"] for r in rows}, {a, b})
+        self.assertEqual({r["id"] for r in G.unread_by_name(self.conn, "me")}, {c})
+        r = rows[0]
+        self.assertEqual((r["recipient"], r["status"], r["body"]), ("beta", "pending", "body-RAW"))
+        self.assertNotIn("body", G.unread_by_name(self.conn, "beta")[0])
+
+    def test_unread_by_name_skips_non_pending(self):
+        m = self.put("x", "beta", G.LEGACY)
+        self.conn.execute("UPDATE inbox SET status='inflight' WHERE id=?", (m,))
+        self.conn.commit()
+        self.assertEqual(G.unread_by_name(self.conn, "beta"), [])
+
+    def test_ack_by_name_moves_own_rows_and_classifies_the_rest(self):
+        p1 = self.put("x", "beta", G.LEGACY)
+        fl = self.put("x", self.bid, self.sid_b)
+        self.conn.execute("UPDATE inbox SET status='inflight' WHERE id=?", (fl,))
+        dn = self.put("x", "beta", G.LEGACY)
+        self.conn.execute("UPDATE inbox SET status='done' WHERE id=?", (dn,))
+        other = self.put("x", "gamma", G.LEGACY)
+        self.conn.commit()
+        res = G.ack_by_name(self.conn, "beta", [p1, fl, dn, other, 9999])
+        self.assertEqual(res, {"ok": [p1, fl], "already": [dn], "skipped": [other, 9999]})
+        self.assertEqual([self.status(i) for i in (p1, fl, dn, other)],
+                         ["done", "done", "done", "pending"])
+
+    def test_ack_by_name_without_from_inflight_leaves_inflight(self):
+        fl = self.put("x", "beta", G.LEGACY)
+        self.conn.execute("UPDATE inbox SET status='inflight' WHERE id=?", (fl,))
+        self.conn.commit()
+        res = G.ack_by_name(self.conn, "beta", [fl], from_inflight=False)
+        self.assertEqual(res, {"ok": [], "already": [], "skipped": [fl]})
+        self.assertEqual(self.status(fl), "inflight")
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

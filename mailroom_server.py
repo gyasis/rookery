@@ -342,7 +342,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply(agent_card(c))
         if u.path == "/inbox":
             return self._reply(
-                {"messages": _rows(R.fetch_undelivered(c, q["node"][0]))}
+                {"messages": mail_gate.unread_by_name(c, q["node"][0], with_body=True)}
             )
         if u.path == "/thread":
             return self._reply({"messages": _rows(R.fetch_thread(c, q["node"][0]))})
@@ -472,12 +472,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply(failed[1], failed[0])
             return self._reply(
                 {"id": res["msg_id"], "outcome": res["outcome"], "reason": res["reason"]})
+        if u.path in ("/claim", "/ack") and not d.get("node"):
+            # An older mailctl copy on another host sends no node (FR-027). Keep its old
+            # behaviour: act on the given IDs, answer {"ok": true}. The token holder is trusted (D24).
+            (R.claim if u.path == "/claim" else R.ack)(c, d.get("ids") or [])
+            return self._reply({"ok": True})
         if u.path == "/claim":
-            R.claim(c, d["ids"])
-            return self._reply({"ok": True})
+            res = mail_gate.claim_by_name(c, d["node"], d.get("ids"))
+            return self._reply(res)
         if u.path == "/ack":
-            R.ack(c, d["ids"])
-            return self._reply({"ok": True})
+            res = mail_gate.ack_by_name(c, d["node"], d.get("ids") or [])
+            return self._reply(res)
         if u.path == "/register":
             R.register_node(
                 c,

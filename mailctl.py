@@ -54,7 +54,7 @@ def loop(url, node, poll):
             time.sleep(poll)
             continue
         ids = [m["id"] for m in msgs]
-        call(url, "/claim", "POST", {"ids": ids})
+        call(url, "/claim", "POST", {"node": node, "ids": ids})
         for m in msgs:
             log(node, f"got mail from {m['sender']}: {m['body'][:60]}")
             if not m["body"].startswith("ACK:") and m["sender"] != node:
@@ -62,7 +62,7 @@ def loop(url, node, poll):
                     "sender": node, "recipient": m["sender"],
                     "body": f'ACK: {node} (remote) handled "{m["body"][:40]}"',
                 })
-        call(url, "/ack", "POST", {"ids": ids})
+        call(url, "/ack", "POST", {"node": node, "ids": ids})
 
 
 def main():
