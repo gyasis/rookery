@@ -385,8 +385,8 @@ ROOKERY_SECURITY="mypolicy:Hardened" python3 mailroom_server.py --host 0.0.0.0 -
 ```
 
 Start rules for the mailroom (`mailroom_server.py` and `rookery serve`): it binds
-`127.0.0.1` by default. It needs a token (`--token` or `$ROOKERY_TOKEN`), or
-`--allow-no-auth` for a local demo. A public `--host` also needs `--allow-public`.
+`127.0.0.1` by default. On a local host it needs no token. A public `--host` needs
+`--allow-public` and a token (`--token` or `$ROOKERY_TOKEN`).
 ```bash
 ```
 

@@ -608,42 +608,47 @@ def server_class(host):
 def check_start(args):
     """The start rules (contract: HTTP, Start). `args` needs host, token, allow_public, allow_no_auth.
 
-    Returns the list of WARNING lines (also printed). On a refusal it prints the reason to stderr and
-    raises SystemExit(2). A token comes from args.token, else from $ROOKERY_TOKEN.
+    A local host needs no token: any program on this machine can already write the database. A host
+    other than a local one needs --allow-public and a token. --allow-no-auth has no effect; it stays
+    so that old start commands still parse.
+
+    Returns the list of NOTE and WARNING lines (also printed). On a refusal it prints the reason to
+    stderr and raises SystemExit(2). A token comes from args.token, else from $ROOKERY_TOKEN.
     """
     token = getattr(args, "token", None) or os.environ.get("ROOKERY_TOKEN")
-    allow_no_auth = getattr(args, "allow_no_auth", False)
     allow_public = getattr(args, "allow_public", False)
     host = (getattr(args, "host", None) or "").strip() or "127.0.0.1"
     args.host = host                         # the bind sites use the checked value
+    local = host in LOCAL_HOSTS
     problems = []
-    if not token and not allow_no_auth:
-        problems.append(
-            "ERROR: no token. Give a token with --token or $ROOKERY_TOKEN, "
-            "or give --allow-no-auth to run without one."
-        )
-    if host not in LOCAL_HOSTS and not allow_public:
+    if not local and not allow_public:
         problems.append(
             f"ERROR: --host {host} is not a local address. "
             "Give --allow-public to serve other hosts."
+        )
+    if not local and not token:
+        problems.append(
+            f"ERROR: --host {host} is not a local address, so it needs a token. "
+            "Give one with --token or $ROOKERY_TOKEN."
         )
     if problems:
         for line in problems:
             print(line, file=sys.stderr, flush=True)
         raise SystemExit(2)
-    warnings = []
+    lines = []
+    if not token:
+        lines.append(
+            "NOTE: local mailroom with no token. Programs on this machine can send and read mail. "
+            "Give --token to require one."
+        )
     if allow_public:
-        warnings.append(
+        lines.append(
             "WARNING: --allow-public lets other hosts reach this mailroom. "
-            "Anyone who can reach the port can use it."
+            "Anyone with the token can use it."
         )
-    if allow_no_auth and not token:
-        warnings.append(
-            "WARNING: --allow-no-auth turns auth off. Every caller can send and read mail."
-        )
-    for line in warnings:
+    for line in lines:
         print(line, flush=True)
-    return warnings
+    return lines
 
 
 def main():
@@ -683,7 +688,7 @@ def main():
     ap.add_argument(
         "--allow-no-auth",
         action="store_true",
-        help="start with no token (ignored when a token is set)",
+        help="no effect: a local mailroom needs no token, and any other host needs one",
     )
     a = ap.parse_args()
     check_start(a)

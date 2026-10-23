@@ -40,6 +40,12 @@ To send one mail now, outside the end of a turn, run `rookery send TO "SAY" --ta
 
 On a long task, end each turn with `kind` `handoff` and `status` `in-progress`. This updates HANDOFF.md and sends no mail. When you finish the task, use `status` `done`. Rookery then sends the hand-off mail.
 
+## Same machine or other machines
+
+On one machine you need no token and no server. `rookery send`, `rookery inbox`, `rookery ack`, the block and the MCP tools all work on the local database.
+
+The mailroom (`rookery serve` or `mailroom_server.py`) is only for agents on other machines. On a local host it starts with no token. A host other than a local one needs `--allow-public` and a token (`--token` or `$ROOKERY_TOKEN`). Do not start a mailroom unless the user asks for one.
+
 ## Never poll
 
 Do not loop. Do not sleep. Do not schedule inbox checks.

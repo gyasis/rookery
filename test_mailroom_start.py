@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mail gate, T028: the start rules of mailroom_server.py (contract: HTTP, Start).
+"""Mail gate, T028 (amended 2026-10-23: a local mailroom needs no token): the start rules of mailroom_server.py (contract: HTTP, Start).
 
     python3 -m unittest test_mailroom_start -v
 
@@ -119,11 +119,15 @@ class Start(unittest.TestCase):
             return {"text": raw.decode(errors="replace")}  # e.g. the HTML approve form
 
     # --- refusals -------------------------------------------------------
-    def test_no_token_no_option_exits_2_and_names_the_choices(self):
-        code, out = self.refused()
+    def test_public_host_without_token_exits_2_and_names_the_token(self):
+        code, out = self.refused("--host", "0.0.0.0", "--allow-public")
         self.assertEqual(code, 2)
         self.assertIn("--token", out)
-        self.assertIn("--allow-no-auth", out)
+
+    def test_public_host_allow_no_auth_still_needs_a_token(self):
+        code, out = self.refused("--host", "0.0.0.0", "--allow-public", "--allow-no-auth")
+        self.assertEqual(code, 2)
+        self.assertIn("--token", out)
 
     def test_public_host_without_allow_public_exits_2(self):
         code, out = self.refused("--host", "0.0.0.0", "--token", TOKEN)
@@ -140,10 +144,18 @@ class Start(unittest.TestCase):
         out = self.stop_and_read(p)
         self.assertEqual([l for l in out.splitlines() if l.startswith("WARNING:")].__len__(), 1, out)
 
-    def test_allow_no_auth_without_token_prints_one_warning(self):
+    def test_local_host_with_no_token_serves_and_prints_one_note(self):
+        p = self.serving()
+        out = self.stop_and_read(p)
+        self.assertEqual(len([l for l in out.splitlines() if l.startswith("NOTE:")]), 1, out)
+        self.assertNotIn("WARNING:", out)
+        self.assertNotIn("ERROR:", out)
+
+    def test_allow_no_auth_on_local_host_changes_nothing(self):
         p = self.serving("--allow-no-auth")
         out = self.stop_and_read(p)
-        self.assertEqual(len([l for l in out.splitlines() if l.startswith("WARNING:")]), 1, out)
+        self.assertEqual(len([l for l in out.splitlines() if l.startswith("NOTE:")]), 1, out)
+        self.assertNotIn("WARNING:", out)
 
     def test_token_with_allow_no_auth_keeps_auth_on_and_is_silent(self):
         p = self.serving("--token", TOKEN, "--allow-no-auth")
@@ -151,6 +163,7 @@ class Start(unittest.TestCase):
         out = self.stop_and_read(p)
         self.assertEqual(code, 401)
         self.assertNotIn("WARNING:", out)
+        self.assertNotIn("NOTE:", out)
 
     def test_env_token_counts_as_a_token(self):
         p = self.serving(env=self.env(ROOKERY_TOKEN=TOKEN))
@@ -187,8 +200,8 @@ class Start(unittest.TestCase):
         self.assertEqual((code, body.get("ok")), (200, True))
 
     # --- routes ---------------------------------------------------------
-    def test_no_auth_mode_call_without_token_works(self):
-        self.serving("--allow-no-auth")
+    def test_local_no_token_call_without_token_works(self):
+        self.serving()
         code, _ = self.call("POST", "/register", {"node_id": "n1"})
         self.assertEqual(code, 200)
         code, _ = self.call("GET", "/inbox?node=n1")

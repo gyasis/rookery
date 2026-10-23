@@ -182,9 +182,8 @@ Run the sidecar on the host that owns the DB; join from any peer with one file.
 `mailctl.py` is legacy. The current commands are `rookery send`, `rookery inbox`
 and `rookery ack`.
 
-Start rules: the sidecar binds `127.0.0.1` by default. It needs `--token` (or
-`$ROOKERY_TOKEN`), or `--allow-no-auth` for a local demo. A public `--host`
-needs `--allow-public`.
+Start rules: the sidecar binds `127.0.0.1` by default. On a local host it needs no
+token. A public `--host` needs `--allow-public` and `--token` (or `$ROOKERY_TOKEN`).
 
 ```bash
 # On the DB host (binds all interfaces):

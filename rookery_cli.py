@@ -68,7 +68,7 @@ def build_parser():
     p_serve.add_argument(
         "--allow-no-auth",
         action="store_true",
-        help="start with no token (ignored when a token is set)",
+        help="no effect: a local mailroom needs no token, and any other host needs one",
     )
     p_serve.set_defaults(func=cmd_serve)
 

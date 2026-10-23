@@ -1,5 +1,5 @@
-"""Demo scripts must start the mailroom with a token or --allow-no-auth,
-and with --allow-public on a public --host (feature 002, T044, FR-029)."""
+"""Demo scripts that start the mailroom on a public --host must give a token and
+--allow-public. A local mailroom needs no token (feature 002, T044, FR-029; amended 2026-10-23)."""
 import glob
 import re
 import shlex
@@ -49,13 +49,11 @@ class DemoStarts(unittest.TestCase):
                     continue
                 seen += 1
                 with self.subTest(script=path, line=line.strip()[:80]):
-                    self.assertTrue(
-                        "--token" in line or "ROOKERY_TOKEN" in line
-                        or "--allow-no-auth" in line,
-                        "no token and no --allow-no-auth")
                     host = _host(line)
                     if host is not None and host not in LOCAL:
                         self.assertIn("--allow-public", line)
+                        self.assertTrue("--token" in line or "ROOKERY_TOKEN" in line,
+                                        "a public host with no token")
         self.assertGreater(seen, 5)
 
     def test_bash_syntax(self):

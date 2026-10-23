@@ -375,6 +375,10 @@ Removed IDs stay in the list, so that every other ID stays stable.
 - **FR-024**: A public bind (a host other than `127.0.0.1`, `::1` or `localhost`) and a start with no auth
   MUST each need an explicit opt-in (`--allow-public`, `--allow-no-auth`). Each opt-in MUST print one
   `WARNING` line at start.
+- **Amendment of 2026-10-23 (user) to FR-023 and FR-024**: a mailroom on a local host MUST start with no
+  token and print one `NOTE` line. Any program on this machine can already write the database, so a local
+  token adds no protection. A host other than a local one MUST need `--allow-public` and a token.
+  `--allow-no-auth` has no effect. The contract (`contracts/gate.md`, HTTP Start) holds the table.
 
 **Screening**
 
