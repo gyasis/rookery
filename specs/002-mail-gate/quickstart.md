@@ -34,7 +34,7 @@ python3 -m unittest test_turn_block test_init test_hooks test_identity test_outb
   test_gate_log test_gate test_gate_scan test_system_mail \
   test_paths_local test_paths_mcp test_paths_send_mail test_paths_mailroom test_paths_node_runner \
   test_mailroom_gate test_mailroom_start test_mailctl test_mcp_gate test_read_mail \
-  test_reads test_mentions test_pane test_text_hints -v
+  test_reads test_mentions test_pane test_text_hints test_demo_starts -v
 ```
 
 | Test file | Proves |
