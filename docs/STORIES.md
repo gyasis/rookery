@@ -82,8 +82,8 @@ The ACK the Mac writes appears in the laptop's DB as a `done` row.
 ```bash
 # On the laptop (<linux-host>):
 cd ~/Documents/code/rookery
-# Start rules: binds 127.0.0.1 by default; a token (or --allow-no-auth) is
-# needed; a public --host needs --allow-public.
+# Start rules: binds 127.0.0.1 by default and needs no token there; a public
+# --host needs --allow-public and a token.
 export ROOKERY_TOKEN="$(openssl rand -hex 32)"
 python3 mailroom_server.py --host 0.0.0.0 --allow-public --port 8765
 

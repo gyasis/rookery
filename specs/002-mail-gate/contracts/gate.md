@@ -109,13 +109,17 @@ rookery serve [--host 127.0.0.1] [--port 8765] [--token T] [--allow-public] [--a
 The one shared token comes from `--token`, else from `$ROOKERY_TOKEN`. This is the token that exists today.
 `mailroom_server.check_start(args)` holds the rules. `main()` and `cli_serve.cmd_serve` both call it.
 
+Amended 2026-10-23 (user): a local mailroom needs no token. Any program on this machine can already
+write the database, so a local token adds no protection. A token is the gate for other hosts.
+
 | Condition | Result |
 |---|---|
-| no token, no `--allow-no-auth` | exit 2. Prints the two choices: give a token (`--token`, `$ROOKERY_TOKEN`) or `--allow-no-auth` |
+| local `--host`, no token | starts with auth off. One `NOTE:` line says so |
+| local `--host`, a token | starts with auth on. No `NOTE:` line |
 | `--host` not `127.0.0.1`, `::1` or `localhost`, no `--allow-public` | exit 2 |
-| `--allow-public` | starts. One `WARNING:` line names the risk |
-| `--allow-no-auth` and no token | starts with auth off. One `WARNING:` line names the risk |
-| a token and `--allow-no-auth` | auth stays on. The flag has no effect and prints no warning |
+| `--host` not local, no token | exit 2. Names `--token` and `$ROOKERY_TOKEN` |
+| `--allow-public` and a token | starts. One `WARNING:` line names the risk |
+| `--allow-no-auth` | no effect. Old start commands still parse |
 
 ### Routes
 

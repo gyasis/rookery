@@ -112,9 +112,9 @@ The mailroom sidecar runs on a Linux machine (`<linux-host>`). A Mac Studio
 machine. Peers talk to the sidecar over TCP, never via a network share.
 Replace `<linux-host>` / `<mac-host>` / `<mac-user>` with your own LAN values.
 
-Start rules: the sidecar binds `127.0.0.1` by default. It needs a token
-(`--token` or `$ROOKERY_TOKEN`) or the flag `--allow-no-auth`. A public `--host`
-(such as `0.0.0.0`) also needs `--allow-public`.
+Start rules: the sidecar binds `127.0.0.1` by default and needs no token there. A
+public `--host` (such as `0.0.0.0`) needs `--allow-public` and a token
+(`--token` or `$ROOKERY_TOKEN`).
 
 **On `<linux-host>`:**
 

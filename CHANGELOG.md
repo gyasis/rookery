@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- A mailroom on a local host (`127.0.0.1`, `::1` or `localhost`) now starts with no token. It prints one `NOTE:` line. Any local program can already write the database, so a local token adds no protection. A host that is not local needs `--allow-public` and a token (`--token` or `$ROOKERY_TOKEN`). `--allow-no-auth` no longer turns auth off on such a host. The flag has no effect now, and old start commands still parse.
+
 ### Fixed
 
 - A turn that stops in the middle no longer leaves an agent `busy` forever. The postmaster now treats a `busy` state as idle for the push when its last sign of life is older than `busy_stale_s` (default 1800 seconds), and logs `busy-stale` once. The last sign of life is the later of `since` and the modification time of the transcript file. The prompt hook stores that path from its `transcript_path` input in `state/turn.json`, so a long turn that still writes is not stale. A bad `since` falls back to the modification time of `turn.json`. The session-start hook resets the state to `idle` only for `startup`, `clear` or no source, and logs `state-reset` when it replaced `busy`. It keeps `busy` for `compact` and `resume`. If the identity has a `herdr-pane` binding (the first one only) and the postmaster runs inside a herdr pane (`HERDR_ENV=1`) or with `ROOKERY_HERDR=force`, the postmaster also asks herdr (2 seconds at most). The turn must look busy for 60 seconds, and the pane must show `idle` or `done` on two readings at least 10 seconds apart in the same turn. The postmaster then pushes and logs `busy-corrected`. Set `herdr_probe` to `false` to turn the probe off. Rookery does not need herdr for this. The probe uses a new plugin point, `plugins.status_probe`.
