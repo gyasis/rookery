@@ -127,7 +127,7 @@ and `GET /join/<id>`. Every other route needs the shared token, unless auth is o
 | Call | Rule | Answers |
 |---|---|---|
 | no token or bad token on a route that needs one | stores nothing | 401 |
-| `POST /send {recipient, body, topic?, sender?}` | `submit(path="mailroom", principal=None)`. `recipient` is the key that the callers send (`mailroom_server.py:428`, `mailctl.py`, `rookery_mcp.py` remote mode, `relay.py`). `to` works as an alias. `sender` is the asked sender, as today | 200 `{id, outcome, reason}`. `id` is the stored row, or null. 403 for `refused`/`system-name`. 400 for `refused`/`bad-input`. The error body is `{"error": "<reason>", "detail": "<text>"}` |
+| `POST /send {recipient, body, topic?, sender?}` | `submit(path="mailroom", principal=None)`. `recipient` is the key that the callers send (`mailroom_server.py:428`, `mailctl.py`, `rookery_mcp.py` remote mode, `relay.py`). `to` works as an alias. `sender` is the asked sender, as today | 200 `{id, outcome, reason}`. `id` is the stored row, or null. 403 for `refused`/`system-name`. 400 for `refused`/`bad-input`. 503 for `db-busy`. 500 for `send-failed`. The error body is `{"error": "<reason>", "detail": "<text>"}` |
 | `GET /inbox?node=N` | `unread_by_name(N, with_body=True)`: pending mail in any session to N, or to the agent ID of an identity named N, as `fetch_undelivered` does today. It changes nothing | 200 with rows that hold `recipient`, `status` and `body` |
 | `GET /thread` | as today (`fetch_thread`) | 200 |
 | `POST /claim` | moves the pending rows of `unread_by_name` to `inflight` | 200 |

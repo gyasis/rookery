@@ -152,6 +152,28 @@ def _post_webhook(url, payload, token=None):
         pass
 
 
+# Contract "Calls": the HTTP status and the fixed `detail` text for a /send that stored nothing.
+_SEND_ERRORS = {
+    "system-name": (403, "This sender name is for the system. Use a different sender name."),
+    "bad-input": (400, "The sender, the recipient or the body is not valid. Check all three, "
+                       "then send the mail again."),
+    "db-busy": (503, "The database is busy. Send the mail again."),
+    "send-failed": (500, "The mail was not sent."),
+}
+
+
+def _send_error(res):
+    """(status, body) for a gate outcome that stored nothing, or None when /send answers 200."""
+    out = res["outcome"]
+    key = res["reason"] if out == "refused" else out if out in ("db-busy", "send-failed") else None
+    if key not in _SEND_ERRORS:
+        return None
+    code, detail = _SEND_ERRORS[key]
+    if out == "send-failed" and res["reason"]:
+        detail = f"{detail} {res['reason']}"
+    return code, {"error": key, "detail": detail}
+
+
 _A2A_ERRORS = {"refused": -32602, "db-busy": -32006, "send-failed": -32603}
 
 
@@ -444,6 +466,9 @@ class Handler(BaseHTTPRequestHandler):
                 c, path="mailroom", principal=None, raw_sender=d.get("sender") or "anon",
                 to=d.get("recipient", d.get("to")), body=d.get("body"),
                 topic=d.get("topic") or "", asked_sender=d.get("sender") or None)
+            failed = _send_error(res)
+            if failed:
+                return self._reply(failed[1], failed[0])
             return self._reply(
                 {"id": res["msg_id"], "outcome": res["outcome"], "reason": res["reason"]})
         if u.path == "/claim":
