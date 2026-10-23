@@ -57,9 +57,9 @@ the forged-sender tests and A2A scoping. Task IDs are not renumbered, so gaps ar
 
 **Purpose**: the fixtures that later phases need.
 
-- [ ] T001 [P] Create `fixtures/policy_deny.py` with class `DenyPolicy(security.SecurityPolicy)`. Its `inspect_inbound` denies a body that contains `DENY-ME`, with reason `fixture-deny`. Else it returns `ALLOW`. Tests load it with `ROOKERY_SECURITY=fixtures.policy_deny:DenyPolicy` (`security.py:194`). Read `security.py` for the verdict type first.
+- [x] T001 [P] Create `fixtures/policy_deny.py` with class `DenyPolicy(security.SecurityPolicy)`. Its `inspect_inbound` denies a body that contains `DENY-ME`, with reason `fixture-deny`. Else it returns `ALLOW`. Tests load it with `ROOKERY_SECURITY=fixtures.policy_deny:DenyPolicy` (`security.py:194`). Read `security.py` for the verdict type first.
   Verify: `ROOKERY_SECURITY=fixtures.policy_deny:DenyPolicy python3 -c "import security; print(type(security.get_policy()).__name__)"` (it prints DenyPolicy)
-- [ ] T002 [P] Create `fixtures/bin/tmux`, an executable script like `fixtures/bin/herdr`. It appends its arguments as one JSON line to `$ROOKERY_FIXTURE_LOG` and exits 0. Tests put `fixtures/bin` first on `PATH` (US5).
+- [x] T002 [P] Create `fixtures/bin/tmux`, an executable script like `fixtures/bin/herdr`. It appends its arguments as one JSON line to `$ROOKERY_FIXTURE_LOG` and exits 0. Tests put `fixtures/bin` first on `PATH` (US5).
   Verify: `L=$(mktemp) && ROOKERY_FIXTURE_LOG=$L fixtures/bin/tmux a b && python3 -c "import json,sys; print(json.loads(open(sys.argv[1]).readline()))" $L`
 
 ---
