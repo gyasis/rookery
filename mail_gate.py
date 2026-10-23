@@ -64,14 +64,17 @@ def quarantine_malformed(conn, ctx, recipient, body, topic, reason, note, sugges
     """hold + quarantine (+ note) + bounce in ONE transaction (D4). BEGIN IMMEDIATE
     takes the write lock once, up front; any failure rolls everything back."""
     sid = ctx["session"]["session_id"]
+    sender = ctx["identity"]["agent_id"]
     _begin(conn)
     try:
-        msg_id, _ = _hold_quarantine(conn, ctx["identity"]["agent_id"], sid, recipient, body,
-                                     topic, reason, note, suggest, "turn-block-parser")
+        msg_id, bounce_id = _hold_quarantine(conn, sender, sid, recipient, body,
+                                             topic, reason, note, suggest, "turn-block-parser")
         conn.commit()
     except BaseException:
         conn.rollback()
         raise
+    _log(ctx.get("root"), "block", (ctx["session"], ctx["identity"]), sender, None, recipient, sid,
+         _result("quarantined", reason, msg_id=msg_id, bounce_id=bounce_id), "turn-block-parser")
     return msg_id
 
 

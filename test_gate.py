@@ -351,7 +351,7 @@ class SystemSend(GateBase):
 
 class Malformed(GateBase):
     def test_quarantine_malformed(self):
-        ctx = {"session": self.alpha, "identity": self.me}
+        ctx = {"session": self.alpha, "identity": self.me, "root": self.root}
         mid = G.quarantine_malformed(self.conn, ctx, self.researcher["agent_id"], "{bad", None,
                                      "malformed", "Fix it.")
         row = R.get_message(self.conn, mid)
@@ -359,6 +359,9 @@ class Malformed(GateBase):
                          ("quarantined", "malformed", "rookery"))    # a real agent ID is masked
         self.assertEqual(self.count(), 2)                            # + the bounce
         self.assertIn("addressed the block", row["note"])
+        rec = self.gate_log()[-1]                                    # FR-030: every quarantine is logged
+        self.assertEqual((rec["path"], rec["outcome"], rec["reason"], rec["msg_id"]),
+                         ("block", "quarantined", "malformed", mid))
 
 
 class PrincipalFromEnv(GateBase):

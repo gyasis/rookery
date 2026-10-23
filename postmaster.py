@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 
+import mail_gate
 import plugins
 import rookery as R
 import rookery_identity
@@ -438,6 +439,24 @@ def run_identities_only(root, poll):
         log("offline")
 
 
+def _grant_mail(conn, request_row):
+    """Mail an approved credential grant to the waiting node. The credential_requests table has
+    no session column, so the mail goes to `legacy`."""
+    return mail_gate.system_send(
+        conn, "postmaster", request_row["node_id"],
+        f"CRED_GRANTED:{request_row['resource']}:{request_row['token_ref']}",
+        session_id="legacy")
+
+
+def _mention_mail(conn, mentioned, cause_row):
+    """Tell `mentioned` it was named in `cause_row`, in the session of that row (legacy if none)."""
+    return mail_gate.system_send(
+        conn, "postmaster", mentioned,
+        f"MENTION by {cause_row['sender']} (in mail to {cause_row['recipient']}): "
+        f"{(cause_row['body'] or '')[:140]}",
+        session_id=cause_row["session_id"] or "legacy")
+
+
 def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools="", model=None,
         mcp="", notify_events="needcred", root=None):
     if not node_engine:
@@ -516,8 +535,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                     continue
                 granted_seen.add(r["id"])
                 if r["node_id"] in nodes:
-                    R.send(conn, "postmaster", r["node_id"],
-                           f"CRED_GRANTED:{r['resource']}:{r['token_ref']}")
+                    _grant_mail(conn, r)
                     log(f"credential #{r['id']} approved -> mailed grant to '{r['node_id']}'")
 
             # 4. "they're talking about you": notify a managed node @mentioned in
@@ -533,9 +551,7 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                     continue
                 for m in set(_MENTION.findall(body)):
                     if m in nodes and m != r["recipient"] and m != r["sender"]:
-                        R.send(conn, "postmaster", m,
-                               f"MENTION by {r['sender']} (in mail to {r['recipient']}): "
-                               f"{(r['body'] or '')[:140]}")
+                        _mention_mail(conn, m, r)
                         log(f"@{m} mentioned by {r['sender']} -> notified")
 
             # 5. wake any managed node that has mail and isn't already running
