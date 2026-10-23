@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 
+import mail_gate
 import plugins
 import rookery as R
 import rookery_identity
@@ -438,6 +439,61 @@ def run_identities_only(root, poll):
         log("offline")
 
 
+def _grant_mail(conn, request_row):
+    """Mail an approved credential grant to the waiting node. The credential_requests table has
+    no session column, so the mail goes to `legacy`."""
+    return mail_gate.system_send(
+        conn, "postmaster", request_row["node_id"],
+        f"CRED_GRANTED:{request_row['resource']}:{request_row['token_ref']}",
+        session_id="legacy")
+
+
+def _mention_mail(conn, mentioned, cause_row):
+    """Tell `mentioned` it was named in `cause_row`, in the session of that row (legacy if none).
+    The text carries no part of the body (FR-018, D12)."""
+    f = turn_block.notice_field
+    sid = cause_row["session_id"] or "legacy"
+
+    def name(who):                       # an agent ID in this session shows as its name (FR-016)
+        hit = conn.execute("SELECT name FROM identities WHERE session_id=? AND agent_id=?",
+                           (sid, who)).fetchone()
+        return hit[0] if hit else who
+
+    return mail_gate.system_send(
+        conn, "postmaster", mentioned,
+        f"MENTION: {f(name(cause_row['sender']))} named you in mail to "
+        f"{f(name(cause_row['recipient']))}, "
+        f"topic {f(cause_row['topic'] or 'none')}. You cannot read that mail.",
+        session_id=cause_row["session_id"] or "legacy")
+
+
+def _mention_pass(conn, last_id, nodes):
+    """Scan delivered mail (every status but held and quarantined) newer than `last_id` once; notify each @name that is an identity in the
+    row's own session (FR-017). Held and quarantined mail is not scanned. `nodes` (raw node names)
+    only resolves names for `legacy` rows, which have no identities. Returns the new last id."""
+    for r in conn.execute(
+        "SELECT * FROM inbox WHERE id > ? AND status NOT IN ('held','quarantined') ORDER BY id", (last_id,)
+    ).fetchall():
+        last_id = max(last_id, r["id"])
+        body = r["body"] or ""
+        # skip postmaster notices and acks (acks often echo the original text)
+        if r["sender"] == "postmaster" or body.startswith("ACK:"):
+            continue
+        sid = r["session_id"] or "legacy"
+        for m in sorted(set(_MENTION.findall(body))):
+            if sid == "legacy":
+                to = m if m in nodes else None          # legacy readers read by raw node name
+            else:
+                hit = conn.execute("SELECT agent_id FROM identities WHERE session_id=? AND name=?",
+                                   (sid, m)).fetchone()
+                to = hit[0] if hit else None            # session readers read by agent ID
+            if to is None or to in (r["recipient"], r["sender"]):
+                continue
+            _mention_mail(conn, to, r)
+            log(f"@{m} mentioned by {r['sender']} -> notified")
+    return last_id
+
+
 def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools="", model=None,
         mcp="", notify_events="needcred", root=None):
     if not node_engine:
@@ -516,27 +572,12 @@ def run(node_engine, persistent_set, max_warm, idle_timeout, poll, allowed_tools
                     continue
                 granted_seen.add(r["id"])
                 if r["node_id"] in nodes:
-                    R.send(conn, "postmaster", r["node_id"],
-                           f"CRED_GRANTED:{r['resource']}:{r['token_ref']}")
+                    _grant_mail(conn, r)
                     log(f"credential #{r['id']} approved -> mailed grant to '{r['node_id']}'")
 
             # 4. "they're talking about you": notify a managed node @mentioned in
             #    new mail it isn't the recipient of (scan each message once).
-            for r in conn.execute(
-                "SELECT * FROM inbox WHERE id > ? ORDER BY id", (last_mention_id,)
-            ).fetchall():
-                last_mention_id = max(last_mention_id, r["id"])
-                body = r["body"] or ""
-                # skip postmaster notices and acks (acks often echo the original
-                # text, which would re-trigger the same mention)
-                if r["sender"] == "postmaster" or body.startswith("ACK:"):
-                    continue
-                for m in set(_MENTION.findall(body)):
-                    if m in nodes and m != r["recipient"] and m != r["sender"]:
-                        R.send(conn, "postmaster", m,
-                               f"MENTION by {r['sender']} (in mail to {r['recipient']}): "
-                               f"{(r['body'] or '')[:140]}")
-                        log(f"@{m} mentioned by {r['sender']} -> notified")
+            last_mention_id = _mention_pass(conn, last_mention_id, nodes)
 
             # 5. wake any managed node that has mail and isn't already running
             for n in nodes:

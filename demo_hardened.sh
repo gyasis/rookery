@@ -33,7 +33,7 @@ echo
 echo "## hardened sidecar + postmaster managing researcher,reviewer (mock)"
 echo "   architect may task: researcher, reviewer   |   guest may task: researcher only"
 python3 mailroom_server.py --host 127.0.0.1 --port "$PORT" --public-url "$URL" \
-  --default-node researcher > /tmp/hardened_sidecar.log 2>&1 &
+  --default-node researcher --allow-no-auth > /tmp/hardened_sidecar.log 2>&1 &
 SV=$!
 python3 postmaster.py --nodes researcher,reviewer --engine mock --poll 0.5 > /tmp/hardened_pm.log 2>&1 &
 PM=$!

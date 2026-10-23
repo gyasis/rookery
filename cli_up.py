@@ -220,7 +220,7 @@ def cmd_up(args):
         "\n"
         f"  You are node `{node_id}` in a Rookery mesh. Use the `rookery`\n"
         "  MCP server. Loop: call `rookery.await_message(timeout=300)`\n"
-        "  and react to anything it returns. Use `rookery.send(to, body)`\n"
-        "  for replies. Continue until told to stop.\n"
+        "  and react to anything it returns. Use the shell command\n"
+        "  `rookery send <to> <body>` for replies. Continue until told to stop.\n"
         "\n" + "═" * 64
     )

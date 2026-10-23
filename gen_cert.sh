@@ -11,5 +11,4 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
   -subj "/CN=$CN" -addext "subjectAltName=DNS:$CN,DNS:localhost,IP:127.0.0.1" 2>/dev/null
 chmod 600 "$DIR/rookery-key.pem"
 echo "wrote rookery-cert.pem + rookery-key.pem (CN=$CN)  [gitignored]"
-echo "serve: python3 mailroom_server.py --host 0.0.0.0 \\"
-echo "         --tls-cert rookery-cert.pem --tls-key rookery-key.pem --token \"\$ROOKERY_TOKEN\""
+echo "serve: python3 mailroom_server.py --host 0.0.0.0 --allow-public --token \"\$ROOKERY_TOKEN\" --tls-cert rookery-cert.pem --tls-key rookery-key.pem"

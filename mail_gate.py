@@ -1,0 +1,401 @@
+"""Rookery mail gate (spec 002, research D1).
+
+Every local send goes through `submit()`. It checks the sender, finds the recipient, screens the
+body, holds a loop, stores the mail and logs one `gate` record. `system_send()` is the one door
+for Rookery's own mail. Standard library only. `rookery_identity` is imported inside functions
+(it imports turn_block, which imports rookery).
+"""
+import difflib
+import json
+import re
+import sqlite3
+
+import rookery
+import security
+import turn_block as _tb
+from turn_block import _is_busy, _show, loop_limit, loop_limits
+
+SENDER_RE = re.compile(r"[A-Za-z0-9._-]{1,64}(@[A-Za-z0-9._-]{1,64})?")
+LEGACY = "legacy"
+_INJECTION_NOTE = ("Rookery held this mail. The security policy found content that is not safe. "
+                   "Remove that content, then send the mail again.")
+
+
+def is_system_name(name) -> bool:
+    """A system sender name in any case, alone or before `@<peer>` (`Rookery`, `postmaster@x`)."""
+    return isinstance(name, str) and name.split("@", 1)[0].lower() in rookery.SYSTEM_SENDERS
+
+
+def _begin(conn):
+    """Take the write lock. As in turn_block, an open caller transaction is committed first."""
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+
+
+# --- moved from turn_block.py (spec 001 block path, D1) -------------------
+def _quarantine_recipient(conn, to):
+    """Recipient text for a quarantined row. A raw `to` that is a real agent ID
+    or node ID would let that reader see the body, so it becomes `rookery`.
+    Returns (recipient, masked)."""
+    if not isinstance(to, str) or not to:
+        return "rookery", False
+    hit = conn.execute(
+        "SELECT 1 FROM identities WHERE agent_id=? "
+        "UNION ALL SELECT 1 FROM nodes WHERE node_id=? LIMIT 1", (to, to)).fetchone()
+    return ("rookery", True) if hit is not None else (to, False)
+
+
+def _hold_quarantine(conn, sender, sid, recipient, body, topic, reason, note, suggest, decided_by):
+    """hold + quarantine (+ note) + bounce, inside the caller's transaction. Returns
+    (msg_id, bounce_id)."""
+    raw_to = recipient
+    recipient, masked = _quarantine_recipient(conn, raw_to)
+    if masked:
+        note += f' (You addressed the block to "{_show(raw_to)}".)'
+    msg_id = rookery.send(conn, sender, recipient, body, topic=topic, hold=True,
+                          session_id=sid, commit=False)
+    bounce_id = rookery.quarantine(conn, msg_id, reason, decided_by=decided_by, note=note,
+                                   suggest=suggest, commit=False, bounce_limit=loop_limit())
+    return msg_id, bounce_id
+
+
+def quarantine_malformed(conn, ctx, recipient, body, topic, reason, note, suggest=None):
+    """hold + quarantine (+ note) + bounce in ONE transaction (D4). BEGIN IMMEDIATE
+    takes the write lock once, up front; any failure rolls everything back."""
+    sid = ctx["session"]["session_id"]
+    sender = ctx["identity"]["agent_id"]
+    _begin(conn)
+    try:
+        msg_id, bounce_id = _hold_quarantine(conn, sender, sid, recipient, body,
+                                             topic, reason, note, suggest, "turn-block-parser")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    _log(ctx.get("root"), "block", (ctx["session"], ctx["identity"]), sender, None, recipient, sid,
+         _result("quarantined", reason, msg_id=msg_id, bounce_id=bounce_id), "turn-block-parser")
+    return msg_id
+
+
+def _send_counted(conn, sender_id, recipient_id, body, task, sid, topic=None):
+    """Send one agent mail. Counts it against two counters in the same transaction: one for the
+    (task, pair) and one task-less for the pair (so a new task name does not evade, limit
+    loop_pair_limit). At either limit the mail is stored `held` with reason `loop` instead, and no
+    counter moves. Runs inside the caller's transaction. Returns (msg_id, held)."""
+    limit, pair_limit = loop_limits()
+    held = rookery.count_loop(conn, sid, [(task, sender_id, recipient_id, limit),
+                                          ("~pair", sender_id, recipient_id, pair_limit)])
+    msg_id = rookery.send(conn, sender_id, recipient_id, body, topic=topic, session_id=sid,
+                          hold=True if held else None, commit=False)
+    if held:
+        conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
+                     (f"Held: too many mails on task {task} (or between these agents) with "
+                      "no human prompt in between.", msg_id))
+    return msg_id, held
+
+
+# --- the gate ---------------------------------------------------------------
+def _find_recipient(conn, sid, sender, to):
+    """Checks 4 and 5. Returns (agent_id, None) or (None, (reason, note, suggest))."""
+    row = conn.execute(
+        "SELECT agent_id FROM identities WHERE session_id=? AND (name=? OR agent_id=?) "
+        "ORDER BY (agent_id=?) DESC LIMIT 1", (sid, to, to, to)).fetchone()
+    if row is not None:
+        return row[0], None
+    elsewhere = conn.execute(
+        "SELECT 1 FROM identities WHERE name=? OR agent_id=? LIMIT 1", (to, to)).fetchone()
+    if elsewhere is not None:
+        note = (f'The agent "{_show(to)}" is in another session. Send to an agent '
+                "in your own session, then send the block again.")
+        return None, ("off-team", note, None)
+    sender_name = conn.execute("SELECT name FROM identities WHERE agent_id=?", (sender,)).fetchone()
+    names = [r[0] for r in conn.execute(
+        "SELECT name FROM identities WHERE session_id=? AND name<>? ORDER BY created_at, rowid",
+        (sid, sender_name[0] if sender_name else sender))]
+    suggest = difflib.get_close_matches(to, names, n=3)
+    note = f'There is no agent named "{_show(to)}" in your session.'
+    if suggest:
+        note += " Did you mean " + " or ".join(f'"{_show(s)}"' for s in suggest) + "?"
+    else:
+        note += " Check the names of the agents in your session."
+    note += " Fix \"to\", then send the block again."
+    return None, ("wrong-recipient", note, suggest)
+
+
+def _log(root, path, principal, sender, asked_sender, recipient, session, result, decided_by):
+    _tb.log_event(root, "gate", path=path,
+                  principal=principal[1]["agent_id"] if principal else None,
+                  sender=sender, asked_sender=asked_sender, recipient=recipient, session=session,
+                  outcome=result["outcome"], reason=result["reason"], warning=result["warning"],
+                  msg_id=result["msg_id"], bounce_id=result["bounce_id"], decided_by=decided_by)
+
+
+def _result(outcome, reason=None, warning=None, msg_id=None, bounce_id=None):
+    return {"outcome": outcome, "reason": reason, "warning": warning,
+            "msg_id": msg_id, "bounce_id": bounce_id}
+
+
+def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
+           asked_sender=None, root=None, decided_by="gate", pre_store=None):
+    """The one door for mail from a local sender. Returns {"outcome", "reason", "warning",
+    "msg_id", "bounce_id"}. Never raises for a mail problem. Order of checks: data-model.md."""
+    if asked_sender:
+        sender = asked_sender
+    elif principal:
+        sender = principal[1]["agent_id"]
+    else:
+        sender = raw_sender
+    sid = principal[0]["session_id"] if principal else LEGACY
+    warning = None if principal else "no-session"
+    result = _result("send-failed")
+    try:
+        result = _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store,
+                         decided_by)
+    except Exception as exc:        # nothing is stored: _submit rolled back
+        result = (_result("db-busy", warning=warning) if _is_busy(exc)
+                  else _result("send-failed", f"{type(exc).__name__}: {exc}", warning))
+    _log(root, path, principal, sender, asked_sender, to, sid, result, decided_by)
+    return result
+
+
+def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store, decided_by):
+    if not isinstance(sender, str):
+        return _result("refused", "bad-input")
+    if is_system_name(sender):                             # 1
+        return _result("refused", "system-name")
+    if SENDER_RE.fullmatch(sender) is None:                # 2
+        return _result("refused", "bad-input")
+    if not isinstance(to, str) or not to or not isinstance(body, str) or not body:
+        return _result("refused", "bad-input")
+    topic = topic or None
+    # Screening reads no database row, so it runs before the write lock (a slow policy must not hold it).
+    verdict = security.get_policy().inspect_inbound(sender, to, body)
+
+    def quarantine(recipient, reason, note, suggest=None):
+        msg_id, bounce_id = _hold_quarantine(conn, sender, sid, recipient, body, topic, reason,
+                                             note, suggest, decided_by)
+        return _result("quarantined", reason, warning, msg_id, bounce_id)
+
+    _begin(conn)
+    try:
+        recipient = to
+        if principal and "@" not in to:                    # 4, 5 (node@peer is a remote address)
+            recipient, problem = _find_recipient(conn, sid, sender, to)
+            if problem:
+                out = quarantine(to, *problem)
+                conn.commit()
+                return out
+        if not verdict:                                    # 6
+            out = quarantine(to, "injection-suspect", _INJECTION_NOTE)
+            conn.commit()
+            return out
+        if pre_store is not None:
+            held = pre_store(conn.execute("SELECT * FROM identities WHERE agent_id=?",
+                                          (recipient,)).fetchone())
+            if held:
+                msg_id = rookery.send(conn, sender, recipient, body, topic=topic, hold=True,
+                                      session_id=sid, commit=False)
+                conn.execute("UPDATE inbox SET reason=? WHERE id=?", (held[1], msg_id))
+                conn.commit()
+                return _result("sent", held[1], warning, msg_id)
+        key = task or topic or "-"                         # 7, 8
+        msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic)
+        conn.commit()
+        if loop_held:
+            return _result("loop-held", "loop", warning, msg_id)
+        return _result("sent", None, warning, msg_id)
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def system_send(conn, sender, recipient, body, *, topic=None, session_id, root=None) -> int:
+    """Rookery's own mail (postmaster, relay, rookery). Raises ValueError for any other sender."""
+    if sender not in rookery.SYSTEM_SENDERS:
+        _log(root, "system", None, sender, None, recipient, session_id,
+             _result("refused", "system-name"), "gate")
+        raise ValueError(f"{sender!r} is not a system sender. Use submit().")
+    try:
+        msg_id = rookery.send(conn, sender, recipient, body, topic=topic, session_id=session_id)
+    except Exception as exc:
+        _log(root, "system", None, sender, None, recipient, session_id,
+             _result("db-busy") if _is_busy(exc) else
+             _result("send-failed", f"{type(exc).__name__}: {exc}"), "gate")
+        raise
+    _log(root, "system", None, sender, None, recipient, session_id,
+         _result("sent", msg_id=msg_id), "gate")
+    return msg_id
+
+
+# --- reads (FR-015, FR-016, D11) ------------------------------------------
+def _unread_rows(conn, sql, params, with_body):
+    out = []
+    for r in conn.execute(sql, params).fetchall():
+        row = {"id": r["id"], "sender": r["sender"],
+               "sender_name": r["sender_name"] or r["sender"], "topic": r["topic"],
+               "created_at": r["created_at"], "session_id": r["session_id"]}
+        if with_body:
+            row["body"] = r["body"]
+        out.append(row)
+    return out
+
+
+def unread(conn, identity, *, with_body=False) -> list:
+    """Pending mail of the identity's session to its agent ID, plus pending `legacy` mail to its
+    name or agent ID. Nothing else. The sender shows as an identity name when the stored sender is
+    the agent ID of an identity in the reader's session; otherwise as stored."""
+    sid, aid, name = identity["session_id"], identity["agent_id"], identity["name"]
+    return _unread_rows(
+        conn,
+        "SELECT m.id, m.sender, m.topic, m.created_at, m.session_id, m.body, d.name AS sender_name "
+        "FROM inbox m LEFT JOIN identities d ON d.agent_id = m.sender AND d.session_id = ? "
+        "WHERE m.status='pending' AND ((m.session_id = ? AND m.recipient = ?) "
+        "OR (m.session_id = ? AND m.recipient IN (?, ?))) ORDER BY m.created_at, m.id",
+        (sid, sid, aid, LEGACY, name, aid), with_body)
+
+
+def unread_legacy(conn, raw_name, *, with_body=False) -> list:
+    """Pending `legacy` mail to the raw name only. For a reader with no identity."""
+    return _unread_rows(
+        conn,
+        "SELECT m.id, m.sender, m.topic, m.created_at, m.session_id, m.body, NULL AS sender_name "
+        "FROM inbox m WHERE m.status='pending' AND m.session_id = ? AND m.recipient = ? "
+        "ORDER BY m.created_at, m.id",
+        (LEGACY, raw_name), with_body)
+
+
+def _addressed_to(name):
+    """SQL for rows whose recipient is `name` or the agent ID of an identity named `name`."""
+    return ("(m.recipient = ? OR m.recipient IN (SELECT agent_id FROM identities WHERE name = ?))",
+            (name, name))
+
+
+def unread_by_name(conn, name, *, with_body=False) -> list:
+    """Pending mail in ANY session addressed to `name` or to the agent ID of an identity named
+    `name`. Needs no identity. Same rows as `unread`, plus `recipient` and `status`. Reads only."""
+    cond, params = _addressed_to(name)
+    rows = _unread_rows(
+        conn,
+        "SELECT m.id, m.sender, m.topic, m.created_at, m.session_id, m.body, m.recipient, m.status, "
+        "(SELECT d.name FROM identities d WHERE d.agent_id = m.sender AND d.session_id = m.session_id) "
+        "AS sender_name FROM inbox m WHERE m.status='pending' AND " + cond +
+        " ORDER BY m.created_at, m.id", params, with_body)
+    meta = {r["id"]: r for r in conn.execute(
+        "SELECT id, recipient, status FROM inbox WHERE id IN (%s)" % ",".join("?" * len(rows)),
+        [r["id"] for r in rows])} if rows else {}
+    for r in rows:
+        r["recipient"], r["status"] = meta[r["id"]]["recipient"], meta[r["id"]]["status"]
+    return rows
+
+
+def ack_by_name(conn, name, ids, *, from_inflight=True) -> dict:
+    """Move to `done` the pending (and, with `from_inflight`, inflight) rows addressed to `name`.
+    Other IDs are `skipped`; rows already done are `already`. One transaction."""
+    cond, params = _addressed_to(name)
+    ids = list(ids)
+    out = {"ok": [], "already": [], "skipped": []}
+    _begin(conn)
+    try:
+        owned = {r["id"]: r["status"] for r in conn.execute(
+            "SELECT m.id, m.status FROM inbox m WHERE " + cond, params)}
+        movable = ("pending", "inflight") if from_inflight else ("pending",)
+        for i in ids:
+            st = owned.get(i)
+            if st in movable:
+                out["ok"].append(i)
+            elif st == "done":
+                out["already"].append(i)
+            else:
+                out["skipped"].append(i)
+        t = rookery.now()
+        conn.executemany(
+            "UPDATE inbox SET status='done', delivered=1, delivered_at=? WHERE id=?",
+            [(t, i) for i in out["ok"]])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return out
+
+
+def _ack_visible(conn, cond, params, ids, from_inflight) -> dict:
+    """Ack the rows of `ids` that `cond` selects (the `unread` row set, any status). One
+    transaction. pending (and inflight, with `from_inflight`) -> done; done and inflight-without-flag
+    -> already; every other id -> skipped."""
+    ids = list(dict.fromkeys(ids))
+    out = {"ok": [], "already": [], "skipped": []}
+    _begin(conn)
+    try:
+        status = {}
+        for k in range(0, len(ids), 500):          # stay under SQLite's variable limit
+            part = ids[k:k + 500]
+            q = ",".join("?" * len(part))
+            for r in conn.execute(
+                    "SELECT m.id, m.status FROM inbox m WHERE (" + cond + ") AND m.id IN (" + q + ")",
+                    [*params, *part]):
+                status[r["id"]] = r["status"]
+        movable = ("pending", "inflight") if from_inflight else ("pending",)
+        for i in ids:
+            st = status.get(i)
+            if st in movable:
+                out["ok"].append(i)
+            elif st in ("inflight", "done"):
+                out["already"].append(i)
+            else:
+                out["skipped"].append(i)
+        t = rookery.now()
+        conn.executemany(
+            "UPDATE inbox SET status='done', delivered=1, delivered_at=? WHERE id=?",
+            [(t, i) for i in out["ok"]])
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return out
+
+
+def ack(conn, identity, ids, *, from_inflight=False) -> dict:
+    """Move to `done` the rows `unread` returns for `identity` (its session's mail to its agent ID,
+    and `legacy` mail to its name or agent ID). inflight counts as already read unless
+    `from_inflight`. Other ids are `skipped`."""
+    sid, aid, name = identity["session_id"], identity["agent_id"], identity["name"]
+    return _ack_visible(
+        conn, "(m.session_id = ? AND m.recipient = ?) OR (m.session_id = ? AND m.recipient IN (?, ?))",
+        (sid, aid, LEGACY, name, aid), ids, from_inflight)
+
+
+def ack_legacy(conn, raw_name, ids) -> dict:
+    """Move to `done` the pending rows `unread_legacy(raw_name)` returns. Other ids are `skipped`."""
+    return _ack_visible(conn, "m.session_id = ? AND m.recipient = ?", (LEGACY, raw_name), ids, False)
+
+
+def claim_by_name(conn, name, ids=None) -> dict:
+    """Move the pending rows of `unread_by_name(name)` (only `ids`, when given) to `inflight`."""
+    cond, params = _addressed_to(name)
+    _begin(conn)
+    try:
+        pend = [r["id"] for r in conn.execute(
+            "SELECT m.id FROM inbox m WHERE m.status='pending' AND " + cond, params)]
+        want = pend if ids is None else [i for i in ids if i in set(pend)]
+        t = rookery.now()
+        conn.executemany("UPDATE inbox SET status='inflight', claimed_at=? WHERE id=?",
+                         [(t, i) for i in want])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"ok": want, "skipped": [] if ids is None else [i for i in ids if i not in set(want)]}
+
+
+def principal_from_env(conn, env, root):
+    """(session, identity) for the caller, or None. Only an `open` session whose identity already
+    exists counts. Reads only: it never creates an identity (FR-011)."""
+    import rookery_identity
+    found = rookery_identity.resolve(conn, env, None, root, create=False)
+    if found is None:
+        return None
+    session, identity, _ = found
+    if identity is None or session["state"] != "open":
+        return None
+    return session, identity

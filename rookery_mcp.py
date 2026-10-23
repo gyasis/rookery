@@ -34,7 +34,9 @@ import time
 
 from mcp.server.fastmcp import Context, FastMCP
 
+import mail_gate
 import rookery as R
+import turn_block
 
 # Node identity: an explicit ROOKERY_NODE always wins. Otherwise fall back to a
 # unique-per-process id so two MCP sessions on one host never silently collide
@@ -49,25 +51,46 @@ URL = os.environ.get(
 
 # --- backend: local DB or remote sidecar (same surface either way) --------
 if URL:
+    import json
+    import urllib.error
+
     import mailctl  # reuses ROOKERY_TOKEN for the Authorization header
 
+    def _refusal(exc):
+        """An HTTP error from the sidecar as a gate-style result (the stdio path returns text)."""
+        reason = detail = None
+        if isinstance(exc, urllib.error.HTTPError):
+            try:
+                body = json.loads(exc.read() or b"{}")
+                reason, detail = body.get("error"), body.get("detail")
+            except Exception:
+                pass
+            reason = reason or f"HTTP {exc.code}"
+        else:
+            reason = f"unreachable: {getattr(exc, 'reason', exc)}"
+        return {"outcome": "refused", "reason": reason, "detail": detail}
+
     def _send(node, to, body, topic=None):
-        return mailctl.call(
-            URL,
-            "/send",
-            "POST",
-            {"sender": node, "recipient": to, "body": body, "topic": topic},
-        )["id"]
+        try:
+            return mailctl.call(
+                URL,
+                "/send",
+                "POST",
+                {"sender": node, "recipient": to, "body": body, "topic": topic},
+            )
+        except urllib.error.URLError as exc:      # HTTPError is a URLError
+            return _refusal(exc)
 
     def _pending(node):
         return mailctl.call(URL, "/inbox?node=" + node, "GET")["messages"]
 
-    def _consume(ids):
-        mailctl.call(URL, "/claim", "POST", {"ids": ids})
-        mailctl.call(URL, "/ack", "POST", {"ids": ids})
-
-    def _register(node):
-        mailctl.call(URL, "/register", "POST", {"node_id": node, "kind": "mcp"})
+    def _ack(ids, node, ctx=None):
+        # reads stay read-only (GET /inbox); this is the only call that marks mail read
+        try:
+            res = mailctl.call(URL, "/ack", "POST", {"node": node, "ids": ids})
+        except urllib.error.URLError as exc:
+            return {"ok": [], "already": [], "skipped": list(ids), "error": _refusal(exc)["reason"]}
+        return {k: res.get(k, []) for k in ("ok", "already", "skipped")}
 
     def _roster():
         card = mailctl.call(URL, "/.well-known/agent-card.json", "GET")
@@ -75,22 +98,34 @@ if URL:
 
 else:
 
-    def _send(node, to, body, topic=None):
+    def _pending(node, ctx=None):
+        """Unread mail for the caller, with bodies. Reads only (FR-032).
+        stdio: the session identity, else legacy mail to the node name.
+        Shared HTTP: no principal, so mail to the asked node name in any session (`unread_by_name`),
+        the rows the mailroom's /inbox shows for that name. A session filter would hide every
+        session mail from a caller that has no identity."""
         c = R.connect()
-        return R.send(c, node, to, body, topic)
+        try:
+            if HTTP:
+                return mail_gate.unread_by_name(c, node, with_body=True)
+            who = mail_gate.principal_from_env(c, os.environ, _root())
+            if who is None:
+                return mail_gate.unread_legacy(c, node, with_body=True)
+            return mail_gate.unread(c, who[1], with_body=True)
+        finally:
+            c.close()
 
-    def _pending(node):
+    def _ack(ids, node, ctx=None):
         c = R.connect()
-        return [dict(m) for m in R.fetch_undelivered(c, node)]
-
-    def _consume(ids):
-        c = R.connect()
-        R.claim(c, ids)
-        R.ack(c, ids)
-
-    def _register(node):
-        c = R.connect()
-        R.register_node(c, node, kind="mcp")
+        try:
+            if HTTP:
+                return mail_gate.ack_by_name(c, node, ids, from_inflight=False)
+            who = mail_gate.principal_from_env(c, os.environ, _root())
+            if who is None:
+                return mail_gate.ack_legacy(c, node, ids)
+            return mail_gate.ack(c, who[1], ids)
+        finally:
+            c.close()
 
     def _roster():
         c = R.connect()
@@ -98,9 +133,6 @@ else:
             r["node_id"]
             for r in c.execute("SELECT node_id FROM nodes ORDER BY node_id")
         ]
-
-
-_seen: set[str] = set()
 
 
 def _node(ctx: Context) -> str:
@@ -111,22 +143,25 @@ def _node(ctx: Context) -> str:
     hdr = req.headers if req is not None else {}
     node = hdr.get("x-rookery-node") or (
         f"claude-{HOST}-{(hdr.get('mcp-session-id') or 'nosession')[:8]}")
-    if node not in _seen:                  # register on first use, like startup did
-        _register(node)
-        _seen.add(node)
     return node
 
 
-def _drain(node):
-    """Return + consume new mail addressed to this session's node."""
-    msgs = _pending(node)
-    if msgs:
-        _consume([m["id"] for m in msgs])
-    return [{"from": m["sender"], "body": m["body"]} for m in msgs]
+def _asked_node(ctx: Context):
+    """Shared HTTP mode: the node name the caller asked for in `x-rookery-node`, else None."""
+    req = ctx.request_context.request
+    return (req.headers.get("x-rookery-node") if req is not None else None) or None
 
 
-if not HTTP:
-    _register(NODE)
+def _root():
+    return turn_block.gate_root()          # the gate log lives in one place (D15)
+
+
+def _read(node):
+    """Unread mail for this session's node. Never marks anything read (FR-032)."""
+    return [{"id": m["id"], "from": m.get("sender_name") or m["sender"], "body": m["body"]}
+            for m in _pending(node)]
+
+
 mcp = FastMCP("rookery")
 
 
@@ -135,30 +170,61 @@ def send(to: str, body: str, ctx: Context, topic: str = "") -> str:
     """Send a message to another agent/node in the Rookery mesh.
     `to` may be a node id, or node@mailroom for a federated mailroom."""
     node = _node(ctx)
-    mid = _send(node, to, body, topic or None)
-    return f"sent #{mid}: {node} -> {to}"
+    if URL:                                # remote sidecar: it runs the gate
+        res = _send(node, to, body, topic or None)
+        if res.get("outcome", "sent") == "sent":
+            return f"sent #{res.get('id')}: {node} -> {to}"
+        return f"{res['outcome']}: {res.get('reason')}"
+    conn = R.connect()
+    try:
+        root = _root()
+        # stdio: the caller is the session identity. Shared HTTP: no principal; the header
+        # names the sender (asked_sender), as before.
+        principal = None if HTTP else mail_gate.principal_from_env(conn, os.environ, root)
+        res = mail_gate.submit(conn, path="mcp-http" if HTTP else "mcp-stdio", principal=principal,
+                               raw_sender=node, to=to, body=body, topic=topic,
+                               asked_sender=_asked_node(ctx) if HTTP else None, root=root)
+    finally:
+        conn.close()
+    if res["outcome"] == "sent":
+        return f"sent #{res['msg_id']}: {node} -> {to}"
+    return f"{res['outcome']}: {res['reason']}"
 
 
 @mcp.tool()
-def check_inbox(ctx: Context) -> list:
-    """Return (and consume) any new messages addressed to this session."""
-    return _drain(_node(ctx))
+def check_inbox(ctx: Context) -> str:
+    """List the unread messages addressed to this session. Changes nothing: the mail stays
+    unread until you call ack(ids)."""
+    msgs = _read(_node(ctx))
+    if not msgs:
+        return "No unread mail."
+    lines = [f"#{m['id']} from {m['from']}: {m['body']}" for m in msgs]
+    lines.append("Mark read: ack([%s])" % ", ".join(str(m["id"]) for m in msgs))
+    return "\n".join(lines)
 
 
 @mcp.tool()
 async def await_message(ctx: Context, timeout: float = 30.0) -> list:
-    """Block up to `timeout` seconds for new mail to this session; return it
-    (consumed). Empty list on timeout. Use after send() to get a reply."""
+    """Block up to `timeout` seconds for unread mail to this session; return it (still unread:
+    call ack(ids) to mark it read). Empty list on timeout. Use after send() to get a reply."""
     # async + asyncio.sleep: a sync sleep here would stall the shared server's
     # event loop, freezing every OTHER session's calls for up to `timeout`.
     node = _node(ctx)
     deadline = time.time() + timeout
     while time.time() < deadline:
-        got = _drain(node)
+        got = _read(node)
         if got:
             return got
         await asyncio.sleep(1.0)
     return []
+
+
+@mcp.tool()
+def ack(ids: list[int], ctx: Context) -> dict:
+    """Mark mail read, by the ids that check_inbox / await_message showed. Returns the ids that
+    were marked (ok), were already read (already), or are not yours to ack (skipped)."""
+    res = _ack(list(ids), _node(ctx))
+    return {k: list(res.get(k, [])) for k in ("ok", "already", "skipped")}
 
 
 @mcp.tool()

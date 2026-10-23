@@ -236,6 +236,10 @@ def _new_identity(conn, session_id, name, previous_id=None) -> dict:
     transaction)."""
     safe_name(name, "agent name")
     _no_id_lookalike(name, "agent name")
+    from rookery import SYSTEM_SENDERS
+    if name.lower() in SYSTEM_SENDERS:
+        raise ValueError(f"The name {name!r} is a system sender name. Rookery uses it "
+                         "for its own mail. Use a different agent name.")
     s = get_session(conn, session_id)
     if s is None:
         raise ValueError(f"No Rookery session {session_id!r}.")

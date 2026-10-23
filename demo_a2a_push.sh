@@ -19,7 +19,7 @@ echo
 
 echo "## start webhook sink (:$SINK), sidecar (:$PORT), postmaster managing 'concierge'"
 python3 webhook_sink.py "$SINK" > /tmp/push_sink.log 2>&1 & WS=$!
-python3 mailroom_server.py --host 127.0.0.1 --port "$PORT" --public-url "$URL" --default-node concierge > /tmp/push_sidecar.log 2>&1 & SV=$!
+python3 mailroom_server.py --host 127.0.0.1 --port "$PORT" --public-url "$URL" --default-node concierge --allow-no-auth > /tmp/push_sidecar.log 2>&1 & SV=$!
 python3 postmaster.py --nodes concierge --engine mock --poll 0.5 > /tmp/push_pm.log 2>&1 & PM=$!
 trap 'kill $WS $SV $PM 2>/dev/null || true' EXIT
 sleep 2

@@ -291,15 +291,13 @@ def _current_identity(conn, root):
     return _row(s), _row(i), bindings
 
 
-def _unread_with_bodies(conn, agent_id):
-    """Unread = recipient is me AND status 'pending' (D7). Sender names come from
-    identities.name; the system sender 'rookery' keeps its own name."""
-    rows = conn.execute(
-        "SELECT m.id, m.sender, COALESCE(i.name, m.sender) AS sender_name, m.topic, "
-        "m.body, m.created_at FROM inbox m LEFT JOIN identities i ON i.agent_id = m.sender "
-        "WHERE m.recipient=? AND m.status='pending' ORDER BY m.created_at, m.id",
-        (agent_id,)).fetchall()
-    return [dict(r) for r in rows]
+def _unread_with_bodies(conn, identity):
+    """Unread = the gate's read filter (`mail_gate.unread`), the same rows the prompt notice
+    counts. Sender names come from identities.name; the system sender 'rookery' keeps its name."""
+    import mail_gate
+
+    return [{k: r[k] for k in ("id", "sender", "sender_name", "topic", "body", "created_at")}
+            for r in mail_gate.unread(conn, identity, with_body=True)]
 
 
 def _mail_text(s, i, msgs):
@@ -338,7 +336,7 @@ def _mail(args, read):
 
     def go(conn):
         s, i, bindings = _current_identity(conn, root)
-        msgs = _unread_with_bodies(conn, i["agent_id"])
+        msgs = _unread_with_bodies(conn, i)
         ids = [m["id"] for m in msgs]
         obj = {"agent_id": i["agent_id"], "name": i["name"],
                "session_id": s["session_id"], "session": s["name"],
@@ -369,36 +367,15 @@ def cmd_peek(args):
 
 
 def cmd_ack(args):
-    import rookery
+    import mail_gate
     import turn_block
 
     root = _mail_root()
 
     def go(conn):
         s, i, bindings = _current_identity(conn, root)
-        want = list(dict.fromkeys(args.ids))
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            status = {}
-            for k in range(0, len(want), 500):      # stay under SQLite's variable limit
-                part = want[k:k + 500]
-                q = ",".join("?" * len(part))
-                for r in conn.execute(
-                        f"SELECT id, status FROM inbox WHERE recipient=? AND id IN ({q})",
-                        [i["agent_id"], *part]):
-                    status[r["id"]] = r["status"]
-            ok = [n for n in want if status.get(n) == "pending"]
-            # inflight and done mean read. held, quarantined, dlq and unknown ids are skipped.
-            already = [n for n in want if status.get(n) in ("inflight", "done")]
-            skipped = [n for n in want if n not in status or
-                       status[n] not in ("pending", "inflight", "done")]
-            if ok:
-                rookery.claim(conn, ok, commit=False)     # pending -> inflight
-                rookery.ack(conn, ok, commit=False)       # inflight -> done
-            conn.commit()
-        except BaseException:
-            conn.rollback()
-            raise
+        res = mail_gate.ack(conn, i, args.ids, from_inflight=False)
+        ok, already, skipped = res["ok"], res["already"], res["skipped"]
         if root:
             turn_block.log_event(root, event="inbox-ack", session=s["session_id"],
                                  agent_id=i["agent_id"], name=i["name"],
@@ -416,6 +393,53 @@ def cmd_ack(args):
                        1 if skipped else 0)
         if skipped:
             sys.exit(1)
+
+    _run(args, go)
+
+
+# ------------------------------------------------------------ loop reset
+
+
+def cmd_loop_reset(args):
+    """Human command (FR-037): zero the loop counters of the pairs of NAME in the current session."""
+    import rookery_identity as ri
+    import turn_block
+
+    root = _mail_root()
+
+    def go(conn):
+        if args.legacy:
+            if not args.name:
+                _die("--legacy needs a NAME. Run: rookery loop reset --legacy NAME")
+            cur = conn.execute(
+                "UPDATE loop_counts SET count=0 WHERE session_id='legacy' AND count>0 "
+                "AND (a=? OR b=?)", (args.name, args.name))
+            n = cur.rowcount
+            conn.commit()
+            turn_block.log_event(None, "gate", outcome="loop-reset", path="cli", session="legacy",
+                                 agent_id=None, name=args.name, reset=n)
+            _out(args, {"agent_id": None, "name": args.name, "session": "legacy", "reset": n},
+                 f"Reset {n} loop counters for {args.name}.")
+            return
+        if args.name:
+            s = _env_session(conn)
+            i = _row(ri.get_identity(conn, args.name, s["session_id"]))
+            if not i:
+                _die(f'No agent "{args.name}" in session {s["name"]}. '
+                     "List them with: rookery identity list")
+        else:
+            s, i, _b = _current_identity(conn, root)
+        cur = conn.execute(
+            "UPDATE loop_counts SET count=0 WHERE session_id=? AND count>0 AND (a=? OR b=?)",
+            (s["session_id"], i["agent_id"], i["agent_id"]))
+        n = cur.rowcount
+        conn.commit()
+        turn_block.log_event(None, "gate", outcome="loop-reset", path="cli",
+                             session=s["session_id"], agent_id=i["agent_id"], name=i["name"],
+                             reset=n)
+        _out(args, {"agent_id": i["agent_id"], "name": i["name"], "session": s["session_id"],
+                    "reset": n},
+             f"Reset {n} loop counters for {i['name']}.")
 
     _run(args, go)
 
@@ -495,3 +519,13 @@ def add_parser(subparsers):
     p.add_argument("ids", nargs="+", type=int, metavar="ID")
     _json_flag(p)
     p.set_defaults(func=cmd_ack)
+
+    pl = subparsers.add_parser("loop", help="Manage the loop counters.")
+    sl = pl.add_subparsers(dest="loop_cmd", metavar="<action>")
+    sl.required = True
+    p = sl.add_parser("reset", help="Reset the loop counters of an agent in the current session.")
+    p.add_argument("name", nargs="?", metavar="NAME", help="Default: my own name.")
+    p.add_argument("--legacy", action="store_true",
+                   help="Reset the counters of a sender with no session (NAME is the raw name).")
+    _json_flag(p)
+    p.set_defaults(func=cmd_loop_reset)

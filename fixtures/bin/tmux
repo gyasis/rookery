@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Test double for tmux (T002). Appends json.dumps(sys.argv[1:]) as one line to the file named by env
+ROOKERY_FIXTURE_LOG, then exits 0. It does nothing else and never talks to a real tmux."""
+import json
+import os
+import sys
+
+with open(os.environ["ROOKERY_FIXTURE_LOG"], "a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\n")

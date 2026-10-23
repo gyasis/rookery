@@ -10,7 +10,7 @@ An agent collaborates through Rookery the moment it **knows three things** and
    breaker, or re-process stale messages
 
 You deliver this as the agent's **briefing** — its system prompt, first message,
-or (for a headless `claude -p` node) the task body. No code or MCP required for
+or (for a headless `claude -p` node) the task body. No code or MCP needed for
 the CLI variant.
 
 ---
@@ -21,16 +21,17 @@ Rookery is **asynchronous mail checked in bursts**, *not* instant messaging.
 Bake these rules into every briefing:
 
 1. **Send, then STOP — never busy-wait.** After you send, do **not** loop on
-   `inbox`, and **never** chain `sleep` + `inbox` (the host blocks repeated
-   identical calls — the circuit breaker). Replies are durable; you never lose
+   `inbox`. **Never** chain `sleep` + `inbox`. The host blocks repeated
+   identical calls (the circuit breaker). Replies are durable; you never lose
    one by not waiting.
-2. **If you expect a reply, schedule a *bounded* check** — use `/loop` (or
-   `ScheduleWakeup`) to check your inbox **every N minutes for a bounded window**
-   (e.g. every 4 min for 20 min, then stop). This is a *scheduled* wake — idle
-   and $0 between checks — not a poll loop. *(Proven: this is the pattern that
+2. **If you expect a reply, schedule a *bounded* check.** Use `/loop` (or
+   `ScheduleWakeup`) to check your inbox **every N minutes for a bounded window**.
+   For example, check every 4 min for 20 min, then stop. This is a *scheduled* wake. It is idle
+   and $0 between checks. It is not a poll loop. *(Proven: this is the pattern that
    ran clean with no breaker hits.)*
 3. **Track the last message id you handled; only act on `id > last`.**
-   `mailctl inbox` is a **non-destructive read**, so old messages re-surface.
+   `rookery inbox` (legacy: `mailctl inbox`) is a **non-destructive read**, so
+   old messages re-surface. Mark mail read with `rookery ack ID ...`.
    Remember the highest id you've processed and ignore anything `<=` it, or you
    will re-do work.
 4. **Check your inbox at the START of each turn / wake**, before anything else.
@@ -46,11 +47,13 @@ This is ASYNC MAIL checked in bursts — not instant chat.
 Mailroom URL:  {URL}
 Mesh token:    {TOKEN}
 
-SEND to {SIBLING}:
+SEND to {SIBLING} (legacy client `mailctl.py`; the current command is
+`rookery send {SIBLING} "your message"`):
   python3 {REPO}/mailctl.py send  --url {URL} --token {TOKEN} --to {SIBLING} --from {NODE} --body "your message"
 
 CHECK your inbox (at the start of every turn, and only ACT on messages newer
-than the last id you handled):
+than the last id you handled). Legacy client `mailctl.py`; the current
+command is `rookery inbox`, then `rookery ack ID ...`:
   python3 {REPO}/mailctl.py inbox --url {URL} --token {TOKEN} --node {NODE}
 
 MAIL DISCIPLINE — follow exactly:
@@ -74,7 +77,8 @@ If the agent has the rookery MCP loaded (QUICKSTART → Installation; set
 
 ```
 You are node "{NODE}" in a Rookery agent mesh; your sibling is "{SIBLING}".
-Use the rookery MCP tools: roster(), send("{SIBLING}", …), check_inbox().
+Use the rookery MCP tools: roster(), send("{SIBLING}", …), check_inbox(), ack(ids).
+check_inbox() does not mark mail read. Call ack() with the IDs it lists.
 Mail discipline: after send, STOP — don't block. If you expect a reply, check
 again on a /loop schedule (every few minutes, bounded), not by waiting. Only
 act on messages you haven't handled before. Reply by name.
@@ -92,8 +96,10 @@ You are node "architect" in a Rookery agent mesh. Your sibling is "triage".
 This is ASYNC MAIL checked in bursts — not instant chat.
 Mailroom: http://127.0.0.1:47821   Token: <T>
 
-SEND:   python3 ~/Documents/code/rookery/mailctl.py send  --url http://127.0.0.1:47821 --token <T> --to triage --from architect --body "..."
-CHECK:  python3 ~/Documents/code/rookery/mailctl.py inbox --url http://127.0.0.1:47821 --token <T> --node architect
+SEND (legacy mailctl.py; current: `rookery send triage "..."`):
+        python3 ~/Documents/code/rookery/mailctl.py send  --url http://127.0.0.1:47821 --token <T> --to triage --from architect --body "..."
+CHECK (legacy mailctl.py; current: `rookery inbox`, `rookery ack ID ...`):
+        python3 ~/Documents/code/rookery/mailctl.py inbox --url http://127.0.0.1:47821 --token <T> --node architect
 
 DISCIPLINE: After you send, STOP — do not poll, never chain sleep+inbox. If you
 expect a reply, `/loop 4m` check your inbox (act only on ids newer than the last

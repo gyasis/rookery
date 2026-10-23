@@ -12,7 +12,10 @@ locking is broken; peers talk to THIS service over TCP instead.
 import argparse
 import json
 import os
+import re
+import socket
 import ssl
+import sys
 import threading
 import time
 import urllib.request
@@ -23,6 +26,7 @@ import rookery as R
 import security  # swappable auth/authz/credential/inspection policy
 import mailroom_handshake
 import mailroom_bootstrap
+import mail_gate  # the one door for mail from a local sender
 
 # Set from CLI in main(). PUBLIC_URL is what goes in the Agent Card (how peers
 # reach us); DEFAULT_NODE routes A2A messages with no explicit recipient.
@@ -151,6 +155,62 @@ def _post_webhook(url, payload, token=None):
         pass
 
 
+# Contract "Calls": the HTTP status and the fixed `detail` text for a /send that stored nothing.
+_SEND_ERRORS = {
+    "system-name": (403, "This sender name is for the system. Use a different sender name."),
+    "bad-input": (400, "The sender, the recipient or the body is not valid. Check all three, "
+                       "then send the mail again."),
+    "db-busy": (503, "The database is busy. Send the mail again."),
+    "send-failed": (500, "The mail was not sent."),
+}
+
+
+def _send_error(res):
+    """(status, body) for a gate outcome that stored nothing, or None when /send answers 200."""
+    out = res["outcome"]
+    key = res["reason"] if out == "refused" else out if out in ("db-busy", "send-failed") else None
+    if key not in _SEND_ERRORS:
+        return None
+    code, detail = _SEND_ERRORS[key]
+    return code, {"error": key, "detail": detail}
+
+
+_BAD_IDS = "The ids must be a list of whole numbers. Check the list, then send the call again."
+
+_A2A_ERRORS = {"refused": -32602, "db-busy": -32006, "send-failed": -32603}
+
+
+def _a2a_gate_answer(res, msg, ctx):
+    """Contract "A2A outcomes": (error code, message) for a gate outcome that stored nothing, or a
+    `rejected` task result for a held mail, or None when the mail was sent."""
+    out = res["outcome"]
+    if out in _A2A_ERRORS:
+        # fixed text for db-busy and send-failed: a reason there can carry exception text
+        text = res["reason"] if out == "refused" else _SEND_ERRORS[out][1]
+        return ("error", _A2A_ERRORS[out], f"{out}: {text}")
+    if out in ("quarantined", "loop-held"):
+        return ("result", {"id": f"a2a-{res['msg_id']}", "contextId": ctx,
+                           "status": {"state": "rejected",
+                                      "message": f"{out}: {res['reason']}"},
+                           "history": [msg]})
+    return None
+
+
+def _a2a_meta(msg, params):
+    """The metadata dict of an A2A request ({} when it is not an object)."""
+    meta = msg.get("metadata") or params.get("metadata") or {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _a2a_sender(meta):
+    """`a2a-<from>` with `from` cleaned to [A-Za-z0-9._-] (no ':' since it is the MAILTO
+    delimiter), at most 64 characters in all; `client` when nothing is left."""
+    raw = meta.get("from")
+    clean = re.sub(r"[^A-Za-z0-9._-]+", "-", "" if raw is None else str(raw)).strip("-")
+    clean = clean[: 64 - len("a2a-")].strip("-")
+    return "a2a-" + (clean or "client")
+
+
 def _push_watch(sender, mid, tid, ctx, url, token, timeout=120):
     """Background: when the node replies, POST the completed Task to the client's
     webhook (A2A push notifications) instead of the client polling/streaming."""
@@ -195,22 +255,22 @@ def a2a_rpc(conn, rpc, principal="a2a"):
 
     if method == "message/send":
         msg = params.get("message") or {}
-        meta = msg.get("metadata") or params.get("metadata") or {}
+        meta = _a2a_meta(msg, params)
         recipient = meta.get("recipient") or DEFAULT_NODE
-        # colon-free sender id: ':' is the MAILTO:<node>:<text> delimiter, so an
-        # "a2a:client" sender would mis-route the reply.
-        sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
+        sender = _a2a_sender(meta)
         text = _a2a_text(msg.get("parts"))
         pol = security.get_policy()
         if not pol.authorize(principal, "task", recipient):
             return err(
                 -32003, f"principal '{principal}' not authorized to task '{recipient}'"
             )
-        chk = pol.inspect_inbound(sender, recipient, text)
-        if not chk:
-            return err(-32004, f"message rejected: {chk.reason}")
-        mid = R.send(conn, sender, recipient, text)
+        res = mail_gate.submit(conn, path="a2a", principal=None, raw_sender=sender,
+                               to=recipient, body=text)
+        mid = res["msg_id"]
         ctx = msg.get("contextId") or f"ctx-{mid}"
+        gate = _a2a_gate_answer(res, msg, ctx)
+        if gate is not None:                 # not sent: no push watcher for a task that is not live
+            return err(gate[1], gate[2]) if gate[0] == "error" else ok(gate[1])
         # A2A push notifications: if the client gave a webhook, POST the result later
         pn = (params.get("configuration") or {}).get(
             "pushNotificationConfig"
@@ -265,11 +325,29 @@ def a2a_rpc(conn, rpc, principal="a2a"):
     return err(-32601, f"method not supported: {method}")
 
 
+MAX_BODY = 1024 * 1024   # 1 MiB: the largest request body the mailroom reads
+
+_BAD_REQUEST = "The call is not valid. Check the JSON and the fields, then send the call again."
+_TOO_LARGE = "The body is too large. Send a smaller body."
+_SERVER_ERROR = "The mailroom could not do the call. Send the call again."
+
+
+class _BadInput(Exception):
+    pass
+
+
+class _TooLarge(Exception):
+    pass
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # quiet
 
+    _answered = False
+
     def _reply(self, obj, code=200):
+        self._answered = True
         b = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -278,10 +356,52 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b)
 
     def _json_body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        return json.loads(self.rfile.read(n) or b"{}")
+        """The JSON object of the request body. Raises _BadInput (400) or _TooLarge (413)."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise _BadInput()
+        if n < 0:
+            raise _BadInput()
+        if n > MAX_BODY:
+            raise _TooLarge()
+        try:
+            d = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:                   # bad JSON and bad UTF-8
+            raise _BadInput()
+        if not isinstance(d, dict):
+            raise _BadInput()
+        return d
+
+    def _guarded(self, handle):
+        """Run one request. A shape error answers 400, a too-large body 413, any other failure 500;
+        the text is fixed and the exception goes to the server log only."""
+        try:
+            handle()
+        except _TooLarge:
+            self.close_connection = True     # the body was not read
+            self._fail(413, "too-large", _TOO_LARGE)
+        except (_BadInput, KeyError, IndexError, TypeError, ValueError, AttributeError) as e:
+            print(f"[mailroom] bad input on {self.command} {self.path}: {e!r}", flush=True)
+            self._fail(400, "bad-input", _BAD_REQUEST)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:
+            print(f"[mailroom] error on {self.command} {self.path}: {e!r}", flush=True)
+            self._fail(500, "server-error", _SERVER_ERROR)
+
+    def _fail(self, code, error, detail):
+        if self._answered:
+            return                           # a reply or a stream is under way
+        self._reply({"error": error, "detail": detail}, code)
 
     def do_GET(self):
+        self._guarded(self._get)
+
+    def do_POST(self):
+        self._guarded(self._post)
+
+    def _get(self):
         u = urlparse(self.path)
         pol = security.get_policy()
         path_public = (
@@ -299,7 +419,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply(agent_card(c))
         if u.path == "/inbox":
             return self._reply(
-                {"messages": _rows(R.fetch_undelivered(c, q["node"][0]))}
+                {"messages": mail_gate.unread_by_name(c, q["node"][0], with_body=True)}
             )
         if u.path == "/thread":
             return self._reply({"messages": _rows(R.fetch_thread(c, q["node"][0]))})
@@ -322,9 +442,9 @@ class Handler(BaseHTTPRequestHandler):
         rid = rpc.get("id")
         params = rpc.get("params") or {}
         msg = params.get("message") or {}
-        meta = msg.get("metadata") or params.get("metadata") or {}
+        meta = _a2a_meta(msg, params)
         recipient = meta.get("recipient") or DEFAULT_NODE
-        sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
+        sender = _a2a_sender(meta)
         text = _a2a_text(msg.get("parts"))
         pol = security.get_policy()
         if not pol.authorize(principal, "task", recipient):
@@ -338,21 +458,17 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 }
             )
-        chk = pol.inspect_inbound(sender, recipient, text)
-        if not chk:
-            return self._reply(
-                {
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "error": {
-                        "code": -32004,
-                        "message": f"message rejected: {chk.reason}",
-                    },
-                }
-            )
-        mid = R.send(conn, sender, recipient, text)
+        res = mail_gate.submit(conn, path="a2a", principal=None, raw_sender=sender,
+                               to=recipient, body=text)
+        mid = res["msg_id"]
         tid, ctx = f"a2a-{mid}", (msg.get("contextId") or f"ctx-{mid}")
+        gate = _a2a_gate_answer(res, msg, ctx)
+        if gate is not None:                 # not sent: answer once, do not poll 60 s for it
+            body = ({"error": {"code": gate[1], "message": gate[2]}} if gate[0] == "error"
+                    else {"result": gate[1]})
+            return self._reply({"jsonrpc": "2.0", "id": rid, **body})
 
+        self._answered = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -412,7 +528,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def do_POST(self):
+    def _post(self):
         u = urlparse(self.path)
         pol = security.get_policy()
         principal = pol.authenticate(self.headers)
@@ -425,14 +541,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self._a2a_stream(c, d, principal)
             return self._reply(a2a_rpc(c, d, principal))
         if u.path == "/send":
-            mid = R.send(c, d["sender"], d["recipient"], d["body"], d.get("topic"))
-            return self._reply({"id": mid})
+            res = mail_gate.submit(
+                c, path="mailroom", principal=None, raw_sender=d.get("sender") or "anon",
+                to=d.get("recipient", d.get("to")), body=d.get("body"),
+                topic=d.get("topic") or "", asked_sender=d.get("sender") or None)
+            failed = _send_error(res)
+            if failed:
+                return self._reply(failed[1], failed[0])
+            return self._reply(
+                {"id": res["msg_id"], "outcome": res["outcome"], "reason": res["reason"]})
+        if u.path in ("/claim", "/ack"):
+            ids = d.get("ids")
+            if ids is not None and not (isinstance(ids, list) and all(
+                    isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+                return self._reply({"error": "bad-input", "detail": _BAD_IDS}, 400)
+        if u.path in ("/claim", "/ack") and not d.get("node"):
+            # An older mailctl copy on another host sends no node (FR-027). Keep its old
+            # behaviour: act on the given IDs, answer {"ok": true}. The token holder is trusted (D24).
+            (R.claim if u.path == "/claim" else R.ack)(c, d.get("ids") or [])
+            return self._reply({"ok": True})
         if u.path == "/claim":
-            R.claim(c, d["ids"])
-            return self._reply({"ok": True})
+            res = mail_gate.claim_by_name(c, d["node"], d.get("ids"))
+            return self._reply(res)
         if u.path == "/ack":
-            R.ack(c, d["ids"])
-            return self._reply({"ok": True})
+            res = mail_gate.ack_by_name(c, d["node"], d.get("ids") or [])
+            return self._reply(res)
         if u.path == "/register":
             R.register_node(
                 c,
@@ -460,9 +593,62 @@ class Handler(BaseHTTPRequestHandler):
         self._reply({"error": "not found"}, 404)
 
 
+LOCAL_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+class _Server6(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
+def server_class(host):
+    """The HTTP server class for `host`: IPv6 when the host holds a ':', else IPv4."""
+    return _Server6 if ":" in host else ThreadingHTTPServer
+
+
+def check_start(args):
+    """The start rules (contract: HTTP, Start). `args` needs host, token, allow_public, allow_no_auth.
+
+    Returns the list of WARNING lines (also printed). On a refusal it prints the reason to stderr and
+    raises SystemExit(2). A token comes from args.token, else from $ROOKERY_TOKEN.
+    """
+    token = getattr(args, "token", None) or os.environ.get("ROOKERY_TOKEN")
+    allow_no_auth = getattr(args, "allow_no_auth", False)
+    allow_public = getattr(args, "allow_public", False)
+    host = (getattr(args, "host", None) or "").strip() or "127.0.0.1"
+    args.host = host                         # the bind sites use the checked value
+    problems = []
+    if not token and not allow_no_auth:
+        problems.append(
+            "ERROR: no token. Give a token with --token or $ROOKERY_TOKEN, "
+            "or give --allow-no-auth to run without one."
+        )
+    if host not in LOCAL_HOSTS and not allow_public:
+        problems.append(
+            f"ERROR: --host {host} is not a local address. "
+            "Give --allow-public to serve other hosts."
+        )
+    if problems:
+        for line in problems:
+            print(line, file=sys.stderr, flush=True)
+        raise SystemExit(2)
+    warnings = []
+    if allow_public:
+        warnings.append(
+            "WARNING: --allow-public lets other hosts reach this mailroom. "
+            "Anyone who can reach the port can use it."
+        )
+    if allow_no_auth and not token:
+        warnings.append(
+            "WARNING: --allow-no-auth turns auth off. Every caller can send and read mail."
+        )
+    for line in warnings:
+        print(line, flush=True)
+    return warnings
+
+
 def main():
     ap = argparse.ArgumentParser(description="Rookery mailroom HTTP sidecar.")
-    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument(
         "--public-url",
@@ -489,14 +675,25 @@ def main():
         default=None,
         help="Ed25519 private key (PEM) -> sign the agent card",
     )
+    ap.add_argument(
+        "--allow-public",
+        action="store_true",
+        help="allow a --host other than 127.0.0.1, ::1 or localhost",
+    )
+    ap.add_argument(
+        "--allow-no-auth",
+        action="store_true",
+        help="start with no token (ignored when a token is set)",
+    )
     a = ap.parse_args()
+    check_start(a)
     global PUBLIC_URL, DEFAULT_NODE, CARD_KEY
     PUBLIC_URL = a.public_url or f"http://{a.host}:{a.port}"
     DEFAULT_NODE = a.default_node
     CARD_KEY = a.card_key
     policy = security.get_policy(token=a.token)  # seed the swappable security policy
     R.connect()  # ensure DB + schema exist
-    srv = ThreadingHTTPServer((a.host, a.port), Handler)
+    srv = server_class(a.host)((a.host, a.port), Handler)
     scheme = "http"
     if a.tls_cert and a.tls_key:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

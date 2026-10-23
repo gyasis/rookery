@@ -10,7 +10,9 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import tempfile
+import threading
 import time
 import unicodedata
 
@@ -21,6 +23,7 @@ SAFE_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
 _LOG_FILES = {
     "turn-block": os.path.join("logs", "turn-block.jsonl"),
     "postmaster": os.path.join("postmaster", "postmaster.jsonl"),
+    "gate": os.path.join("logs", "gate.jsonl"),
 }
 _LOGGERS: dict = {}   # log path -> Logger, one handler per file
 
@@ -59,7 +62,15 @@ def workspace(root: str, session_name: str, agent_name: str) -> str:
     return path
 
 
+_LOGGER_LOCK = threading.Lock()
+
+
 def _logger_for(path: str) -> logging.Logger:
+    with _LOGGER_LOCK:      # the mailroom and the shared MCP server are threaded
+        return _logger_for_locked(path)
+
+
+def _logger_for_locked(path: str) -> logging.Logger:
     lg = _LOGGERS.get(path)
     if lg is not None and not os.path.exists(path):
         # file deleted externally: the handler writes to an unlinked inode
@@ -79,19 +90,31 @@ def _logger_for(path: str) -> logging.Logger:
     return lg
 
 
-def log_event(root: str, stream: str = "turn-block", **fields) -> None:
+def gate_root() -> str:
+    """ROOKERY_ROOT, else ~/.rookery. The mailroom and the shared MCP server have no project name (D15)."""
+    return os.environ.get("ROOKERY_ROOT") or os.path.expanduser("~/.rookery")
+
+
+def log_event(root, stream: str = "turn-block", **fields) -> None:
     """Append one JSON line (ts + fields) to the stream's rotated log (D15).
 
     Fields by convention: session, agent_id, name, task, adapter, outcome,
-    reason, msg_id. Logging never raises.
+    reason, msg_id. Logging never raises. The `gate` stream takes root=None
+    (see gate_root) and prints one line to stderr when a write fails.
     """
     try:
+        if root is None:
+            root = gate_root()
         rel = _LOG_FILES[stream]
         rec = {"ts": rookery.now()}
         rec.update(fields)
         _logger_for(os.path.join(root, rel)).info(json.dumps(rec, default=str))
-    except Exception:
-        pass
+    except Exception as exc:
+        if stream == "gate":
+            try:
+                print(f"rookery: cannot write the gate log: {exc}", file=sys.stderr)
+            except Exception:
+                pass   # a closed stderr must not make logging raise
 
 
 def _schema_current(conn: sqlite3.Connection) -> bool:
@@ -394,7 +417,6 @@ def _validate(raw, root):
 
 # --- Dispatch (T018; research D3, D4, D17, D22, FR-007, FR-035) --------------
 import datetime
-import difflib
 import fcntl
 import hashlib
 import secrets
@@ -448,42 +470,6 @@ def _is_busy(exc) -> bool:
     return isinstance(exc, sqlite3.OperationalError) and ("locked" in msg or "busy" in msg)
 
 
-def _quarantine_recipient(conn, to):
-    """Recipient text for a quarantined row. A raw `to` that is a real agent ID
-    or node ID would let that reader see the body, so it becomes `rookery`.
-    Returns (recipient, masked)."""
-    if not isinstance(to, str) or not to:
-        return "rookery", False
-    hit = conn.execute(
-        "SELECT 1 FROM identities WHERE agent_id=? "
-        "UNION ALL SELECT 1 FROM nodes WHERE node_id=? LIMIT 1", (to, to)).fetchone()
-    return ("rookery", True) if hit is not None else (to, False)
-
-
-def _hold_and_quarantine(conn, ctx, recipient, body, topic, reason, note, suggest=None):
-    """hold + quarantine (+ note) + bounce in ONE transaction (D4). BEGIN IMMEDIATE
-    takes the write lock once, up front; any failure rolls everything back."""
-    sid = ctx["session"]["session_id"]
-    raw_to = recipient
-    recipient, masked = _quarantine_recipient(conn, raw_to)
-    if masked:
-        note += f' (You addressed the block to "{_show(raw_to)}".)'
-    if conn.in_transaction:
-        conn.commit()
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        msg_id = rookery.send(conn, ctx["identity"]["agent_id"], recipient, body,
-                              topic=topic, hold=True, session_id=sid, commit=False)
-        rookery.quarantine(conn, msg_id, reason, decided_by="turn-block-parser",
-                           note=note, suggest=suggest, commit=False,
-                           bounce_limit=loop_limit())
-        conn.commit()
-    except BaseException:
-        conn.rollback()
-        raise
-    return msg_id
-
-
 DEFAULT_LOOP_LIMIT = 10
 
 
@@ -517,31 +503,6 @@ def reset_loop_counts(conn, agent_id) -> int:
                        (agent_id, agent_id))
     conn.commit()
     return cur.rowcount
-
-
-def _send_counted(conn, sender_id, recipient_id, body, task, sid):
-    """Send one agent mail. Counts it against two counters in the same transaction: one for the
-    (task, pair) and one task-less for the pair (so a new task name does not evade, limit
-    loop_pair_limit). At either limit the mail is stored `held` with reason `loop` instead, and no
-    counter moves. Returns (msg_id, held)."""
-    limit, pair_limit = loop_limits()
-    if conn.in_transaction:
-        conn.commit()
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        held = rookery.count_loop(conn, sid, [(task, sender_id, recipient_id, limit),
-                                              ("~pair", sender_id, recipient_id, pair_limit)])
-        msg_id = rookery.send(conn, sender_id, recipient_id, body, topic=task, session_id=sid,
-                              hold=True if held else None, commit=False)
-        if held:
-            conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
-                         (f"Held: too many mails on task {task} (or between these agents) with "
-                          "no human prompt in between.", msg_id))
-        conn.commit()
-    except BaseException:
-        conn.rollback()
-        raise
-    return msg_id, held
 
 
 def _top_level_failure(ctx, exc, block=None, raw=None):
@@ -600,6 +561,7 @@ def dispatch_block(conn, raw, ctx):
 
 
 def _dispatch_block(conn, raw, ctx):
+    import mail_gate    # local: mail_gate imports this module
     root, adapter = ctx["root"], ctx.get("adapter")
     keep = adapter in ("stop", "turn")   # the outbox adapter never puts a block back (D3)
     block, note = validate(raw, root)
@@ -629,7 +591,7 @@ def _dispatch_block(conn, raw, ctx):
                 pass
             recipient = to[:MAX_RAW_TO_CHARS] if isinstance(to, str) and to else "rookery"
             body = _cap_raw(raw)
-            msg_id = _hold_and_quarantine(conn, ctx, recipient, body, None, "malformed", note)
+            msg_id = mail_gate.quarantine_malformed(conn, ctx, recipient, body, None, "malformed", note)
             return done(None, "quarantined", msg_id, "malformed")
 
         if keep:   # FR-009: end-of-turn adapters only; before any DB work, outside any transaction
@@ -641,45 +603,36 @@ def _dispatch_block(conn, raw, ctx):
 
         to, task = block["to"], block["task"]
         compact = json.dumps(block, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
-        recipient = conn.execute(
-            "SELECT agent_id FROM identities WHERE session_id=? AND (name=? OR agent_id=?) "
-            "ORDER BY (agent_id=?) DESC LIMIT 1",
-            (sid, to, to, to)).fetchone()
-        if recipient is None:
-            elsewhere = conn.execute(
-                "SELECT 1 FROM identities WHERE name=? OR agent_id=? LIMIT 1", (to, to)).fetchone()
-            if elsewhere is not None:
-                note = (f'The agent "{_show(to)}" is in another session. Send to an agent '
-                        "in your own session, then send the block again.")
-                msg_id = _hold_and_quarantine(conn, ctx, to, compact, task, "off-team", note)
-                return done(block, "quarantined", msg_id, "off-team")
-            names = [r[0] for r in conn.execute(
-                "SELECT name FROM identities WHERE session_id=? AND name<>? ORDER BY created_at, rowid",
-                (sid, sender["name"]))]
-            suggest = difflib.get_close_matches(to, names, n=3)
-            note = f'There is no agent named "{_show(to)}" in your session.'
-            if suggest:
-                note += " Did you mean " + " or ".join(f'"{_show(s)}"' for s in suggest) + "?"
-            else:
-                note += " Check the names of the agents in your session."
-            note += " Fix \"to\", then send the block again."
-            msg_id = _hold_and_quarantine(conn, ctx, to, compact, task, "wrong-recipient",
-                                          note, suggest=suggest)
-            return done(block, "quarantined", msg_id, "wrong-recipient")
-
         if block["kind"] == "handoff" and block["status"] == "in-progress":
-            return done(block, "handoff-pending",
-                        reason="handoff is still in-progress; nothing sent")
-
-        msg_id, held = _send_counted(conn, sender["agent_id"], recipient[0], compact, task, sid)
-        if held:
+            # Stores no row (spec 001), so it is checked here, not through submit's pre_store.
+            # A recipient problem still quarantines first, as before.
+            if mail_gate._find_recipient(conn, sid, sender["agent_id"], to)[1] is None:
+                return done(block, "handoff-pending",
+                            reason="handoff is still in-progress; nothing sent")
+        res = mail_gate.submit(conn, path="block", principal=(ctx["session"], sender),
+                               raw_sender=sender["agent_id"], to=to, body=compact, topic=task,
+                               task=task, asked_sender=None, root=root,
+                               decided_by="turn-block-parser")
+        outcome, msg_id = res["outcome"], res["msg_id"]
+        if outcome == "quarantined":
+            return done(block, "quarantined", msg_id, res["reason"])
+        if outcome == "loop-held":
             if keep:     # park it: the next prompt notice names it. No bounce mail (it would feed the loop).
                 try:
                     _put_back(ctx, block, raw, failed=True, reason="loop-held")
                 except Exception as werr:
                     return done(block, "loop-held", msg_id, f"loop (could not keep the block: {werr})")
             return done(block, "loop-held", msg_id, "loop")
-        return done(block, "sent", msg_id)
+        if outcome == "sent":
+            return done(block, "sent", msg_id)
+        # db-busy, send-failed, refused: nothing stored; keep the block
+        reason = res["reason"] or "database is busy"
+        if keep:
+            try:
+                _put_back(ctx, block, raw, failed=False)
+            except Exception as werr:
+                reason += f" (could not keep the block: {werr})"
+        return done(block, "db-busy" if outcome == "db-busy" else "send-failed", reason=reason)
     except Exception as exc:     # send/quarantine failed: log, keep the block, never raise
         try:
             conn.rollback()
@@ -785,23 +738,16 @@ MAX_FAILED_LISTED = 20   # newest failed blocks one notice pass will list
 
 
 def unread(conn, agent_id) -> list:
-    """Unread mail of agent_id (D7): recipient=agent_id and status='pending', oldest first.
+    """Unread mail of agent_id (D7, D11): `mail_gate.unread` for its identity, so only its own
+    session's mail plus `legacy` mail to its name or agent ID. Oldest first.
     Rows: id, sender (raw), sender_name, topic, created_at, session_id. No body.
-    sender_name: identities.name for an agent ID; the string itself otherwise
-    ("rookery" for a bounce or other system sender, a node name for legacy mail)."""
-    rows = conn.execute(
-        "SELECT i.id, i.sender, i.topic, i.created_at, i.session_id, d.name AS sender_name "
-        "FROM inbox i LEFT JOIN identities d ON d.agent_id = i.sender "
-        "WHERE i.recipient=? AND i.status='pending' ORDER BY i.created_at, i.id",
-        (agent_id,)).fetchall()
-    out = []
-    for r in rows:
-        r = dict(r) if not isinstance(r, dict) else r
-        out.append({"id": r["id"], "sender": r["sender"],
-                    "sender_name": r["sender_name"] or r["sender"],
-                    "topic": r["topic"], "created_at": r["created_at"],
-                    "session_id": r["session_id"]})
-    return out
+    An agent ID with no identity has no session, so it reads nothing."""
+    import mail_gate
+    ident = conn.execute("SELECT agent_id, session_id, name FROM identities WHERE agent_id=?",
+                         (agent_id,)).fetchone()
+    if ident is None:
+        return []
+    return mail_gate.unread(conn, dict(ident))
 
 
 def unread_summary(conn, agent_id) -> dict:

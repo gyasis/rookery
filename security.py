@@ -105,7 +105,9 @@ class DefaultPolicy(SecurityPolicy):
         if not self.token:
             return "anon"  # auth disabled
         h = headers.get("Authorization", "") if headers else ""
-        if h.startswith("Bearer ") and hmac.compare_digest(h[7:].strip(), self.token):
+        if h.startswith("Bearer ") and hmac.compare_digest(
+            h[7:].strip().encode("utf-8"), self.token.encode("utf-8")
+        ):
             return "bearer"
         return None
 

@@ -23,8 +23,8 @@ export ROOKERY_MAILROOMS="$DIRECTORY"
 echo "## directory:"; cat "$DIRECTORY"; echo
 
 echo "## bring up mailroom HOME (:8765) and MAC (:8766) — sidecar + relay each; MAC runs node 'bob'"
-ROOKERY_DB="$HOME_DB" python3 mailroom_server.py --host 127.0.0.1 --port 8765 > /tmp/fed_sh.log 2>&1 & SH=$!
-ROOKERY_DB="$MAC_DB"  python3 mailroom_server.py --host 127.0.0.1 --port 8766 > /tmp/fed_sm.log 2>&1 & SM=$!
+ROOKERY_DB="$HOME_DB" python3 mailroom_server.py --host 127.0.0.1 --port 8765 --allow-no-auth > /tmp/fed_sh.log 2>&1 & SH=$!
+ROOKERY_DB="$MAC_DB"  python3 mailroom_server.py --host 127.0.0.1 --port 8766 --allow-no-auth > /tmp/fed_sm.log 2>&1 & SM=$!
 ROOKERY_DB="$HOME_DB" ROOKERY_MAILROOM=home python3 relay.py --poll 0.5 > /tmp/fed_rh.log 2>&1 & RH=$!
 ROOKERY_DB="$MAC_DB"  ROOKERY_MAILROOM=mac  python3 relay.py --poll 0.5 > /tmp/fed_rm.log 2>&1 & RM=$!
 ROOKERY_DB="$MAC_DB"  python3 postmaster.py --nodes bob --engine mock --poll 0.5 > /tmp/fed_pm.log 2>&1 & PM=$!

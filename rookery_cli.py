@@ -2,6 +2,7 @@
 """Rookery CLI — unified entrypoint for the Rookery agent-mesh sidecar.
 
 rookery_cli.py serve   [--host] [--port] [--public-url] [--card-key] [--token]
+                         [--allow-public] [--allow-no-auth]
 rookery_cli.py up      [url]    [--node-id] [--insecure-tls]
 rookery_cli.py approve [--url]  [--token]
 
@@ -39,7 +40,7 @@ def build_parser():
     # --- serve ---
     p_serve = sub.add_parser("serve", help="Run the mailroom HTTP sidecar.")
     p_serve.add_argument(
-        "--host", default="0.0.0.0", help="Bind host (default 0.0.0.0)"
+        "--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)"
     )
     p_serve.add_argument(
         "--port", type=int, default=8765, help="Bind port (default 8765)"
@@ -58,6 +59,16 @@ def build_parser():
         "--token",
         default=os.environ.get("ROOKERY_TOKEN"),
         help="Bearer token for non-public endpoints (default $ROOKERY_TOKEN)",
+    )
+    p_serve.add_argument(
+        "--allow-public",
+        action="store_true",
+        help="allow a --host other than 127.0.0.1, ::1 or localhost",
+    )
+    p_serve.add_argument(
+        "--allow-no-auth",
+        action="store_true",
+        help="start with no token (ignored when a token is set)",
     )
     p_serve.set_defaults(func=cmd_serve)
 

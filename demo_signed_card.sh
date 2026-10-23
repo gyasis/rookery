@@ -16,7 +16,7 @@ echo
 
 echo "## sidecar serving a SIGNED agent card"
 python3 mailroom_server.py --host 127.0.0.1 --port "$PORT" --public-url "$URL" \
-  --card-key rookery-card-key.pem > /tmp/sign_sidecar.log 2>&1 &
+  --card-key rookery-card-key.pem --allow-no-auth > /tmp/sign_sidecar.log 2>&1 &
 SV=$!
 trap 'kill $SV 2>/dev/null || true' EXIT
 sleep 1.5

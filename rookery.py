@@ -220,15 +220,19 @@ def hold_enabled() -> bool:
     return os.environ.get("ROOKERY_HOLD", "").lower() in ("1", "true", "yes", "on")
 
 
-def send(conn, sender, recipient, body, topic=None, hold=None, session_id=None,
+def send(conn, sender, recipient, body, topic=None, hold=None, *, session_id,
          commit=True):
+    """The one low-level insert. `session_id` is required and never defaults to `legacy`
+    (FR-005): only mail_gate and rookery itself call this."""
+    if not session_id:
+        raise ValueError("rookery.send needs a session_id")
     if hold is None:
         hold = hold_enabled() and sender not in SYSTEM_SENDERS
     cur = conn.execute(
         "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at, session_id) "
         "VALUES(?,?,?,?,?,0,?,?)",
         (sender, recipient, body, topic, "held" if hold else "pending", now(),
-         session_id or "legacy"),
+         session_id),
     )
     if commit:
         conn.commit()
@@ -396,7 +400,7 @@ def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce
     held = bounce_limit is not None and count_loop(
         conn, m["session_id"], [("~bounce", "rookery", m["sender"], bounce_limit)])
     bid = send(conn, "rookery", m["sender"], body, topic=m["topic"],
-               session_id=m["session_id"], hold=True if held else None, commit=False)
+               session_id=m["session_id"] or "legacy", hold=True if held else None, commit=False)
     if held:                                  # FR-039: a bounce loop is held, not delivered
         conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
                      ("Held: too many bounces to this agent with no human prompt in between.", bid))

@@ -29,28 +29,28 @@ class HeldQuarantine(unittest.TestCase):
 
     def test_hold_off_by_default(self):
         os.environ.pop("ROOKERY_HOLD")
-        mid = R.send(self.conn, "researcher", "law-counsel", "hi", "TASK-1")
+        mid = R.send(self.conn, "researcher", "law-counsel", "hi", "TASK-1", session_id="legacy")
         self.assertEqual(self._status(mid), "pending")
 
     def test_agent_mail_held_and_invisible_to_recipient(self):
-        mid = R.send(self.conn, "researcher", "law-counsel", "hi", "TASK-1")
+        mid = R.send(self.conn, "researcher", "law-counsel", "hi", "TASK-1", session_id="legacy")
         self.assertEqual(self._status(mid), "held")
         self.assertEqual(R.fetch_undelivered(self.conn, "law-counsel"), [])
         self.assertEqual([r["id"] for r in R.list_held(self.conn)], [mid])
 
     def test_system_senders_never_held(self):
         for s in R.SYSTEM_SENDERS:
-            self.assertEqual(self._status(R.send(self.conn, s, "x", "notice")), "pending")
+            self.assertEqual(self._status(R.send(self.conn, s, "x", "notice", session_id="legacy")), "pending")
 
     def test_release_delivers(self):
-        mid = R.send(self.conn, "researcher", "law-counsel", "hi", "TASK-1")
+        mid = R.send(self.conn, "researcher", "law-counsel", "hi", "TASK-1", session_id="legacy")
         R.release(self.conn, mid, "tev1")
         r = R.get_message(self.conn, mid)
         self.assertEqual((r["status"], r["verdict"], r["decided_by"]), ("pending", "release", "tev1"))
         self.assertEqual(len(R.fetch_undelivered(self.conn, "law-counsel")), 1)
 
     def test_quarantine_bounces_to_sender(self):
-        mid = R.send(self.conn, "researcher", "swe", "is this legal?", "TASK-1")
+        mid = R.send(self.conn, "researcher", "swe", "is this legal?", "TASK-1", session_id="legacy")
         bid = R.quarantine(self.conn, mid, "wrong-recipient", "tev1", note="legal q", suggest="law-counsel")
         r = R.get_message(self.conn, mid)
         self.assertEqual((r["status"], r["reason"]), ("quarantined", "wrong-recipient"))
@@ -62,18 +62,18 @@ class HeldQuarantine(unittest.TestCase):
         self.assertEqual((body["kind"], body["msg_id"], body["suggest"]), ("bounce", mid, "law-counsel"))
 
     def test_quarantine_no_bounce(self):
-        mid = R.send(self.conn, "researcher", "swe", "x")
+        mid = R.send(self.conn, "researcher", "swe", "x", session_id="legacy")
         self.assertIsNone(R.quarantine(self.conn, mid, "unneeded", "human", bounce=False))
         self.assertEqual(R.fetch_undelivered(self.conn, "researcher"), [])
 
     def test_bad_reason_rejected(self):
-        mid = R.send(self.conn, "researcher", "swe", "x")
+        mid = R.send(self.conn, "researcher", "swe", "x", session_id="legacy")
         with self.assertRaises(ValueError):
             R.quarantine(self.conn, mid, "spam", "human")
         self.assertEqual(self._status(mid), "held")
 
     def test_decide_only_from_held(self):
-        mid = R.send(self.conn, "researcher", "swe", "x")
+        mid = R.send(self.conn, "researcher", "swe", "x", session_id="legacy")
         R.release(self.conn, mid, "human")
         with self.assertRaises(ValueError):
             R.quarantine(self.conn, mid, "unneeded", "human")
@@ -81,7 +81,7 @@ class HeldQuarantine(unittest.TestCase):
             R.release(self.conn, mid, "human")
 
     def test_unquarantine_keeps_reason_as_correction_label(self):
-        mid = R.send(self.conn, "researcher", "swe", "x")
+        mid = R.send(self.conn, "researcher", "swe", "x", session_id="legacy")
         R.quarantine(self.conn, mid, "unneeded", "tev1", bounce=False)
         R.unquarantine(self.conn, mid, "human")
         r = R.get_message(self.conn, mid)
@@ -91,9 +91,9 @@ class HeldQuarantine(unittest.TestCase):
             R.unquarantine(self.conn, mid, "human")
 
     def test_labels_export(self):
-        a = R.send(self.conn, "researcher", "law-counsel", "a")
-        b = R.send(self.conn, "researcher", "swe", "b")
-        R.send(self.conn, "researcher", "swe", "undecided")
+        a = R.send(self.conn, "researcher", "law-counsel", "a", session_id="legacy")
+        b = R.send(self.conn, "researcher", "swe", "b", session_id="legacy")
+        R.send(self.conn, "researcher", "swe", "undecided", session_id="legacy")
         R.release(self.conn, a, "tev1")
         R.quarantine(self.conn, b, "wrong-recipient", "tev1", bounce=False)
         got = {r["id"]: r["verdict"] for r in R.screening_labels(self.conn)}

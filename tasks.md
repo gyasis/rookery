@@ -1,1 +1,1 @@
-specs/001-rookery-init-turn-block/tasks.md
+specs/002-mail-gate/tasks.md

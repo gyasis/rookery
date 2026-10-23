@@ -7,12 +7,13 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 export ROOKERY_DB="$DIR/rookery.db"
 PORT=8765
+export ROOKERY_TOKEN="${ROOKERY_TOKEN:-demo-token}"   # mailctl reads this too
 
 ./cleanup.sh
 echo
 
 echo "## starting the mailroom sidecar on 127.0.0.1:$PORT"
-python3 mailroom_server.py --host 127.0.0.1 --port "$PORT" > /tmp/rk_sidecar.log 2>&1 &
+python3 mailroom_server.py --host 127.0.0.1 --port "$PORT" --token "$ROOKERY_TOKEN" > /tmp/rk_sidecar.log 2>&1 &
 SV=$!
 trap 'kill $SV ${LP:-} 2>/dev/null || true' EXIT
 sleep 1
@@ -38,5 +39,5 @@ cat /tmp/rk_remote.log
 echo
 echo "demo_multihost (loopback) complete."
 echo "## For a real LAN run: copy mailctl.py to the peer and run:"
-echo "   python3 mailctl.py loop --url http://<linux-host>:$PORT --node macbot"
-echo "   (replace <linux-host> with the DB host's LAN IP; sidecar must bind --host 0.0.0.0)"
+echo "   python3 mailctl.py loop --url http://<linux-host>:$PORT --node macbot --token \"\$ROOKERY_TOKEN\"   (legacy client; rookery send/inbox/ack are the current commands)"
+echo "   (replace <linux-host> with the DB host's LAN IP; the sidecar then needs --host 0.0.0.0 --allow-public --token ...)"

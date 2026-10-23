@@ -22,6 +22,7 @@ import ssl
 import time
 import urllib.request
 
+import mail_gate
 import rookery as R
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -73,8 +74,10 @@ def _dead_letter(conn, msg, reason):
     log(f"DEAD-LETTER #{msg['id']} ({msg['sender']} -> {msg['recipient']}): {reason}")
     # alert the sender — unless this IS a dead-letter notice (avoid alert loops)
     if not (msg["body"] or "").startswith("DEAD-LETTER:"):
-        R.send(conn, "relay", msg["sender"],
-               f"DEAD-LETTER: your message to {msg['recipient']} was not delivered — {reason}")
+        mail_gate.system_send(
+            conn, "relay", msg["sender"],
+            f"DEAD-LETTER: your message to {msg['recipient']} was not delivered — {reason}",
+            session_id=msg["session_id"] or "legacy")
 
 
 def run(self_id, directory, poll):

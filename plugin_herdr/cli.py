@@ -126,8 +126,8 @@ the sender directly.
 
 This is ASYNC MAIL checked in bursts, not instant chat:
 - Check your inbox at the START of each turn.
-- Track the highest message id you have handled; act only on ids above it. \
-Reads are non-destructive, so old mail resurfaces.
+- Reading does not mark mail read, so old mail shows again. Act only on mail \
+that you did not handle yet (see the inbox command below).
 - After you send, STOP. Never loop on inbox and never chain sleep + inbox.
 - If you expect a reply, set a BOUNDED scheduled check rather than busy-waiting.
 
@@ -188,29 +188,22 @@ def compose_briefing(conn, node_id: str) -> str:
         "SELECT node_id FROM nodes WHERE node_id != ? ORDER BY node_id", (node_id,)
     ).fetchall()
     siblings = ", ".join(r["node_id"] for r in rows) or "(none yet)"
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     url = os.environ.get("ROOKERY_URL")
-
-    # Name the interpreter RUNNING this code, not bare "python3". A briefing is
-    # only useful if its commands run, and `python3` on a given box may be too
-    # old for the codebase (3.10+) or missing cryptography — the exact trap the
-    # install work already had to route around.
-    py = sys.executable or "python3"
-
     if url:
-        # Remote sidecar: mailctl is the supported client for both directions.
+        # Remote sidecar: `rookery send` cannot reach a remote mailroom yet, so mailctl (legacy)
+        # stays the client for this case (FR-027). The mailroom runs the gate for it.
+        py = sys.executable or "python3"
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         tok = os.environ.get("ROOKERY_TOKEN", "")
         auth = f" --token {tok}" if tok else ""
         send_cmd = (f"{py} {repo}/mailctl.py send --url {url}{auth} "
                     f"--from {node_id} --to <sibling> --body \"...\"")
-        inbox_cmd = (f"{py} {repo}/mailctl.py inbox --url {url}{auth} "
-                     f"--node {node_id}")
+        inbox_cmd = (f"{py} {repo}/mailctl.py inbox --url {url}{auth} --node {node_id}"
+                     "   (track the highest id you handled; act only on ids above it)")
     else:
-        env = f"ROOKERY_DB={R.DB_PATH} "
-        send_cmd = (f"{env}{py} {repo}/send_mail.py "
-                    f"--from {node_id} --to <sibling> --body \"...\"")
-        inbox_cmd = (f"{env}{py} {repo}/read_mail.py --node {node_id} "
-                     f"[--since <last-id-you-handled>]")
+        # The `rookery` commands send through the mail gate and read without marking.
+        send_cmd = 'rookery send <sibling> "..." --task <task> --kind ask'
+        inbox_cmd = "rookery inbox   (then: rookery ack ID ...)"
 
     return load_template().format(node=node_id, siblings=siblings,
                                   send_cmd=send_cmd, inbox_cmd=inbox_cmd)
