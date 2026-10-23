@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import ssl
+import sys
 import threading
 import time
 import urllib.request
@@ -504,9 +505,52 @@ class Handler(BaseHTTPRequestHandler):
         self._reply({"error": "not found"}, 404)
 
 
+LOCAL_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+def check_start(args):
+    """The start rules (contract: HTTP, Start). `args` needs host, token, allow_public, allow_no_auth.
+
+    Returns the list of WARNING lines (also printed). On a refusal it prints the reason to stderr and
+    raises SystemExit(2). A token comes from args.token, else from $ROOKERY_TOKEN.
+    """
+    token = getattr(args, "token", None) or os.environ.get("ROOKERY_TOKEN")
+    allow_no_auth = getattr(args, "allow_no_auth", False)
+    allow_public = getattr(args, "allow_public", False)
+    host = getattr(args, "host", None) or "127.0.0.1"
+    problems = []
+    if not token and not allow_no_auth:
+        problems.append(
+            "ERROR: no token. Give a token with --token or $ROOKERY_TOKEN, "
+            "or give --allow-no-auth to run without one."
+        )
+    if host not in LOCAL_HOSTS and not allow_public:
+        problems.append(
+            f"ERROR: --host {host} is not a local address. "
+            "Give --allow-public to serve other hosts."
+        )
+    if problems:
+        for line in problems:
+            print(line, file=sys.stderr, flush=True)
+        raise SystemExit(2)
+    warnings = []
+    if allow_public:
+        warnings.append(
+            "WARNING: --allow-public lets other hosts reach this mailroom. "
+            "Anyone who can reach the port can use it."
+        )
+    if allow_no_auth and not token:
+        warnings.append(
+            "WARNING: --allow-no-auth turns auth off. Every caller can send and read mail."
+        )
+    for line in warnings:
+        print(line, flush=True)
+    return warnings
+
+
 def main():
     ap = argparse.ArgumentParser(description="Rookery mailroom HTTP sidecar.")
-    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument(
         "--public-url",
@@ -533,7 +577,18 @@ def main():
         default=None,
         help="Ed25519 private key (PEM) -> sign the agent card",
     )
+    ap.add_argument(
+        "--allow-public",
+        action="store_true",
+        help="allow a --host other than 127.0.0.1, ::1 or localhost",
+    )
+    ap.add_argument(
+        "--allow-no-auth",
+        action="store_true",
+        help="start with no token (ignored when a token is set)",
+    )
     a = ap.parse_args()
+    check_start(a)
     global PUBLIC_URL, DEFAULT_NODE, CARD_KEY
     PUBLIC_URL = a.public_url or f"http://{a.host}:{a.port}"
     DEFAULT_NODE = a.default_node
