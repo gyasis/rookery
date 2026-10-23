@@ -186,7 +186,7 @@ class ResolveIdentity(IdentityBase):
     def test_same_pane_new_session_new_identity_and_no_old_mail(self):
         r1 = self.resolve({**self.env, "HERDR_PANE_ID": "p1"})
         old = r1[1]["agent_id"]
-        R.send(self.conn, "someone", old, "old mail", "TASK-1")
+        R.send(self.conn, "someone", old, "old mail", "TASK-1", session_id="legacy")
         RI.new_session(self.conn, name="beta")
         r2 = RI.resolve(self.conn, {"ROOKERY_SESSION": "beta", "HERDR_PANE_ID": "p1"},
                         {}, self.root, create=True)

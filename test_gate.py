@@ -349,6 +349,15 @@ class SystemSend(GateBase):
             self.assertEqual((row["sender"], row["status"], row["topic"]), (name, "pending", "t"))
 
 
+class LowLevelInsert(GateBase):
+    def test_send_needs_a_session_id(self):                  # FR-005
+        with self.assertRaises(TypeError):
+            R.send(self.conn, "a", "b", "x")
+        with self.assertRaises(ValueError):
+            R.send(self.conn, "a", "b", "x", session_id=None)
+        self.assertEqual(self.count(), 0)
+
+
 class Malformed(GateBase):
     def test_quarantine_malformed(self):
         ctx = {"session": self.alpha, "identity": self.me, "root": self.root}
