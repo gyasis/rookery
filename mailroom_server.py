@@ -23,6 +23,7 @@ import rookery as R
 import security  # swappable auth/authz/credential/inspection policy
 import mailroom_handshake
 import mailroom_bootstrap
+import mail_gate  # the one door for mail from a local sender
 
 # Set from CLI in main(). PUBLIC_URL is what goes in the Agent Card (how peers
 # reach us); DEFAULT_NODE routes A2A messages with no explicit recipient.
@@ -151,6 +152,23 @@ def _post_webhook(url, payload, token=None):
         pass
 
 
+_A2A_ERRORS = {"refused": -32602, "db-busy": -32006, "send-failed": -32603}
+
+
+def _a2a_gate_answer(res, msg, ctx):
+    """Contract "A2A outcomes": (error code, message) for a gate outcome that stored nothing, or a
+    `rejected` task result for a held mail, or None when the mail was sent."""
+    out = res["outcome"]
+    if out in _A2A_ERRORS:
+        return ("error", _A2A_ERRORS[out], f"{out}: {res['reason'] or 'database is busy'}")
+    if out in ("quarantined", "loop-held"):
+        return ("result", {"id": f"a2a-{res['msg_id']}", "contextId": ctx,
+                           "status": {"state": "rejected",
+                                      "message": f"{out}: {res['reason']}"},
+                           "history": [msg]})
+    return None
+
+
 def _push_watch(sender, mid, tid, ctx, url, token, timeout=120):
     """Background: when the node replies, POST the completed Task to the client's
     webhook (A2A push notifications) instead of the client polling/streaming."""
@@ -206,11 +224,13 @@ def a2a_rpc(conn, rpc, principal="a2a"):
             return err(
                 -32003, f"principal '{principal}' not authorized to task '{recipient}'"
             )
-        chk = pol.inspect_inbound(sender, recipient, text)
-        if not chk:
-            return err(-32004, f"message rejected: {chk.reason}")
-        mid = R.send(conn, sender, recipient, text)
+        res = mail_gate.submit(conn, path="a2a", principal=None, raw_sender=sender,
+                               to=recipient, body=text)
+        mid = res["msg_id"]
         ctx = msg.get("contextId") or f"ctx-{mid}"
+        gate = _a2a_gate_answer(res, msg, ctx)
+        if gate is not None:                 # not sent: no push watcher for a task that is not live
+            return err(gate[1], gate[2]) if gate[0] == "error" else ok(gate[1])
         # A2A push notifications: if the client gave a webhook, POST the result later
         pn = (params.get("configuration") or {}).get(
             "pushNotificationConfig"
@@ -338,20 +358,15 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 }
             )
-        chk = pol.inspect_inbound(sender, recipient, text)
-        if not chk:
-            return self._reply(
-                {
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "error": {
-                        "code": -32004,
-                        "message": f"message rejected: {chk.reason}",
-                    },
-                }
-            )
-        mid = R.send(conn, sender, recipient, text)
+        res = mail_gate.submit(conn, path="a2a", principal=None, raw_sender=sender,
+                               to=recipient, body=text)
+        mid = res["msg_id"]
         tid, ctx = f"a2a-{mid}", (msg.get("contextId") or f"ctx-{mid}")
+        gate = _a2a_gate_answer(res, msg, ctx)
+        if gate is not None:                 # not sent: answer once, do not poll 60 s for it
+            body = ({"error": {"code": gate[1], "message": gate[2]}} if gate[0] == "error"
+                    else {"result": gate[1]})
+            return self._reply({"jsonrpc": "2.0", "id": rid, **body})
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -425,8 +440,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._a2a_stream(c, d, principal)
             return self._reply(a2a_rpc(c, d, principal))
         if u.path == "/send":
-            mid = R.send(c, d["sender"], d["recipient"], d["body"], d.get("topic"))
-            return self._reply({"id": mid})
+            res = mail_gate.submit(
+                c, path="mailroom", principal=None, raw_sender=d.get("sender") or "anon",
+                to=d.get("recipient", d.get("to")), body=d.get("body"),
+                topic=d.get("topic") or "", asked_sender=d.get("sender") or None)
+            return self._reply(
+                {"id": res["msg_id"], "outcome": res["outcome"], "reason": res["reason"]})
         if u.path == "/claim":
             R.claim(c, d["ids"])
             return self._reply({"ok": True})

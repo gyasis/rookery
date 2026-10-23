@@ -34,7 +34,9 @@ import time
 
 from mcp.server.fastmcp import Context, FastMCP
 
+import mail_gate
 import rookery as R
+import turn_block
 
 # Node identity: an explicit ROOKERY_NODE always wins. Otherwise fall back to a
 # unique-per-process id so two MCP sessions on one host never silently collide
@@ -57,7 +59,7 @@ if URL:
             "/send",
             "POST",
             {"sender": node, "recipient": to, "body": body, "topic": topic},
-        )["id"]
+        )
 
     def _pending(node):
         return mailctl.call(URL, "/inbox?node=" + node, "GET")["messages"]
@@ -66,18 +68,11 @@ if URL:
         mailctl.call(URL, "/claim", "POST", {"ids": ids})
         mailctl.call(URL, "/ack", "POST", {"ids": ids})
 
-    def _register(node):
-        mailctl.call(URL, "/register", "POST", {"node_id": node, "kind": "mcp"})
-
     def _roster():
         card = mailctl.call(URL, "/.well-known/agent-card.json", "GET")
         return [s["id"] for s in card.get("skills", [])]
 
 else:
-
-    def _send(node, to, body, topic=None):
-        c = R.connect()
-        return R.send(c, node, to, body, topic)
 
     def _pending(node):
         c = R.connect()
@@ -88,19 +83,12 @@ else:
         R.claim(c, ids)
         R.ack(c, ids)
 
-    def _register(node):
-        c = R.connect()
-        R.register_node(c, node, kind="mcp")
-
     def _roster():
         c = R.connect()
         return [
             r["node_id"]
             for r in c.execute("SELECT node_id FROM nodes ORDER BY node_id")
         ]
-
-
-_seen: set[str] = set()
 
 
 def _node(ctx: Context) -> str:
@@ -111,10 +99,17 @@ def _node(ctx: Context) -> str:
     hdr = req.headers if req is not None else {}
     node = hdr.get("x-rookery-node") or (
         f"claude-{HOST}-{(hdr.get('mcp-session-id') or 'nosession')[:8]}")
-    if node not in _seen:                  # register on first use, like startup did
-        _register(node)
-        _seen.add(node)
     return node
+
+
+def _asked_node(ctx: Context):
+    """Shared HTTP mode: the node name the caller asked for in `x-rookery-node`, else None."""
+    req = ctx.request_context.request
+    return (req.headers.get("x-rookery-node") if req is not None else None) or None
+
+
+def _root():
+    return turn_block.gate_root()          # the gate log lives in one place (D15)
 
 
 def _drain(node):
@@ -125,8 +120,6 @@ def _drain(node):
     return [{"from": m["sender"], "body": m["body"]} for m in msgs]
 
 
-if not HTTP:
-    _register(NODE)
 mcp = FastMCP("rookery")
 
 
@@ -135,8 +128,25 @@ def send(to: str, body: str, ctx: Context, topic: str = "") -> str:
     """Send a message to another agent/node in the Rookery mesh.
     `to` may be a node id, or node@mailroom for a federated mailroom."""
     node = _node(ctx)
-    mid = _send(node, to, body, topic or None)
-    return f"sent #{mid}: {node} -> {to}"
+    if URL:                                # remote sidecar: it runs the gate
+        res = _send(node, to, body, topic or None)
+        if res.get("outcome", "sent") == "sent":
+            return f"sent #{res.get('id')}: {node} -> {to}"
+        return f"{res['outcome']}: {res.get('reason')}"
+    conn = R.connect()
+    try:
+        root = _root()
+        # stdio: the caller is the session identity. Shared HTTP: no principal; the header
+        # names the sender (asked_sender), as before.
+        principal = None if HTTP else mail_gate.principal_from_env(conn, os.environ, root)
+        res = mail_gate.submit(conn, path="mcp-http" if HTTP else "mcp-stdio", principal=principal,
+                               raw_sender=node, to=to, body=body, topic=topic,
+                               asked_sender=_asked_node(ctx) if HTTP else None, root=root)
+    finally:
+        conn.close()
+    if res["outcome"] == "sent":
+        return f"sent #{res['msg_id']}: {node} -> {to}"
+    return f"{res['outcome']}: {res['reason']}"
 
 
 @mcp.tool()

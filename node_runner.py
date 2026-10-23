@@ -27,6 +27,23 @@ import uuid
 
 import rookery as R
 import security  # inbound message inspection (swappable policy)
+import mail_gate
+import turn_block
+
+
+def gate_send(conn, node_id, to, body):
+    """Send from a node through the mail gate (path `node-runner`). The principal is the node's
+    identity in ROOKERY_SESSION (ROOKERY_NODE=<node id>), else none; the raw sender is the node id."""
+    root = turn_block.gate_root()
+    env = dict(os.environ, ROOKERY_NODE=node_id)
+    principal = mail_gate.principal_from_env(conn, env, root)
+    return mail_gate.submit(conn, path="node-runner", principal=principal, raw_sender=node_id,
+                            to=to, body=body, root=root)
+
+
+def _said(res):
+    """The gate outcome as short log text: `sent`, or `quarantined: off-team` and so on."""
+    return res["outcome"] + (f": {res['reason']}" if res.get("reason") else "")
 
 
 def _heartbeat_loop(node_id, stop_evt, interval=10):
@@ -214,8 +231,8 @@ def handle_directives(conn, node_id, response, poll, max_wait, managed=False):
             target, _, text = line[len("MAILTO:"):].partition(":")
             target = target.strip()
             if target:
-                R.send(conn, node_id, target, text.strip())
-                log(node_id, f"-> mail to {target}: {summarize(text)}")
+                res = gate_send(conn, node_id, target, text.strip())
+                log(node_id, f"-> mail to {target} ({_said(res)}): {summarize(text)}")
                 acted = True
         elif line.startswith("NEEDCRED:"):
             resource = line[len("NEEDCRED:"):].strip()
@@ -238,6 +255,14 @@ def handle_directives(conn, node_id, response, poll, max_wait, managed=False):
     return False, acted
 
 
+def auto_reply(conn, node_id, reply_to, response):
+    """Return an ephemeral worker's result to whoever asked. Never to ourselves or to a system
+    sender (rookery, postmaster, relay, in any case): they do not read mail (D14)."""
+    if reply_to and reply_to != node_id and not mail_gate.is_system_name(reply_to):
+        res = gate_send(conn, node_id, reply_to, response.strip()[:4000])
+        log(node_id, f"-> auto-reply to {reply_to} ({_said(res)}): {summarize(response)}")
+
+
 def screen(conn, node_id, msgs):
     """Run each inbound message through the security policy BEFORE the agent sees
     it (the prompt-injection / content seam, covering ALL mail — internal node->
@@ -251,7 +276,7 @@ def screen(conn, node_id, msgs):
             allowed.append(m)
         else:
             log(node_id, f"BLOCKED inbound #{m['id']} from {m['sender']}: {d.reason}")
-            R.send(conn, node_id, m["sender"], f"REJECTED by policy: {d.reason}")
+            gate_send(conn, node_id, m["sender"], f"REJECTED by policy: {d.reason}")
             R.ack(conn, [m["id"]])  # quarantine: remove from the pending queue
     return allowed
 
@@ -323,9 +348,7 @@ def run(node_id, engine_name, kind, poll, max_wait, once, managed, lifecycle, id
             # forgets the MAILTO: protocol).
             if not acted and lifecycle == "ephemeral" and response and response.strip():
                 reply_to = new_msgs[-1]["sender"]
-                if reply_to and reply_to != node_id:
-                    R.send(conn, node_id, reply_to, response.strip()[:4000])
-                    log(node_id, f"-> auto-reply to {reply_to}: {summarize(response)}")
+                auto_reply(conn, node_id, reply_to, response)
             R.ack(conn, ids)  # turn handled these -> done
             if once or paused:
                 break
