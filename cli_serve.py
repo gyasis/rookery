@@ -86,7 +86,6 @@ def cmd_serve(args):
     import identity
     import mailroom_server
     import security
-    from http.server import ThreadingHTTPServer
 
     mailroom_server.check_start(args)  # same start rules as mailroom_server.main(); exits 2 on refusal
 
@@ -100,7 +99,7 @@ def cmd_serve(args):
     R.connect()
 
     # Start sidecar in a daemon thread (it owns its own server.serve_forever()).
-    srv = ThreadingHTTPServer((args.host, args.port), mailroom_server.Handler)
+    srv = mailroom_server.server_class(args.host)((args.host, args.port), mailroom_server.Handler)
     srv_thread = threading.Thread(target=srv.serve_forever, daemon=True, name="sidecar")
     srv_thread.start()
     print(

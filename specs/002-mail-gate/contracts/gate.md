@@ -50,8 +50,8 @@ ack_by_name(conn, name, ids, *, from_inflight=True) -> {"ok": [...], "already": 
   mail in `legacy` with the warning `no-session`.
 - `unread` returns mail of the identity's session to its agent ID, and `legacy` mail to its name or agent
   ID (FR-015). It never changes a row.
-- `ack` changes `pending` rows where `recipient` is the identity's agent ID and `session_id` is its
-  session. With `from_inflight=True` it also moves `inflight` rows to `done`. `rookery ack` (`cmd_ack`)
+- `ack` changes the `pending` rows that `unread` returns: rows of the identity's session to its agent
+  ID, and `legacy` rows to its name or agent ID. With `from_inflight=True` it also moves `inflight` rows to `done`. `rookery ack` (`cmd_ack`)
   keeps `from_inflight=False`, so its output does not change. Spec 001 counts `inflight` as already read
   (`cli_rookery_session.py:392-394`).
 - `rookery.send()` keeps its name. `session_id` becomes a keyword with no default. Only `mail_gate.py` and

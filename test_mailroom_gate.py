@@ -112,7 +112,8 @@ class SendStatus(GateHttpBase):
         code, ans = self.send(body="BOOM-ME")
         self.assertEqual(code, 500)
         self.assertEqual(ans["error"], "send-failed")
-        self.assertIn("fixture boom", ans["detail"])
+        self.assertNotIn("fixture boom", ans["detail"])
+        self.assertEqual(ans["detail"], mailroom_server._SEND_ERRORS["send-failed"][1])
         self.assertEqual(self.count(), 0)
 
     # helpers
@@ -208,6 +209,16 @@ class ReadsByName(GateHttpBase):
         self.sess = self.put("N", self.sid)
         self.byid = self.put(self.researcher["agent_id"], self.sid)
         self.other = self.put("M", "legacy")
+
+    def test_malformed_ids_get_400_bad_input(self):
+        before = self.snap()
+        for path in ("/claim", "/ack"):
+            for node in ({}, {"node": "N"}):
+                for ids in ([[1]], "1", {"a": 1}, [True], [1.5], ["1"], 7):
+                    code, ans = self.raw(path, {**node, "ids": ids})
+                    self.assertEqual((code, ans["error"]), (400, "bad-input"), (path, node, ids))
+                    self.assertTrue(ans["detail"])
+        self.assertEqual(self.snap(), before)
 
     def test_old_mailctl_without_node_still_works(self):
         with sqlite3.connect(self.db) as c:

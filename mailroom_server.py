@@ -12,6 +12,7 @@ locking is broken; peers talk to THIS service over TCP instead.
 import argparse
 import json
 import os
+import socket
 import ssl
 import sys
 import threading
@@ -170,10 +171,10 @@ def _send_error(res):
     if key not in _SEND_ERRORS:
         return None
     code, detail = _SEND_ERRORS[key]
-    if out == "send-failed" and res["reason"]:
-        detail = f"{detail} {res['reason']}"
     return code, {"error": key, "detail": detail}
 
+
+_BAD_IDS = "The ids must be a list of whole numbers. Check the list, then send the call again."
 
 _A2A_ERRORS = {"refused": -32602, "db-busy": -32006, "send-failed": -32603}
 
@@ -472,6 +473,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply(failed[1], failed[0])
             return self._reply(
                 {"id": res["msg_id"], "outcome": res["outcome"], "reason": res["reason"]})
+        if u.path in ("/claim", "/ack"):
+            ids = d.get("ids")
+            if ids is not None and not (isinstance(ids, list) and all(
+                    isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+                return self._reply({"error": "bad-input", "detail": _BAD_IDS}, 400)
         if u.path in ("/claim", "/ack") and not d.get("node"):
             # An older mailctl copy on another host sends no node (FR-027). Keep its old
             # behaviour: act on the given IDs, answer {"ok": true}. The token holder is trusted (D24).
@@ -513,6 +519,15 @@ class Handler(BaseHTTPRequestHandler):
 LOCAL_HOSTS = ("127.0.0.1", "::1", "localhost")
 
 
+class _Server6(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
+def server_class(host):
+    """The HTTP server class for `host`: IPv6 when the host holds a ':', else IPv4."""
+    return _Server6 if ":" in host else ThreadingHTTPServer
+
+
 def check_start(args):
     """The start rules (contract: HTTP, Start). `args` needs host, token, allow_public, allow_no_auth.
 
@@ -522,7 +537,8 @@ def check_start(args):
     token = getattr(args, "token", None) or os.environ.get("ROOKERY_TOKEN")
     allow_no_auth = getattr(args, "allow_no_auth", False)
     allow_public = getattr(args, "allow_public", False)
-    host = getattr(args, "host", None) or "127.0.0.1"
+    host = (getattr(args, "host", None) or "").strip() or "127.0.0.1"
+    args.host = host                         # the bind sites use the checked value
     problems = []
     if not token and not allow_no_auth:
         problems.append(
@@ -600,7 +616,7 @@ def main():
     CARD_KEY = a.card_key
     policy = security.get_policy(token=a.token)  # seed the swappable security policy
     R.connect()  # ensure DB + schema exist
-    srv = ThreadingHTTPServer((a.host, a.port), Handler)
+    srv = server_class(a.host)((a.host, a.port), Handler)
     scheme = "http"
     if a.tls_cert and a.tls_key:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

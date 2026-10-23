@@ -167,6 +167,25 @@ class Start(unittest.TestCase):
         with self.assertRaises(OSError):
             socket.create_connection((lan, self.port), timeout=2).close()
 
+    def test_empty_host_is_local_only(self):
+        lan = _lan_address()
+        self.serving("--host", "", "--token", TOKEN)
+        if lan is None:
+            self.skipTest("host has no LAN address")
+        with self.assertRaises(OSError):
+            socket.create_connection((lan, self.port), timeout=2).close()
+
+    def test_ipv6_loopback_host_serves(self):
+        try:
+            with socket.socket(socket.AF_INET6) as s:
+                s.bind(("::1", 0))
+        except OSError:
+            self.skipTest("host has no IPv6 loopback")
+        self.url = f"http://[::1]:{self.port}"
+        self.serving("--host", "::1", "--token", TOKEN)
+        code, body = self.call("GET", "/health")
+        self.assertEqual((code, body.get("ok")), (200, True))
+
     # --- routes ---------------------------------------------------------
     def test_no_auth_mode_call_without_token_works(self):
         self.serving("--allow-no-auth")

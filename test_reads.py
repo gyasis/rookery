@@ -7,11 +7,15 @@ Rows are inserted with `rookery.send(..., session_id=...)` in this test only.
 SC-009: `rookery inbox` and `rookery peek` are already proven read-only by test_hooks.py:369
 (prompt notice changes no inbox row) and test_notices.py:143. This file does not repeat them.
 """
+import json
+import subprocess
+import sys
+
 import rookery as R
 import rookery_identity as RI
 import turn_block as TB
 import mail_gate as G
-from test_hooks import Base
+from test_hooks import Base, CLI, HERE
 
 
 class ReadsTest(Base):
@@ -88,6 +92,21 @@ class ReadsTest(Base):
         self.assertEqual([r["id"] for r in rows], [a])
         self.assertNotIn("body", rows[0])
         self.assertEqual(G.unread_legacy(self.conn, "rawname", with_body=True)[0]["body"], "body-T")
+
+    def test_rookery_inbox_uses_the_gate_filter(self):
+        """`rookery inbox` lists what the prompt notice counts: legacy mail to the name shows,
+        a row to the agent ID in another session does not."""
+        legacy = self.put("somenode", "me", G.LEGACY, "LEGACY")
+        own = self.put(self.researcher["agent_id"], self.me["agent_id"], self.sid_a, "OWN")
+        other = self.put(self.alpha_sender["agent_id"], self.me["agent_id"], self.sid_b, "OTHER")
+        r = subprocess.run([sys.executable, "-W", "ignore", CLI, "inbox", "--json"],
+                           capture_output=True, text=True, env=self.env(), cwd=HERE, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        got = json.loads(r.stdout)
+        self.assertEqual(sorted(m["id"] for m in got["messages"]), sorted([legacy, own]))
+        self.assertNotIn(other, got["ids"])
+        self.assertEqual(got["count"], 2)
+        self.assertEqual(TB.unread_summary(self.conn, self.me["agent_id"])["count"], 2)
 
 
 class ByNameTest(ReadsTest):

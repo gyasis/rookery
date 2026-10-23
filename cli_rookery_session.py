@@ -291,15 +291,13 @@ def _current_identity(conn, root):
     return _row(s), _row(i), bindings
 
 
-def _unread_with_bodies(conn, agent_id):
-    """Unread = recipient is me AND status 'pending' (D7). Sender names come from
-    identities.name; the system sender 'rookery' keeps its own name."""
-    rows = conn.execute(
-        "SELECT m.id, m.sender, COALESCE(i.name, m.sender) AS sender_name, m.topic, "
-        "m.body, m.created_at FROM inbox m LEFT JOIN identities i ON i.agent_id = m.sender "
-        "WHERE m.recipient=? AND m.status='pending' ORDER BY m.created_at, m.id",
-        (agent_id,)).fetchall()
-    return [dict(r) for r in rows]
+def _unread_with_bodies(conn, identity):
+    """Unread = the gate's read filter (`mail_gate.unread`), the same rows the prompt notice
+    counts. Sender names come from identities.name; the system sender 'rookery' keeps its name."""
+    import mail_gate
+
+    return [{k: r[k] for k in ("id", "sender", "sender_name", "topic", "body", "created_at")}
+            for r in mail_gate.unread(conn, identity, with_body=True)]
 
 
 def _mail_text(s, i, msgs):
@@ -338,7 +336,7 @@ def _mail(args, read):
 
     def go(conn):
         s, i, bindings = _current_identity(conn, root)
-        msgs = _unread_with_bodies(conn, i["agent_id"])
+        msgs = _unread_with_bodies(conn, i)
         ids = [m["id"] for m in msgs]
         obj = {"agent_id": i["agent_id"], "name": i["name"],
                "session_id": s["session_id"], "session": s["name"],

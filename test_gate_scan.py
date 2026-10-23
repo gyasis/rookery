@@ -18,8 +18,13 @@ SYSTEM_SEND_OK = {"postmaster.py", "relay.py", "rookery.py", "mail_gate.py"}
 RECIPIENT_UPDATE_OK = {"relay.py"}
 INSERT_OK = {"rookery.py"}
 
-_INSERT_RE = re.compile(r"insert\s+into\s+inbox\b", re.I)
-_RECIPIENT_RE = re.compile(r"update\s+inbox\s+set\s+recipient\b", re.I)
+_SP = r"(?:\s|/\*.*?\*/|--[^\n]*\n)+"                        # whitespace and SQL comments
+_TBL = r"""(?:(?:\w+|"\w+"|`\w+`|\[\w+\])\s*\.\s*)?(?:inbox|"inbox"|`inbox`|\[inbox\])(?!\w)"""
+_INSERT_RE = re.compile(r"(?:insert(?:" + _SP + r"or" + _SP + r"\w+)?|replace)" + _SP + r"into" + _SP + _TBL,
+                        re.I | re.S)
+_RECIPIENT_RE = re.compile(r"update(?:" + _SP + r"or" + _SP + r"\w+)?" + _SP + _TBL + _SP
+                           + r"set\b(?:(?:(?!\bwhere\b)[^;])*?[\s,])?recipient\s*=", re.I | re.S)
+_DYN_MODULES = ("rookery", "mail_gate")
 
 # (module, attribute) -> (rule text, allowed files)
 _WATCHED = {
@@ -83,6 +88,11 @@ def scan_source(path_name, source):
             watched = _WATCHED.get((aliases.get(node.args[0].id), node.args[1].value))
             if watched and not allowed(watched[1]):
                 bad(node, f"getattr reaches {watched[0]}")
+        elif (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant)
+              and node.args[0].value in _DYN_MODULES and not allowed(SEND_OK)
+              and ((isinstance(node.func, ast.Name) and node.func.id == "__import__")
+                   or (isinstance(node.func, ast.Attribute) and node.func.attr == "import_module"))):
+            bad(node, f"imports {node.args[0].value} dynamically; only rookery.py and mail_gate.py may")
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             if _INSERT_RE.search(node.value) and not allowed(INSERT_OK):
                 bad(node, "inserts into the inbox directly; only rookery.py may")
@@ -129,6 +139,26 @@ class ScanSyntheticTests(unittest.TestCase):
         self.assertCaught("x.py", "q = 'INSERT   INTO\\n inbox(a) VALUES (1)'\n", "inserts into the inbox")
         self.assertCaught("x.py", "q = ('insert into '\n     'inbox(a)')\n", "inserts into the inbox")
 
+    def test_insert_variants(self):
+        for q in ("INSERT OR IGNORE INTO inbox(a) VALUES (1)", "insert or replace into inbox(a)",
+                  "REPLACE INTO inbox(a)", 'INSERT INTO "inbox"(a)', "INSERT INTO `inbox`(a)",
+                  "INSERT INTO [inbox](a)", "INSERT INTO main.inbox(a)", 'INSERT INTO "main"."inbox"(a)',
+                  "INSERT /* c */ INTO inbox(a)", "INSERT -- c\n INTO inbox(a)"):
+            self.assertCaught("x.py", f"q = {q!r}\n", "inserts into the inbox")
+
+    def test_recipient_update_variants(self):
+        for q in ("UPDATE inbox SET status=1, recipient=? WHERE id=1", 'UPDATE "inbox" SET recipient=?',
+                  "UPDATE main.inbox SET status=1,recipient=?", "UPDATE /* c */ inbox SET recipient=?",
+                  "UPDATE OR IGNORE inbox SET recipient=?"):
+            self.assertCaught("x.py", f"q = {q!r}\n", "re-addresses")
+
+    def test_dynamic_import(self):
+        for mod in ("rookery", "mail_gate"):
+            self.assertCaught("x.py", f"import importlib\nm = importlib.import_module({mod!r})\n", "dynamically")
+            self.assertCaught("x.py", f"m = __import__({mod!r})\n", "dynamically")
+        self.assertEqual(scan_source("x.py", "import importlib\nimportlib.import_module('json')\n"), [])
+        self.assertEqual(scan_source("rookery.py", "m = __import__('mail_gate')\n"), [])
+
     def test_quarantine_call(self):
         self.assertCaught("x.py", "import rookery\nrookery.quarantine(c, 1, 'r', 'me')\n", "rookery.quarantine")
         self.assertCaught("x.py", "from rookery import quarantine as q\n", "imports rookery.quarantine")
@@ -151,7 +181,8 @@ class ScanSyntheticTests(unittest.TestCase):
     def test_clean_snippet_passes(self):
         src = ("import rookery\nimport mail_gate\nfrom rookery import connect\n"
                "mail_gate.submit(c, 'a', 'b', 'x')\nrookery.inbox(c)\n"
-               "c.execute('UPDATE inbox SET status=1')\n")
+               "c.execute('UPDATE inbox SET status=1')\n"
+               "c.execute('UPDATE inbox SET status=1 WHERE recipient=?')\n")
         self.assertEqual(scan_source("x.py", src), [])
 
     def test_allowed_files_pass(self):
