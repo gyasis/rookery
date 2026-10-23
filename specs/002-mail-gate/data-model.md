@@ -46,7 +46,8 @@ The session of the mail is the session of the principal, else `legacy`.
 Order of checks:
 
 1. The sender is a system name (asked, or raw): `refused`/`system-name`.
-2. The sender does not match `^[A-Za-z0-9._-]{1,64}(@[A-Za-z0-9._-]{1,64})?$`: `refused`/`bad-input`.
+2. The sender does not match `^[A-Za-z0-9._-]{1,64}(@[A-Za-z0-9._-]{1,64})?$`, or `to` or `body` is empty or
+   not text: `refused`/`bad-input`. Check 1 ignores case and any `@<peer>` part (`Rookery`, `postmaster@x`).
 3. Choose the session. A principal gives its session. No principal gives `legacy`, and the warning
    `no-session`.
    - With no session, checks 4 and 5 do not run. Rookery stores the recipient as given. The gate does not

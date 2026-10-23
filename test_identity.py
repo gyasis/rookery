@@ -96,7 +96,7 @@ class Names(IdentityBase):
 
     def test_system_sender_names_refused(self):
         a = RI.new_session(self.conn, name="alpha")
-        for name in sorted(R.SYSTEM_SENDERS):
+        for name in sorted(R.SYSTEM_SENDERS) + ["Rookery", "POSTMASTER"]:
             with self.assertRaises(ValueError, msg=name) as cm:
                 RI.new_identity(self.conn, a["session_id"], name)
             self.assertIn("system sender", str(cm.exception))
