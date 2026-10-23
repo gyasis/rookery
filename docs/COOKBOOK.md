@@ -39,8 +39,13 @@ Self-polls every second, wakes only on real mail. `demo.sh` runs the two-node pr
 ### Send a piece of mail
 
 Drop a message into the mailroom; wire-protocol directives go in the body.
+`send_mail.py` is legacy. The current command is `rookery send`, which sends
+from your own identity.
 
 ```bash
+# Current:
+rookery send architect "Summarize the repo. MAILTO:triage:send test logs. NEEDCRED:aws-prod"
+# Legacy (send_mail.py):
 python3 send_mail.py --to architect --from human \
   --body "Summarize the repo. MAILTO:triage:send test logs. NEEDCRED:aws-prod"
 ```
@@ -52,13 +57,13 @@ python3 send_mail.py --to architect --from human \
 
 ### Watch live activity
 
-Run in a second pane before starting nodes; requires `sqlite3` and `watch`.
+Run in a second pane before starting nodes; it needs `sqlite3` and `watch`.
 
 ```bash
 ./monitor.sh
 ```
 
-Shows the last 12 inbox rows, node status/pid, and pending credential requests.
+Shows the last 12 inbox rows, node status/pid, and pending credential asks.
 
 ---
 
@@ -93,8 +98,8 @@ python3 sdk_node.py --node-id architect --idle-timeout 600 \
   --mcp deeplakesearch --allowed-tools mcp__deeplakesearch__retrieve_context
 ```
 
-`setting_sources=[]` skips SessionStart hooks — worth ~0.1s/turn as measured
-2026-08-03, so take it for isolation rather than speed (the old "hooks are the
+`setting_sources=[]` skips SessionStart hooks. It saves about 0.1s/turn (measured
+2026-08-03). Use it for isolation, not speed (the old "hooks are the
 cold-start source" claim was wrong; see README). `--mcp` names re-attach only
 those servers. See `sdk_node.py` and `demo_real_sdk.sh`.
 
@@ -112,7 +117,7 @@ python3 node_runner.py --node-id reviewer --engine codex
 python3 node_runner.py --node-id gemini-node --engine gemini
 ```
 
-`--skip-trust` is required for headless Gemini; see `gemini_engine()` in `node_runner.py`.
+Headless Gemini needs `--skip-trust`; see `gemini_engine()` in `node_runner.py`.
 `demo_real_team.sh` fans 2×Claude + Codex + Gemini out in parallel.
 
 ---
@@ -157,6 +162,9 @@ Include `@<node>` in any message body; the postmaster notifies that node even if
 not the recipient.
 
 ```bash
+# Current:
+rookery send architect "Ask @reviewer to check the auth module before merging."
+# Legacy (send_mail.py):
 python3 send_mail.py --to architect --from human \
   --body "Ask @reviewer to check the auth module before merging."
 ```
@@ -171,10 +179,16 @@ to each named node. See step 3 in `postmaster.py run()`.
 ### Multi-host: run the sidecar + a remote node via mailctl.py loop
 
 Run the sidecar on the host that owns the DB; join from any peer with one file.
+`mailctl.py` is legacy. The current commands are `rookery send`, `rookery inbox`
+and `rookery ack`.
+
+Start rules: the sidecar binds `127.0.0.1` by default. It needs `--token` (or
+`$ROOKERY_TOKEN`), or `--allow-no-auth` for a local demo. A public `--host`
+needs `--allow-public`.
 
 ```bash
 # On the DB host (binds all interfaces):
-python3 mailroom_server.py --host 0.0.0.0 --port 8765 --token "$ROOKERY_TOKEN"
+python3 mailroom_server.py --host 0.0.0.0 --allow-public --port 8765 --token "$ROOKERY_TOKEN"
 
 # On the peer (e.g. Mac Studio — copy mailctl.py there):
 ROOKERY_TOKEN=<same-token> \
@@ -182,13 +196,13 @@ python3 mailctl.py loop --url http://<linux-host>:8765 --node macbot
 ```
 
 Never put the SQLite file on a network share — peers talk to the sidecar over TCP.
-See `demo_multihost.sh` and `mailctl.py` (`send`/`inbox`/`loop`).
+See `demo_multihost.sh` and `mailctl.py` (legacy: `send`/`inbox`/`loop`).
 
 ---
 
 ### Federate two mailrooms (relay.py + mailrooms.json, node@mailroom addressing)
 
-Each mailroom runs its own relay; mail addressed `node@remote` is forwarded there.
+Each mailroom runs its own relay; it forwards mail addressed `node@remote` there.
 
 ```bash
 # mailrooms.json on each box (see mailrooms.example.json):
@@ -199,6 +213,7 @@ ROOKERY_DB=/path/to/home.db ROOKERY_MAILROOM=home \
   ROOKERY_MAILROOMS=mailrooms.json python3 relay.py &
 
 # Send cross-mailroom:
+# Legacy (send_mail.py); the current command is `rookery send bob@mac "..."`:
 ROOKERY_DB=/path/to/home.db python3 send_mail.py \
   --to bob@mac --from alice --body "hello across mailrooms"
 ```
@@ -271,12 +286,12 @@ Embed an Ed25519 signature in the agent card so consumers can verify integrity.
 
 ```bash
 python3 gen_card_key.py                         # writes rookery-card-key.pem (chmod 600)
-python3 mailroom_server.py --host 0.0.0.0 \
+python3 mailroom_server.py --host 0.0.0.0 --allow-public --token "$ROOKERY_TOKEN" \
   --card-key rookery-card-key.pem               # card now carries alg+publicKey+value
 python3 verify_card.py http://localhost:8765    # VALID or INVALID + reason
 ```
 
-Integrity is proved by the embedded public key; pin it out-of-band (JWKS/DID) for
+The embedded public key proves integrity. Pin it out-of-band (JWKS/DID) for
 full identity. See `demo_signed_card.sh` and `security.sign_card()`.
 
 ---
@@ -292,10 +307,10 @@ cp node_identity.example.json node_identity.json && chmod 600 node_identity.json
 
 ROOKERY_SECURITY="policy_hardened:HardenedPolicy" \
 ROOKERY_NODE_IDENTITY="$PWD/node_identity.json" \
-  python3 mailroom_server.py --host 0.0.0.0 --port 8765
+  python3 mailroom_server.py --host 0.0.0.0 --allow-public --port 8765 --token "$ROOKERY_TOKEN"
 ```
 
-Unknown tokens are rejected; tasking outside `may_task` returns a named denial. See
+The mailroom rejects unknown tokens; tasking outside `may_task` returns a named denial. See
 `demo_hardened.sh` and `policy_hardened.py`.
 
 ---
@@ -315,7 +330,8 @@ Add Rookery as an MCP server so any Claude Code session or subagent can join the
 }
 ```
 
-Four tools: `send(to, body)` · `check_inbox()` · `await_message(timeout)` · `roster()`.
+Five tools: `send(to, body)` · `check_inbox()` · `ack(ids)` · `await_message(timeout)` · `roster()`.
+`check_inbox()` no longer marks mail read. Call `ack` with the IDs it lists.
 For a remote mailroom swap `ROOKERY_DB` for `ROOKERY_URL` + `ROOKERY_TOKEN`. See
 `rookery_mcp.py`.
 
@@ -323,7 +339,7 @@ For a remote mailroom swap `ROOKERY_DB` for `ROOKERY_URL` + `ROOKERY_TOKEN`. See
 
 ### Bridge a tmux/wezterm/zellij pane into the mesh
 
-Inject mesh mail into a human or terminal-agent pane; reply with `send_mail.py`.
+Inject mesh mail into a human or terminal-agent pane; reply with `rookery send` (legacy: `send_mail.py`).
 
 ```bash
 # tmux (target = session:window.pane):
@@ -360,8 +376,8 @@ time — secret never touches the DB. See `demo.sh` and `mesh_approve.py`.
 
 ### DLQ — list and requeue (relay.py --list-dlq / --requeue-dlq)
 
-Undeliverable mail (unknown mailroom or unreachable after 3 attempts) goes to the DLQ;
-the sender is alerted automatically.
+Undeliverable mail (unknown mailroom or unreachable after 3 tries) goes to the DLQ.
+The mailroom alerts the sender automatically.
 
 ```bash
 ROOKERY_MAILROOM=home ROOKERY_MAILROOMS=mailrooms.json python3 relay.py --list-dlq

@@ -16,7 +16,7 @@ sleep 1
 echo
 
 echo "## start the A2A-enabled sidecar + a postmaster managing 'concierge' (mock)"
-python3 mailroom_server.py --host 127.0.0.1 --port "$PORT" --public-url "$URL" --default-node concierge > /tmp/a2a_sidecar.log 2>&1 &
+python3 mailroom_server.py --host 127.0.0.1 --port "$PORT" --public-url "$URL" --default-node concierge --allow-no-auth > /tmp/a2a_sidecar.log 2>&1 &
 SV=$!
 python3 postmaster.py --nodes concierge --engine mock --poll 0.5 > /tmp/a2a_pm.log 2>&1 &
 PM=$!

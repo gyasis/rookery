@@ -30,7 +30,7 @@ echo
 python3 gen_card_key.py >/dev/null
 echo "## sidecar — hardened policy + signed agent card"
 python3 mailroom_server.py --host 127.0.0.1 --port "$PORT" --public-url "$URL" \
-  --card-key rookery-card-key.pem > /tmp/inv_sidecar.log 2>&1 &
+  --card-key rookery-card-key.pem --token "$ADMIN_TOK" > /tmp/inv_sidecar.log 2>&1 &
 SV=$!
 trap 'kill $SV 2>/dev/null || true; for p in $(pgrep -f "mailctl.py loop" 2>/dev/null); do kill "$p" 2>/dev/null || true; done' EXIT
 sleep 1.5
