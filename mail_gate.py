@@ -33,7 +33,7 @@ def _begin(conn):
     conn.execute("BEGIN IMMEDIATE")
 
 
-# --- copied from turn_block.py (T009 deletes the old copies) ---------------
+# --- moved from turn_block.py (spec 001 block path, D1) -------------------
 def _quarantine_recipient(conn, to):
     """Recipient text for a quarantined row. A raw `to` that is a real agent ID
     or node ID would let that reader see the body, so it becomes `rookery`.
