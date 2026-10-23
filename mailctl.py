@@ -11,7 +11,9 @@ import argparse
 import json
 import os
 import ssl
+import sys
 import time
+import urllib.error
 import urllib.request
 
 TOKEN = os.environ.get("ROOKERY_TOKEN")  # overridden by --token
@@ -66,16 +68,18 @@ def loop(url, node, poll):
 def main():
     ap = argparse.ArgumentParser(description="Rookery remote HTTP client.")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("send")
+    s = sub.add_parser("send", help="send one message")
     s.add_argument("--url", required=True)
     s.add_argument("--to", required=True, dest="to")
     s.add_argument("--from", default="human", dest="frm")
     s.add_argument("--body", required=True)
     s.add_argument("--topic", default=None)
-    i = sub.add_parser("inbox")
+    i = sub.add_parser("inbox", help="legacy: list mail to a node",
+                       description="Legacy command. Lists mail to a node.")
     i.add_argument("--url", required=True)
     i.add_argument("--node", required=True)
-    lp = sub.add_parser("loop")
+    lp = sub.add_parser("loop", help="legacy: run a remote mock node",
+                        description="Legacy command. Runs a remote mock node.")
     lp.add_argument("--url", required=True)
     lp.add_argument("--node", required=True)
     lp.add_argument("--poll", type=float, default=1.0)
@@ -86,6 +90,24 @@ def main():
     if getattr(a, "token", None):
         TOKEN = a.token
 
+    try:
+        run(a)
+    except urllib.error.HTTPError as e:
+        print(_http_error_text(e), file=sys.stderr)
+        sys.exit(2 if e.code in (400, 403) else 1)
+
+
+def _http_error_text(e):
+    """The server's `error` and `detail`; the HTTP reason when the body is not JSON."""
+    try:
+        body = json.loads(e.read())
+        err, detail = body["error"], body.get("detail")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return f"HTTP {e.code}: {e.reason}"
+    return f"{err}: {detail}" if detail else str(err)
+
+
+def run(a):
     if a.cmd == "send":
         print(call(a.url, "/send", "POST",
                    {"sender": a.frm, "recipient": a.to, "body": a.body, "topic": a.topic}))
