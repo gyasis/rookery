@@ -468,11 +468,11 @@ def _mention_mail(conn, mentioned, cause_row):
 
 
 def _mention_pass(conn, last_id, nodes):
-    """Scan pending mail newer than `last_id` once; notify each @name that is an identity in the
+    """Scan delivered mail (every status but held and quarantined) newer than `last_id` once; notify each @name that is an identity in the
     row's own session (FR-017). Held and quarantined mail is not scanned. `nodes` (raw node names)
     only resolves names for `legacy` rows, which have no identities. Returns the new last id."""
     for r in conn.execute(
-        "SELECT * FROM inbox WHERE id > ? AND status='pending' ORDER BY id", (last_id,)
+        "SELECT * FROM inbox WHERE id > ? AND status NOT IN ('held','quarantined') ORDER BY id", (last_id,)
     ).fetchall():
         last_id = max(last_id, r["id"])
         body = r["body"] or ""

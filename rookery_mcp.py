@@ -51,22 +51,45 @@ URL = os.environ.get(
 
 # --- backend: local DB or remote sidecar (same surface either way) --------
 if URL:
+    import json
+    import urllib.error
+
     import mailctl  # reuses ROOKERY_TOKEN for the Authorization header
 
+    def _refusal(exc):
+        """An HTTP error from the sidecar as a gate-style result (the stdio path returns text)."""
+        reason = detail = None
+        if isinstance(exc, urllib.error.HTTPError):
+            try:
+                body = json.loads(exc.read() or b"{}")
+                reason, detail = body.get("error"), body.get("detail")
+            except Exception:
+                pass
+            reason = reason or f"HTTP {exc.code}"
+        else:
+            reason = f"unreachable: {getattr(exc, 'reason', exc)}"
+        return {"outcome": "refused", "reason": reason, "detail": detail}
+
     def _send(node, to, body, topic=None):
-        return mailctl.call(
-            URL,
-            "/send",
-            "POST",
-            {"sender": node, "recipient": to, "body": body, "topic": topic},
-        )
+        try:
+            return mailctl.call(
+                URL,
+                "/send",
+                "POST",
+                {"sender": node, "recipient": to, "body": body, "topic": topic},
+            )
+        except urllib.error.URLError as exc:      # HTTPError is a URLError
+            return _refusal(exc)
 
     def _pending(node):
         return mailctl.call(URL, "/inbox?node=" + node, "GET")["messages"]
 
     def _ack(ids, node, ctx=None):
         # reads stay read-only (GET /inbox); this is the only call that marks mail read
-        res = mailctl.call(URL, "/ack", "POST", {"node": node, "ids": ids})
+        try:
+            res = mailctl.call(URL, "/ack", "POST", {"node": node, "ids": ids})
+        except urllib.error.URLError as exc:
+            return {"ok": [], "already": [], "skipped": list(ids), "error": _refusal(exc)["reason"]}
         return {k: res.get(k, []) for k in ("ok", "already", "skipped")}
 
     def _roster():

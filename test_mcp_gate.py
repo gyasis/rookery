@@ -96,5 +96,33 @@ class NoSession(McpGate):
         self.assertNotIn("hello self", self.call("m.check_inbox(ctx)"))
 
 
+class RemoteRefusal(McpGate):
+    def test_http_error_returns_refusal_text(self):
+        import http.server
+        import threading
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                body = json.dumps({"error": "system-name", "detail": "x"}).encode()
+                self.send_response(403)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            env = self.env(ROOKERY_URL=f"http://127.0.0.1:{srv.server_port}")
+            out = self.call("m.send('bob', 'hi', ctx)", env=env)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        self.assertTrue(out.startswith("refused"), out)
+        self.assertIn("system-name", out)
+
+
 if __name__ == "__main__":
     unittest.main()

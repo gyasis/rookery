@@ -60,6 +60,15 @@ class GateBase(Base):
         security._POLICY = None
 
 
+class RemoteAddress(GateBase):
+    def test_at_address_is_stored_as_given_and_plain_unknown_is_not(self):
+        r = self.submit(to="bob@peer1")
+        self.assertEqual(r["outcome"], "sent", r)
+        row = self.conn.execute("SELECT * FROM inbox WHERE id=?", (r["msg_id"],)).fetchone()
+        self.assertEqual((row["recipient"], row["status"]), ("bob@peer1", "pending"))
+        self.assertEqual(self.submit(to="nobody")["reason"], "wrong-recipient")
+
+
 class Sender(GateBase):
     def test_system_name_refused(self):
         r = self.submit(asked_sender="rookery")
@@ -531,6 +540,25 @@ class LoopReset(GateBase):
             "SELECT count FROM loop_counts WHERE session_id=? AND count>0",
             (self.beta["session_id"],)).fetchall()
         self.assertTrue(rows)
+
+    def test_legacy_reset_lets_a_sessionless_sender_send_again(self):
+        limit, _ = TB.loop_limits()
+        legacy = lambda: self.submit(principal=None, path="mailroom", to="node-a", task="t1")
+        for _ in range(limit):
+            self.assertEqual(legacy()["outcome"], "sent")
+        self.assertEqual(legacy()["outcome"], "loop-held")
+        self.submit(principal=(self.beta, self.beta_me), to="beta-only", path="mcp-stdio", task="t1")
+        r = self.cli("loop", "reset", "--legacy", "node-a", "--json")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        o = json.loads(r.stdout)
+        self.assertEqual((o["name"], o["session"]), ("node-a", "legacy"))
+        self.assertGreater(o["reset"], 0)
+        self.assertEqual(legacy()["outcome"], "sent")
+        self.assertTrue(self.conn.execute(
+            "SELECT 1 FROM loop_counts WHERE session_id=? AND count>0",
+            (self.beta["session_id"],)).fetchall())
+        recs = [x for x in self.gate_log() if x.get("outcome") == "loop-reset"]
+        self.assertEqual(recs[-1]["session"], "legacy")
 
     def test_unknown_name_exits_2(self):
         r = self.cli("loop", "reset", "nobody")

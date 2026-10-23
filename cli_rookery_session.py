@@ -408,6 +408,19 @@ def cmd_loop_reset(args):
     root = _mail_root()
 
     def go(conn):
+        if args.legacy:
+            if not args.name:
+                _die("--legacy needs a NAME. Run: rookery loop reset --legacy NAME")
+            cur = conn.execute(
+                "UPDATE loop_counts SET count=0 WHERE session_id='legacy' AND count>0 "
+                "AND (a=? OR b=?)", (args.name, args.name))
+            n = cur.rowcount
+            conn.commit()
+            turn_block.log_event(None, "gate", outcome="loop-reset", path="cli", session="legacy",
+                                 agent_id=None, name=args.name, reset=n)
+            _out(args, {"agent_id": None, "name": args.name, "session": "legacy", "reset": n},
+                 f"Reset {n} loop counters for {args.name}.")
+            return
         if args.name:
             s = _env_session(conn)
             i = _row(ri.get_identity(conn, args.name, s["session_id"]))
@@ -512,5 +525,7 @@ def add_parser(subparsers):
     sl.required = True
     p = sl.add_parser("reset", help="Reset the loop counters of an agent in the current session.")
     p.add_argument("name", nargs="?", metavar="NAME", help="Default: my own name.")
+    p.add_argument("--legacy", action="store_true",
+                   help="Reset the counters of a sender with no session (NAME is the raw name).")
     _json_flag(p)
     p.set_defaults(func=cmd_loop_reset)

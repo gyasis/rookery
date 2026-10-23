@@ -12,6 +12,7 @@ locking is broken; peers talk to THIS service over TCP instead.
 import argparse
 import json
 import os
+import re
 import socket
 import ssl
 import sys
@@ -184,13 +185,30 @@ def _a2a_gate_answer(res, msg, ctx):
     `rejected` task result for a held mail, or None when the mail was sent."""
     out = res["outcome"]
     if out in _A2A_ERRORS:
-        return ("error", _A2A_ERRORS[out], f"{out}: {res['reason'] or 'database is busy'}")
+        # fixed text for db-busy and send-failed: a reason there can carry exception text
+        text = res["reason"] if out == "refused" else _SEND_ERRORS[out][1]
+        return ("error", _A2A_ERRORS[out], f"{out}: {text}")
     if out in ("quarantined", "loop-held"):
         return ("result", {"id": f"a2a-{res['msg_id']}", "contextId": ctx,
                            "status": {"state": "rejected",
                                       "message": f"{out}: {res['reason']}"},
                            "history": [msg]})
     return None
+
+
+def _a2a_meta(msg, params):
+    """The metadata dict of an A2A request ({} when it is not an object)."""
+    meta = msg.get("metadata") or params.get("metadata") or {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _a2a_sender(meta):
+    """`a2a-<from>` with `from` cleaned to [A-Za-z0-9._-] (no ':' since it is the MAILTO
+    delimiter), at most 64 characters in all; `client` when nothing is left."""
+    raw = meta.get("from")
+    clean = re.sub(r"[^A-Za-z0-9._-]+", "-", "" if raw is None else str(raw)).strip("-")
+    clean = clean[: 64 - len("a2a-")].strip("-")
+    return "a2a-" + (clean or "client")
 
 
 def _push_watch(sender, mid, tid, ctx, url, token, timeout=120):
@@ -237,11 +255,9 @@ def a2a_rpc(conn, rpc, principal="a2a"):
 
     if method == "message/send":
         msg = params.get("message") or {}
-        meta = msg.get("metadata") or params.get("metadata") or {}
+        meta = _a2a_meta(msg, params)
         recipient = meta.get("recipient") or DEFAULT_NODE
-        # colon-free sender id: ':' is the MAILTO:<node>:<text> delimiter, so an
-        # "a2a:client" sender would mis-route the reply.
-        sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
+        sender = _a2a_sender(meta)
         text = _a2a_text(msg.get("parts"))
         pol = security.get_policy()
         if not pol.authorize(principal, "task", recipient):
@@ -309,11 +325,29 @@ def a2a_rpc(conn, rpc, principal="a2a"):
     return err(-32601, f"method not supported: {method}")
 
 
+MAX_BODY = 1024 * 1024   # 1 MiB: the largest request body the mailroom reads
+
+_BAD_REQUEST = "The call is not valid. Check the JSON and the fields, then send the call again."
+_TOO_LARGE = "The body is too large. Send a smaller body."
+_SERVER_ERROR = "The mailroom could not do the call. Send the call again."
+
+
+class _BadInput(Exception):
+    pass
+
+
+class _TooLarge(Exception):
+    pass
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # quiet
 
+    _answered = False
+
     def _reply(self, obj, code=200):
+        self._answered = True
         b = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -322,10 +356,52 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b)
 
     def _json_body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        return json.loads(self.rfile.read(n) or b"{}")
+        """The JSON object of the request body. Raises _BadInput (400) or _TooLarge (413)."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise _BadInput()
+        if n < 0:
+            raise _BadInput()
+        if n > MAX_BODY:
+            raise _TooLarge()
+        try:
+            d = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:                   # bad JSON and bad UTF-8
+            raise _BadInput()
+        if not isinstance(d, dict):
+            raise _BadInput()
+        return d
+
+    def _guarded(self, handle):
+        """Run one request. A shape error answers 400, a too-large body 413, any other failure 500;
+        the text is fixed and the exception goes to the server log only."""
+        try:
+            handle()
+        except _TooLarge:
+            self.close_connection = True     # the body was not read
+            self._fail(413, "too-large", _TOO_LARGE)
+        except (_BadInput, KeyError, IndexError, TypeError, ValueError, AttributeError) as e:
+            print(f"[mailroom] bad input on {self.command} {self.path}: {e!r}", flush=True)
+            self._fail(400, "bad-input", _BAD_REQUEST)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:
+            print(f"[mailroom] error on {self.command} {self.path}: {e!r}", flush=True)
+            self._fail(500, "server-error", _SERVER_ERROR)
+
+    def _fail(self, code, error, detail):
+        if self._answered:
+            return                           # a reply or a stream is under way
+        self._reply({"error": error, "detail": detail}, code)
 
     def do_GET(self):
+        self._guarded(self._get)
+
+    def do_POST(self):
+        self._guarded(self._post)
+
+    def _get(self):
         u = urlparse(self.path)
         pol = security.get_policy()
         path_public = (
@@ -366,9 +442,9 @@ class Handler(BaseHTTPRequestHandler):
         rid = rpc.get("id")
         params = rpc.get("params") or {}
         msg = params.get("message") or {}
-        meta = msg.get("metadata") or params.get("metadata") or {}
+        meta = _a2a_meta(msg, params)
         recipient = meta.get("recipient") or DEFAULT_NODE
-        sender = "a2a-" + (meta.get("from") or "client").replace(":", "-")
+        sender = _a2a_sender(meta)
         text = _a2a_text(msg.get("parts"))
         pol = security.get_policy()
         if not pol.authorize(principal, "task", recipient):
@@ -392,6 +468,7 @@ class Handler(BaseHTTPRequestHandler):
                     else {"result": gate[1]})
             return self._reply({"jsonrpc": "2.0", "id": rid, **body})
 
+        self._answered = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -451,7 +528,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def do_POST(self):
+    def _post(self):
         u = urlparse(self.path)
         pol = security.get_policy()
         principal = pol.authenticate(self.headers)

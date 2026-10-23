@@ -152,9 +152,9 @@ class A2aMapping(GateHttpBase):
         self.assertIn("loop", ans["result"]["status"]["message"])
 
     def test_refused_is_32602(self):
-        # the sender is `a2a-<from>`, so only bad-input can be refused here, never system-name
-        for sender in ("x; rm", "john smith"):
-            ans = self.rpc("hello", sender=sender)
+        # the sender is `a2a-<from>` and cleaned, so an empty body is what is refused here
+        for text in ("", ""):
+            ans = self.rpc(text)
             self.assertEqual(ans["error"]["code"], -32602, ans)
         self.assertEqual(self.count(), 0)
 
@@ -174,7 +174,7 @@ class A2aMapping(GateHttpBase):
 
     def test_stream_uses_the_same_mapping(self):
         for method in ("message/send", "message/stream"):
-            self.assertEqual(self.rpc("hello", sender="x; rm", method=method)["error"]["code"],
+            self.assertEqual(self.rpc("", method=method)["error"]["code"],
                              -32602)
             self.assertEqual(self.rpc("hello", recipient="forbidden", method=method
                                       )["error"]["code"], -32003)

@@ -60,6 +60,18 @@ class SendMailPath(SendMatrix, Base):
         self.assertEqual(out.returncode, 4, out.stdout + out.stderr)
         self.assertEqual(len(self._query("SELECT id FROM inbox")), before)
 
+    def test_other_failure_exits_4_with_one_line_and_no_traceback(self):
+        junk = os.path.join(self.tmp.name, "junk.db")      # not a database: DatabaseError
+        with open(junk, "wb") as f:
+            f.write(b"not a sqlite file " * 100)
+        env = self.env(ROOKERY_DB=junk)
+        out = subprocess.run([sys.executable, os.path.join(HERE, "send_mail.py"), "--to", self.PEER,
+                              "--body", "hi"], capture_output=True, text=True, env=env,
+                             cwd=self.root, timeout=30)
+        self.assertEqual(out.returncode, 4, out.stdout + out.stderr)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertEqual(len(out.stderr.strip().splitlines()), 1)
+
 
 class SendMailNoSession(SendMatrix, Base):
     with_session = False

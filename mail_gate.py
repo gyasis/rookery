@@ -180,7 +180,7 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
     _begin(conn)
     try:
         recipient = to
-        if principal:                                      # 4, 5
+        if principal and "@" not in to:                    # 4, 5 (node@peer is a remote address)
             recipient, problem = _find_recipient(conn, sid, sender, to)
             if problem:
                 out = quarantine(to, *problem)

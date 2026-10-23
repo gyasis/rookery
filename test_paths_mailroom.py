@@ -113,7 +113,7 @@ class A2aOutcomes(ServerMixin, Base):
 
     def test_refused_sender_is_an_error_and_stores_nothing(self):
         for method in ("message/send", "message/stream"):
-            ans = self.rpc(method, "john smith", "hello")
+            ans = self.rpc(method, "human", "")
             self.assertEqual(ans.get("error", {}).get("code"), -32602, ans)
         self.assertEqual(self.count(), 0)
 

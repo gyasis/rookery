@@ -13,10 +13,30 @@ All handlers follow the signature:
         d         – parsed JSON body (POST), or None (GET)
 """
 
+import html
+import json
+import re
 import time
 from urllib.parse import urlparse, parse_qs
 
 import handshake
+
+
+_NAME_RULE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+_BAD_NAMES = (
+    "The node id and the slug may hold only letters, digits, dots and dashes, "
+    "up to 64 characters. Check both, then send the join again."
+)
+
+
+def _esc(value):
+    """Text for an HTML body: every markup character is escaped."""
+    return html.escape(str(value), quote=True)
+
+
+def _js(value):
+    """A JS string literal for an inline script: `<` is escaped so `</script>` cannot close it."""
+    return json.dumps(value).replace("<", "\\u003c")
 
 
 def handle_join(handler, conn, principal, d):
@@ -27,6 +47,14 @@ def handle_join(handler, conn, principal, d):
         slug = d.get("slug")
         if not (node_id and pubkey_b64 and slug):
             return handler._reply({"error": "node_id, pubkey_b64, slug required"}, 400)
+        if not (
+            isinstance(node_id, str)
+            and isinstance(slug, str)
+            and isinstance(pubkey_b64, str)
+            and _NAME_RULE.fullmatch(node_id)
+            and _NAME_RULE.fullmatch(slug)
+        ):
+            return handler._reply({"error": "bad-input", "detail": _BAD_NAMES}, 400)
         entry = handshake.new_request(node_id, pubkey_b64, slug)
         # Out-of-band push notification so the admin can approve from anywhere.
         try:
@@ -49,7 +77,10 @@ def handle_join(handler, conn, principal, d):
             {"request_id": entry["request_id"], "status": entry["status"]}
         )
     except Exception as e:
-        return handler._reply({"error": str(e)}, 500)
+        print(f"[mailroom] join failed: {e!r}", flush=True)
+        return handler._reply(
+            {"error": "server-error", "detail": "The join was not stored. Send the join again."}, 500
+        )
 
 
 def handle_pending(handler, conn, principal, d):
@@ -141,11 +172,11 @@ def handle_approve_form(handler, conn, principal, d):
 <body>
 <h1>Rookery Join Request</h1>
 <table>
-  <tr><td>Node</td><td>{entry.get('node_id','')}</td></tr>
-  <tr><td>Slug</td><td>{entry.get('slug','')}</td></tr>
-  <tr><td>Pubkey</td><td>{pubkey_short}…</td></tr>
-  <tr><td>Requested</td><td>{requested_iso}</td></tr>
-  <tr><td>Status</td><td class="status">{status}</td></tr>
+  <tr><td>Node</td><td>{_esc(entry.get('node_id',''))}</td></tr>
+  <tr><td>Slug</td><td>{_esc(entry.get('slug',''))}</td></tr>
+  <tr><td>Pubkey</td><td>{_esc(pubkey_short)}…</td></tr>
+  <tr><td>Requested</td><td>{_esc(requested_iso)}</td></tr>
+  <tr><td>Status</td><td class="status">{_esc(status)}</td></tr>
 </table>
 <label for="tok">Bearer token (required to approve/deny):</label>
 <input type="text" id="tok" placeholder="your ROOKERY_TOKEN" autocomplete="off">
@@ -160,7 +191,7 @@ function act(decision){{
   var msg=document.getElementById('msg');
   fetch('/approve',{{method:'POST',
     headers:{{'Content-Type':'application/json','Authorization':'Bearer '+tok}},
-    body:JSON.stringify({{request_id:'{request_id}',decision:decision}})
+    body:JSON.stringify({{request_id:{_js(request_id)},decision:decision}})
   }}).then(function(r){{return r.json().then(function(j){{return{{ok:r.ok,j:j}}}});}})
   .then(function(x){{msg.textContent=x.ok?'Done: '+x.j.status:('Error: '+(x.j.error||JSON.stringify(x.j)));msg.style.color=x.ok?'green':'red';}})
   .catch(function(e){{msg.textContent='Network error: '+e;msg.style.color='red';}});

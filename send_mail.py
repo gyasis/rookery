@@ -56,6 +56,9 @@ def main():
     except sqlite3.OperationalError as exc:
         print("database busy. Rookery sent nothing. Run send_mail.py again.", file=sys.stderr)
         return 4
+    except Exception:       # the exception text can hold a path or the body: print a fixed line
+        print("send failed. Rookery sent nothing. Run send_mail.py again.", file=sys.stderr)
+        return 4
     outcome, reason = res["outcome"], res["reason"]
     if outcome == "sent":
         who = a.sender or (principal[1]["name"] if principal else "human")

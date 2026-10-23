@@ -36,6 +36,7 @@ ack_legacy(conn, raw_name, ids) -> {"ok": [...], "already": [...], "skipped": [.
 ack_by_name(conn, name, ids, *, from_inflight=True) -> {"ok": [...], "already": [...], "skipped": [...]}  # HTTP /ack
 ```
 
+- A `to` with `@` is a remote address (`node@peer`). `submit` skips the recipient checks and stores it as given.
 - `submit` never raises for a mail problem. It returns `{"outcome", "reason", "warning", "msg_id", "bounce_id"}`.
   The outcomes and the order of checks are in [data-model.md](../data-model.md).
 - HTTP paths have no principal. They pass `principal=None`. The sender comes from the body, the A2A
@@ -60,12 +61,12 @@ ack_by_name(conn, name, ids, *, from_inflight=True) -> {"ok": [...], "already": 
 ## CLI — new `rookery` subcommand
 
 ```text
-rookery loop reset [NAME] [--json]
+rookery loop reset [NAME | --legacy NAME] [--json]
 ```
 
 | Command | Output | Exit |
 |---|---|---|
-| `loop reset` | `Reset <n> loop counters for <name>.` It resets the pairs of NAME in the current session and logs to the gate log | 0. 2 for an unknown NAME |
+| `loop reset` | `Reset <n> loop counters for <name>.` It resets the pairs of NAME in the current session and logs to the gate log. With `--legacy`, it resets the `legacy` counters of the raw NAME | 0. 2 for an unknown NAME |
 
 The command takes no sender flag (FR-011). A human runs `loop reset`. A held loop mail leaves the hold with
 `mail_screen.py release`. A loop-held send sends no bounce, so the output of `rookery inbox` for the sender

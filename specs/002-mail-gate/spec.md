@@ -336,7 +336,7 @@ Removed IDs stay in the list, so that every other ID stays stable.
 - **FR-013** (RQ-1.25): When the sender has a session, the gate MUST resolve the recipient only inside
   that session. A name in no session gives `wrong-recipient`, as in spec 001 FR-030. A name only in another
   session gives `off-team`, as in spec 001 FR-033. Both get a bounce (RQ-0.3). A sender with no session
-  has no recipient checks: the gate stores the recipient as given. The gate MUST NOT rewrite a recipient
+  has no recipient checks: the gate stores the recipient as given. A recipient with `@` is a remote address: the gate skips the recipient checks and stores it as given. The gate MUST NOT rewrite a recipient
   name into an identity ID unless the name matches an identity in the sender's session.
 - **FR-014**: A sender with no resolvable session MUST have its mail delivered. Rookery stores the mail
   `pending` in session `legacy`, with the outcome `sent`, as the code does today. The gate log MUST record
@@ -351,7 +351,7 @@ Removed IDs stay in the list, so that every other ID stays stable.
 
 **Mention notices**
 
-- **FR-017**: The postmaster MUST send a mention notice only for `pending` mail. The mentioned identity
+- **FR-017**: The postmaster MUST send a mention notice only for mail that is not held or quarantined. The mentioned identity
   MUST be in the same session as the sender.
 - **FR-018**: A mention notice MUST NOT contain any part of the mail body. It names the sender, the
   recipient and the topic, and tells the agent that it cannot read that mail.
@@ -420,7 +420,7 @@ Removed IDs stay in the list, so that every other ID stays stable.
   `/approve`, `/invite`, `/join` and `GET /join/<id>` behave as today.
 - **FR-035**: Removed 2026-10-23. There is no relay token. `relay.py` behaves as today.
 - **FR-036**: Removed 2026-10-23. A managed node stays a node name. It is not an identity (D22 removed).
-- **FR-037**: Rookery MUST have the human command `rookery loop reset [NAME] [--json]`. It resets the loop counters of the pairs of NAME in the current session. It logs the reset to the gate log. A held loop mail leaves the hold with `mail_screen.py release`. A loop-held send sends no bounce, as in spec 001 FR-039.
+- **FR-037**: Rookery MUST have the human command `rookery loop reset [NAME | --legacy NAME] [--json]`. It resets the loop counters of the pairs of NAME in the current session. With `--legacy`, it resets the `legacy` counters of the raw NAME, so a sender with no session can send again. It logs the reset to the gate log. A held loop mail leaves the hold with `mail_screen.py release`. A loop-held send sends no bounce, as in spec 001 FR-039.
 
 ### Key Entities
 

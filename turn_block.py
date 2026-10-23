@@ -12,6 +12,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 
@@ -61,7 +62,15 @@ def workspace(root: str, session_name: str, agent_name: str) -> str:
     return path
 
 
+_LOGGER_LOCK = threading.Lock()
+
+
 def _logger_for(path: str) -> logging.Logger:
+    with _LOGGER_LOCK:      # the mailroom and the shared MCP server are threaded
+        return _logger_for_locked(path)
+
+
+def _logger_for_locked(path: str) -> logging.Logger:
     lg = _LOGGERS.get(path)
     if lg is not None and not os.path.exists(path):
         # file deleted externally: the handler writes to an unlinked inode

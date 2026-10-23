@@ -44,6 +44,13 @@ class Mentions(test_hooks.Base):
         postmaster._mention_pass(self.conn, 0, [])
         self.assertEqual(self.notices(), [])
 
+    def test_inflight_mail_gives_one_notice(self):
+        mid = self.mail()
+        self.conn.execute("UPDATE inbox SET status='inflight' WHERE id=?", (mid,))
+        self.conn.commit()
+        postmaster._mention_pass(self.conn, 0, [])
+        self.assertEqual(len(self.notices()), 1)
+
     def test_pending_mail_gives_one_notice_without_body(self):
         mid = self.mail()
         last = postmaster._mention_pass(self.conn, 0, [])

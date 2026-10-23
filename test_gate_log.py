@@ -10,6 +10,7 @@ import contextlib
 import io
 import json
 import os
+import threading
 import unittest
 
 import turn_block as TB
@@ -27,6 +28,26 @@ class GateLog(Base):
         self.assertEqual(len(recs), 1)
         self.assertEqual((recs[0]["path"], recs[0]["outcome"]), ("send", "sent"))
         self.assertIn("ts", recs[0])
+
+    def test_concurrent_first_use_adds_one_handler(self):
+        n, errs = 16, []
+        barrier = threading.Barrier(n)
+
+        def go(i):
+            try:
+                barrier.wait()
+                TB.log_event(None, "gate", path="t", n=i)
+            except Exception as exc:       # pragma: no cover
+                errs.append(exc)
+        ts = [threading.Thread(target=go, args=(i,)) for i in range(n)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(errs, [])
+        p = os.path.join(self.root, "logs", "gate.jsonl")
+        self.assertEqual(len(self.read(p)), n)
+        self.assertEqual(len(TB._logger_for(p).handlers), 1)
 
     def test_root_unset_writes_under_home(self):
         del os.environ["ROOKERY_ROOT"]
