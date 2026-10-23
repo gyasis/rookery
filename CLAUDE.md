@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-specs/001-rookery-init-turn-block/plan.md
+specs/002-mail-gate/plan.md
 <!-- SPECKIT END -->
