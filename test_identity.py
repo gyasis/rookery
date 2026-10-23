@@ -94,6 +94,14 @@ class Names(IdentityBase):
             RI.new_identity(self.conn, a["session_id"], "researcher")
         self.assertEqual(self.count("identities"), 1)
 
+    def test_system_sender_names_refused(self):
+        a = RI.new_session(self.conn, name="alpha")
+        for name in sorted(R.SYSTEM_SENDERS):
+            with self.assertRaises(ValueError, msg=name) as cm:
+                RI.new_identity(self.conn, a["session_id"], name)
+            self.assertIn("system sender", str(cm.exception))
+        self.assertEqual(self.count("identities"), 0)
+
     def test_unsafe_names_rejected(self):
         a = RI.new_session(self.conn, name="alpha")
         for bad in ("..", "a/b", "x" * 65):
@@ -421,6 +429,14 @@ class CliSessionIdentity(unittest.TestCase):
         self.assertEqual(shown["session"]["state"], "open")
         ended = self.cli("session", "end", "alpha", "--json")
         self.assertEqual(ended["state"], "ended")
+
+    def test_identity_new_system_name_exits_2(self):
+        n = self.cli("session", "new", "--name", "alpha", "--json")
+        for name in sorted(R.SYSTEM_SENDERS):
+            r = self.cli("identity", "new", name, "--session", "alpha", code=2)
+            self.assertIn("system sender", r.stderr)
+            self.assertEqual(r.stdout, "")
+        self.assertEqual(self.count("identities", n["session_id"]), 0)
 
     def test_session_end_deletes_nothing(self):
         sid = self.cli("session", "new", "--name", "alpha", "--json")["session_id"]

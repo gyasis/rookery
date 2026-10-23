@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import tempfile
 import time
 import unicodedata
@@ -21,6 +22,7 @@ SAFE_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
 _LOG_FILES = {
     "turn-block": os.path.join("logs", "turn-block.jsonl"),
     "postmaster": os.path.join("postmaster", "postmaster.jsonl"),
+    "gate": os.path.join("logs", "gate.jsonl"),
 }
 _LOGGERS: dict = {}   # log path -> Logger, one handler per file
 
@@ -79,19 +81,31 @@ def _logger_for(path: str) -> logging.Logger:
     return lg
 
 
-def log_event(root: str, stream: str = "turn-block", **fields) -> None:
+def gate_root() -> str:
+    """ROOKERY_ROOT, else ~/.rookery. The mailroom and the shared MCP server have no project name (D15)."""
+    return os.environ.get("ROOKERY_ROOT") or os.path.expanduser("~/.rookery")
+
+
+def log_event(root, stream: str = "turn-block", **fields) -> None:
     """Append one JSON line (ts + fields) to the stream's rotated log (D15).
 
     Fields by convention: session, agent_id, name, task, adapter, outcome,
-    reason, msg_id. Logging never raises.
+    reason, msg_id. Logging never raises. The `gate` stream takes root=None
+    (see gate_root) and prints one line to stderr when a write fails.
     """
     try:
+        if root is None:
+            root = gate_root()
         rel = _LOG_FILES[stream]
         rec = {"ts": rookery.now()}
         rec.update(fields)
         _logger_for(os.path.join(root, rel)).info(json.dumps(rec, default=str))
-    except Exception:
-        pass
+    except Exception as exc:
+        if stream == "gate":
+            try:
+                print(f"rookery: cannot write the gate log: {exc}", file=sys.stderr)
+            except Exception:
+                pass   # a closed stderr must not make logging raise
 
 
 def _schema_current(conn: sqlite3.Connection) -> bool:
