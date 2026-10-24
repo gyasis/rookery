@@ -101,7 +101,7 @@ rookery_views.py           NEW  ROOKERY.md, workspace files, _directory, _teams,
 rookery_worktree.py        NEW  registry, git worktree add, finish, gc (D12 to D14)
 rookery_guard.py           NEW  guard and watch logic, claims match, port choice (D16)
 cli_hook.py                EDIT register hook guard and hook watch
-turn_block.py              EDIT log_event: gate stream under ~/.rookery (D2); _schema_current knows the new tables
+turn_block.py              EDIT log_event: gate stream under ~/.rookery (D2); ensure_up_tables adds the new tables for the new commands
 rookery.py                 EDIT four CREATE TABLE IF NOT EXISTS (D6)
 cli_init.py                NO CHANGE (merge_hooks is reused as it is)
 rookery_config.default.json EDIT default_binding, launch, alive, harness, ports

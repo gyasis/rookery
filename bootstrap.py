@@ -49,6 +49,7 @@ _PY_MODULES = [
     # rookery init and the turn block (phase 1, research D14)
     "turn_block.py",
     "rookery_identity.py",
+    "rookery_team.py",
     "cli_init.py",
     "cli_hook.py",
     "cli_rookery_session.py",

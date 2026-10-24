@@ -72,14 +72,15 @@ then writes the code. No task leaves a failing test.
 
 **Purpose**: the schema, the team file reader, D2 and the proof of D3.
 
-- [ ] T003 [P] Edit `rookery.py`. Add the four tables of [data-model.md](data-model.md) (`up_agents`,
+- [x] T003 [P] Edit `rookery.py`. Add the four tables of [data-model.md](data-model.md) (`up_agents`,
   `worktrees`, `claims`, `ports`) to `_SESSION_TABLES_SQL` with `CREATE TABLE IF NOT EXISTS`. Edit
-  `turn_block._schema_current` (`turn_block.py:120`) so that its table set has the four names (D6). Write
+  `turn_block.py`: add `ensure_up_tables(conn)`, and keep `_schema_current` (`turn_block.py:120`) as it is, so that
+  hooks never need the write lock (D6; wave 2 audit finding 10). Write
   `test_up_schema.py` first. Cases: a new database has the four tables with the columns of data-model. An old
   database (made with the spec 001 schema and one inbox row) gets the four tables on `open_db`. The
   counts of `inbox`, `rookery_sessions`, `identities` and `bindings` do not change. `ports.port` is unique.
   Verify: `python3 -m unittest test_up_schema test_identity test_turn_block test_hooks test_send -v`
-- [ ] T004 [P] Create `rookery_team.py` with `load(path) -> dict` and `TeamError(errors: list)`. It reads the
+- [x] T004 [P] Create `rookery_team.py` with `load(path) -> dict` and `TeamError(errors: list)`. It reads the
   whole file and applies every rule of the data-model "Team file" table (D4, D17) before it returns. A writer's
   name, the session and the `task_id` must pass `git check-ref-format --branch agent/<session>/<name>/<task_id>`
   (FR-021). `codex` gives "Codex waits for R19" (FR-019). Each error is `{"index", "name", "problem"}`, and
@@ -98,7 +99,7 @@ then writes the code. No task leaves a failing test.
   `<HOME>/.rookery/logs/gate.jsonl`, and neither root has `logs/gate.jsonl` (SC-006). A `turn-block` record
   still lands in the project root. Edit `test_gate_log.py:6,53` to the new path.
   Verify: `python3 -m unittest test_d2_gate_home test_gate_log test_gate test_turn_block test_hooks -v`
-- [ ] T006 [P] Write `test_d3_root.py` (D3: proof, no code change). For each of the five sites, set
+- [x] T006 [P] Write `test_d3_root.py` (D3: proof, no code change). For each of the five sites, set
   `ROOKERY_ROOT` to a temporary project root and make the current folder `<root>/agents/s1/scout`. Then assert
   that the site uses the root. `rookery session new --from` (`cli_rookery_session.py:111`) copies into the root.
   `rookery identity bind` (`:244`) logs under the root. `rookery peek` (`:274`) reads with the root.

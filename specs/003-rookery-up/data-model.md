@@ -5,8 +5,9 @@
 ## Schema change (additive only)
 
 Four new tables go in `rookery._SESSION_TABLES_SQL` with `CREATE TABLE IF NOT EXISTS`. No table or column
-changes. `turn_block._schema_current` adds the four names to its set, so that an old database gets them on
-the next open. The quickstart runs `init_db` on a COPY of the live database and checks that each old row count
+changes. `turn_block._schema_current` keeps its old table set, so that a hook never needs the write lock to
+open a database (wave 2 audit). A new `turn_block.ensure_up_tables(conn)` adds the four tables to an old
+database. Only the new commands (`up`, `finish`, `gc`, `regen`) and the guard hook call it. The quickstart runs `init_db` on a COPY of the live database and checks that each old row count
 stays the same.
 
 ```sql
