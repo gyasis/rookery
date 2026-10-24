@@ -162,7 +162,7 @@ in one session. `git status` in the host repo is clean.
   (FR-013). No generated file contains `check_inbox`, `await_message` or `mcp__`. No `CLAUDE.md` above the
   workspace.
   Verify: `python3 -m unittest test_views test_text_hints -v`
-- [ ] T010 [US1] Add `settings_json(path, project, repo=None)` to `rookery_views.py`. Needs T009 first. It calls
+- [x] T010 [US1] Add `settings_json(path, project, repo=None)` to `rookery_views.py`. Needs T009 first. It calls
   `cli_init.merge_hooks(path, project, with_permissions=True)` (D8). When `repo` has a committed
   `.claude/settings.json` with Rookery handlers (`cli_init._is_rookery`), it copies their exact command text for
   those events instead (D8, H1). Nothing more for now (T019 adds the

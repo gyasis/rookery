@@ -1,5 +1,6 @@
 """rookery_views — the generated files of `rookery up`: workspace files and ROOKERY.md (D7, D15)."""
 import datetime
+import json
 import os
 
 import cli_init
@@ -164,4 +165,45 @@ Use the `rookery` commands to read and send mail.
 """
     path = os.path.join(root, "ROOKERY.md")
     cli_init.write_text_atomic(path, _stamp(command) + text)
+    return path
+
+
+def _committed_commands(repo):
+    """The first Rookery handler per hook event in the repo's committed .claude/settings.json, as
+    (matcher group, whole handler object). A missing or invalid file gives {}."""
+    try:
+        with open(os.path.join(repo, ".claude", "settings.json"), encoding="utf-8") as fh:
+            hooks = json.load(fh).get("hooks")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    found = {}
+    if not isinstance(hooks, dict):
+        return found
+    for event, _sub in cli_init.HOOK_EVENTS:
+        groups = hooks.get(event)
+        for g in groups if isinstance(groups, list) else []:
+            for h in (g.get("hooks") if isinstance(g, dict) and isinstance(g.get("hooks"), list) else []):
+                if event not in found and cli_init._is_rookery(h):
+                    found[event] = (g, h)
+    return found
+
+
+def settings_json(path, project, repo=None):
+    """Write the hooks file `_config/settings.json` (D8). With a repo that has the hooks committed,
+    each event copies the whole committed handler (and its group matcher), so Claude Code runs the same handler once.
+    Never writes the repo file or ~/.claude/settings.json."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    cli_init.merge_hooks(path, project, with_permissions=True)
+    committed = _committed_commands(repo) if repo else {}
+    if committed:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        for event, (cgroup, chandler) in committed.items():
+            for g in data["hooks"][event]:
+                for i, h in enumerate(g["hooks"]):
+                    if cli_init._is_rookery(h):
+                        g["hooks"][i] = json.loads(json.dumps(chandler))
+                        if "matcher" in cgroup:
+                            g["matcher"] = cgroup["matcher"]
+        cli_init.write_text_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     return path

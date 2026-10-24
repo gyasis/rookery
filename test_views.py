@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 
+import cli_init
 import rookery_team
 import rookery_views
 
@@ -143,6 +144,63 @@ class WorkspaceFiles(Base):
             r = subprocess.run(["ste-lint", f, "--max-score", "2.0", "--glossary", glossary],
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"{f}\n{r.stdout}{r.stderr}")
+
+
+def _handlers(data, event):
+    return [h for g in data["hooks"][event] for h in g["hooks"] if cli_init._is_rookery(h)]
+
+
+class SettingsJson(Base):
+    def setUp(self):
+        super().setUp()
+        self.out = os.path.join(self.tmp, "ws", "_config", "settings.json")
+
+    def load(self, p):
+        with open(p, encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_matches_merge_hooks_text_and_permissions(self):
+        fresh = os.path.join(self.tmp, "fresh", ".claude", "settings.json")
+        cli_init.merge_hooks(fresh, "app")
+        self.assertEqual(rookery_views.settings_json(self.out, "app"), self.out)
+        got, want = self.load(self.out), self.load(fresh)
+        for event, _sub in cli_init.HOOK_EVENTS:
+            self.assertEqual(_handlers(got, event)[0]["command"].encode(),
+                             _handlers(want, event)[0]["command"].encode())
+        self.assertIn("Bash(rookery inbox:*)", got["permissions"]["allow"])
+
+    def _repo(self, body):
+        repo = os.path.join(self.tmp, "repo")
+        os.makedirs(os.path.join(repo, ".claude"))
+        p = os.path.join(repo, ".claude", "settings.json")
+        with open(p, "w") as fh:
+            fh.write(body)
+        return repo, p
+
+    def test_repo_committed_text_is_copied_once(self):
+        committed = os.path.join(self.tmp, "c", ".claude", "settings.json")
+        cli_init.merge_hooks(committed, "app")
+        data = self.load(committed)
+        _handlers(data, "Stop")[0].update(command="/opt/bin/rookery hook stop --project app", timeout=30)
+        data["hooks"]["Stop"][0]["matcher"] = "*"
+        repo, rp = self._repo(json.dumps(data, indent=2))
+        before = open(rp, "rb").read()
+        rookery_views.settings_json(self.out, "app", repo=repo)
+        got = self.load(self.out)
+        self.assertEqual([h["command"] for h in _handlers(got, "Stop")],
+                         ["/opt/bin/rookery hook stop --project app"])
+        self.assertEqual(_handlers(got, "Stop")[0], _handlers(data, "Stop")[0])
+        self.assertEqual(got["hooks"]["Stop"][0]["matcher"], "*")
+        self.assertEqual(len([h for g in got["hooks"]["Stop"] for h in g["hooks"]]), 1)
+        self.assertEqual(_handlers(got, "SessionStart")[0]["command"], "rookery hook session-start --project app")
+        self.assertEqual(_handlers(got, "UserPromptSubmit")[0]["command"], "rookery hook prompt --project app")
+        self.assertEqual(open(rp, "rb").read(), before)
+
+    def test_invalid_repo_file_falls_back(self):
+        repo, _ = self._repo("{not json")
+        rookery_views.settings_json(self.out, "app", repo=repo)
+        self.assertEqual(_handlers(self.load(self.out), "Stop")[0]["command"], "rookery hook stop --project app")
+        rookery_views.settings_json(self.out, "app", repo=os.path.join(self.tmp, "nope"))
 
 
 if __name__ == "__main__":
