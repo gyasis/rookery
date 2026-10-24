@@ -97,3 +97,17 @@ deny. Ask it to run `echo x > /tmp/outside.txt` in Bash. Expected: a `Rookery wa
 After merge: fast-forward `~/Documents/code/rookery`, rebuild the zipapp with `bootstrap.build_pyz`, install
 `skills/rookery/SKILL.md` into `~/.claude/skills/rookery/`, and save a copy of the live database first. `rookery up`
 starts no daemon, so no service restarts.
+
+## Live check results (2026-10-24)
+
+The checks ran in a separate herdr workspace with a scratch repo, database and root. A shim put this branch's
+`rookery` on the pane `PATH`. Claude Code 2.1.309 ran in each pane.
+
+| Check | Result | Evidence |
+|---|---|---|
+| 5. herdr launch and capture (D9) | pass | `rookery up` bound `herdr-pane:w5:p2` and `herdr-pane:w5:p3`. `herdr pane get` found both. The `join_cmd` text reached the pane shell intact. |
+| D10 first-start dialogs | pass | Each new pane showed the trust dialog. The reader also showed the external import dialog for the host `CLAUDE.md`. |
+| 6. A reader quotes a host rule (R11, SC-009) | pass | The reader answered BANANA in 6 s and read no file. |
+| 7. Two agents send mail (SC-005) | pass | The block path stored row 1 (scout to fixer). The postmaster pushed a wake to fixer. fixer read the mail, marked it read, and its reply stored row 2. The gate log in `~/.rookery/logs` has both decisions (D2). |
+| 7a. A committed hook runs once (FR-031) | pass | The committed and the generated Stop handler have the same text. One turn of fixer gave 1 row, 1 gate decision and 1 Stop event. |
+| 8. Guard and watch (R9) | pass | The Write tool to the host repo got the Rookery guard deny, and the file does not exist. The Bash write gave the agent the `Rookery watch` message and a `watch-flag` log line. |
