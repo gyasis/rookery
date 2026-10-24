@@ -266,13 +266,15 @@ not edit" line and the time.
 
 ## D16. Guardrails (under 002 D24)
 
-- **Guard** (`rookery hook guard`, PreToolUse, matcher `Write|Edit|NotebookEdit`): it reads the identity from
+- **Guard** (`rookery hook guard`, PreToolUse, matcher `Write|Edit|MultiEdit|NotebookEdit`): it reads the identity from
   the environment and the allowed folders from the database (the workspace and the active worktree). It
-  denies a write outside them with the documented `permissionDecision: "deny"` output (R9). A write to a
-  file that another agent claims gets an allow with a warning (R12).
+  denies a write outside them with the documented `permissionDecision: "deny"` output (R9). The folders in
+  `guard_allow` (default: the system temp folder and `~/.claude`) are also allowed. A write to a file that
+  another agent claims gets `additionalContext` with a warning and no permission decision, so the user's
+  permission prompt still applies (R12).
 - **Watch** (`rookery hook watch`, PostToolUse, matcher `Bash`): it reads the command text and looks for
   write targets (`>`, `>>`, `tee`, the last argument of `cp`, `mv` or `install`, `touch`, `mkdir`). It logs each
-  target outside the allowed folders to the `turn-block` log and returns a warning. This is a text check: it
+  target outside the allowed folders to the `turn-block` log. It returns the warning to the user and to the agent. This is a text check: it
   catches common accidents and does not catch everything (D24).
 - **Claims**: a team file entry `claims` gives file patterns for an agent. They go in the `claims` table.
 - **Ports**: the configuration gives a port range and the names. `rookery up` gives each agent one free port

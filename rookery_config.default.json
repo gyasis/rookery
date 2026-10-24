@@ -1,5 +1,6 @@
 {
  "loop_limit": 10,
+ "guard_allow": ["{tmp}", "~/.claude"],
  "busy_stale_s": 1800,
  "herdr_probe": true,
  "loop_pair_limit": 30,

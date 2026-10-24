@@ -265,6 +265,22 @@ def _report_team_errors(args, errors):
     sys.exit(EXIT_BAD)
 
 
+def _store_claims(conn, session_id, agent_id, patterns):
+    """Team file claims -> claims rows: new patterns active, kept ones active, dropped ones inactive.
+    A row is never deleted."""
+    import rookery_identity as ri
+    now = ri._now_iso()
+    for p in dict.fromkeys(patterns):
+        conn.execute("INSERT INTO claims(session_id, agent_id, pattern, active, updated_at) VALUES(?,?,?,1,?) "
+                     "ON CONFLICT(session_id, agent_id, pattern) DO UPDATE SET active=1, updated_at=excluded.updated_at "
+                     "WHERE active=0", (session_id, agent_id, p, now))
+    for (p, active) in conn.execute("SELECT pattern, active FROM claims WHERE session_id=? AND agent_id=?",
+                                    (session_id, agent_id)).fetchall():
+        if active and p not in patterns:
+            conn.execute("UPDATE claims SET active=0, updated_at=? WHERE session_id=? AND agent_id=? AND pattern=?",
+                         (now, session_id, agent_id, p))
+
+
 def _build_rows(conn, team, host, root, config):
     """One transaction: session, identities, up_agents.
     Return (session, [(agent, 'made'|'reused', changed fields)], notes)."""
@@ -318,6 +334,7 @@ def _build_rows(conn, team, host, root, config):
                 (ident["agent_id"], session["session_id"], a["harness"], a["role"],
                  repo, a.get("task_id") if writer else None,
                  a.get("binding") or default, ri._now_iso()))
+            _store_claims(conn, session["session_id"], ident["agent_id"], a.get("claims") or [])
             row = dict(a, agent_id=ident["agent_id"])
             if writer:
                 import rookery_worktree
@@ -325,6 +342,13 @@ def _build_rows(conn, team, host, root, config):
                     conn, root, session["name"], session["session_id"], a["name"], ident["agent_id"],
                     repo, a["task_id"], ri._now_iso())
             rows.append((row, state, changed))
+        names = [a["name"] for a in team["agents"]]
+        for (aid,) in conn.execute(
+                "SELECT u.agent_id FROM up_agents u JOIN identities i ON i.agent_id=u.agent_id "
+                "WHERE u.session_id=? AND i.name NOT IN (%s)" % ",".join("?" * len(names)),
+                (session["session_id"], *names)).fetchall():
+            conn.execute("UPDATE claims SET active=0, updated_at=? WHERE session_id=? AND agent_id=? AND active=1",
+                         (ri._now_iso(), session["session_id"], aid))
     except BaseException:
         conn.rollback()
         raise

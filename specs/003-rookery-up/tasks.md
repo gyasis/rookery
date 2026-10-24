@@ -335,7 +335,7 @@ fake agent sends one mail that its teammate gets.
 **Independent Test**: the guard denies a Write outside. The watch flags a Bash write outside. A write to a claimed file
 warns. Two agents get different free ports.
 
-- [ ] T019 [US7] Create `rookery_guard.py` with `guard(hook_input, env, conn) -> dict | None` and
+- [x] T019 [US7] Create `rookery_guard.py` with `guard(hook_input, env, conn) -> dict | None` and
   `watch(hook_input, env, conn) -> dict | None` (D16). Register `rookery hook guard` and `rookery hook watch` in
   `cli_hook.py` the same way as the other hook subcommands, so that an error never exits non-zero. Add the
   `PreToolUse` (`Write|Edit|NotebookEdit`) and `PostToolUse` (`Bash`) handlers to

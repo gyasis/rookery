@@ -102,7 +102,7 @@ The file is the output of `cli_init.merge_hooks(path, project, with_permissions=
 | `PreToolUse` | `Write\|Edit\|NotebookEdit` | `rookery hook guard --project <project>` |
 | `PostToolUse` | `Bash` | `rookery hook watch --project <project>` |
 
-For a writer whose repo has Rookery handlers committed, the first three handler texts are copied from that
+For a writer whose repo has Rookery handlers committed, Rookery copies the first three handlers from that
 file. Else they are byte for byte the same as those of `rookery init`. So Claude Code runs each
 once when a repo also has them (FR-031). A test compares the two outputs.
 
@@ -110,7 +110,8 @@ once when a repo also has them (FR-031). A test compares the two outputs.
 
 Input: the PreToolUse JSON on stdin. It reads `tool_input.file_path` (or `notebook_path`).
 
-- Target inside the agent's workspace or active worktree: no output, exit 0.
+- Target inside the agent's workspace, its active worktree or a `guard_allow` folder: no output, exit 0.
+  The default `guard_allow` holds the system temp folder and `~/.claude`.
 - Target outside them:
 
   ```json
@@ -118,17 +119,19 @@ Input: the PreToolUse JSON on stdin. It reads `tool_input.file_path` (or `notebo
    "permissionDecisionReason": "Rookery guard: <path> is outside your folders (<workspace>, <worktree>). Write only in your own folders."}}
   ```
 
-- Target inside the worktree and claimed by another agent: allow, with
-  `"permissionDecisionReason": "Rookery claims: <agent> owns <pattern>. Tell that agent before you change it."`
-  and a `turn-block` log line.
+- Target inside the worktree and claimed by another agent: the hook gives no permission decision.
+  The normal permission flow applies. The agent gets
+  `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "Rookery claims: <agent> owns <pattern>. Tell that agent before you change it."}}`
+  plus a `turn-block` log line. An `allow` decision would skip the user's permission prompt (wave 16 audit).
 - No identity in the environment, or an internal error: no output, exit 0, and a log line. A guard error never
   blocks the agent.
 
 ### `rookery hook watch`
 
 Input: the PostToolUse JSON on stdin. It reads `tool_input.command`. For each write target outside the
-allowed folders, it writes a `watch-flag` line to the `turn-block` log and returns
-`{"systemMessage": "Rookery watch: this command wrote <path>, outside your folders."}`. It always exits 0.
+allowed folders, it writes a `watch-flag` line to the `turn-block` log. It returns one text two times:
+as `systemMessage` for the user, and as `hookSpecificOutput.additionalContext` for the agent. The text is
+"Rookery watch: this command wrote <path>, outside your folders." It always exits 0.
 
 ## Configuration (`rookery_config.default.json`, new keys)
 

@@ -2,6 +2,7 @@
 import datetime
 import json
 import os
+import re
 
 import cli_init
 import turn_block
@@ -253,7 +254,35 @@ def settings_json(path, project, repo=None):
                         if "matcher" in cgroup:
                             g["matcher"] = cgroup["matcher"]
         cli_init.write_text_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    _tool_handlers(path, project)
     return path
+
+
+_TOOL_HANDLERS = (("PreToolUse", "Write|Edit|MultiEdit|NotebookEdit", "guard"), ("PostToolUse", "Bash", "watch"))
+_TOOL_OURS = re.compile(r"(?:\S*/)?rookery hook (guard|watch) --project \S+")
+
+
+def _tool_handlers(path, project):
+    """Add the guard (PreToolUse) and watch (PostToolUse) handlers (T019). Idempotent: a handler of ours
+    is rewritten in place, never duplicated."""
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    before = json.dumps(data, sort_keys=True)
+    hooks = data.setdefault("hooks", {})
+    for event, matcher, sub in _TOOL_HANDLERS:
+        cmd = f"rookery hook {sub} --project {project}"
+        groups = hooks.setdefault(event, [])
+        done = False
+        for g in groups:
+            for h in g.get("hooks", []):
+                m = isinstance(h.get("command"), str) and _TOOL_OURS.fullmatch(h["command"].strip())
+                if m and m.group(1) == sub:
+                    h["command"] = cmd
+                    done = True
+        if not done:
+            groups.append({"matcher": matcher, "hooks": [{"type": "command", "command": cmd}]})
+    if json.dumps(data, sort_keys=True) != before:
+        cli_init.write_text_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 # --- views read from the database (T017, D15). SELECT only: nothing here writes a row or marks mail read.
