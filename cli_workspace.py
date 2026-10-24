@@ -130,7 +130,7 @@ def _harness_cmd(a, ws, root, host, hcfg):
 def _env_pairs(session, a, root, host):
     pairs = [("ROOKERY_SESSION", session["session_id"]), ("ROOKERY_NODE", a["agent_id"]),
              ("ROOKERY_ROOT", os.path.abspath(root)), ("ROOKERY_PROJECT_ROOT", os.path.abspath(host)),
-             ("ROOKERY_PORTS", "{}")]
+             ("ROOKERY_PORTS", json.dumps(a.get("_ports") or {}))]
     if os.environ.get("ROOKERY_DB"):
         pairs.append(("ROOKERY_DB", os.path.abspath(os.environ["ROOKERY_DB"])))
     return pairs
@@ -403,6 +403,13 @@ def _up(args):
                             notes.extend(a["_wt"]["notes"])
                             if note:
                                 notes.append(note)
+                    import rookery_guard
+                    ucfg = _up_config(config)
+                    for a, _s, _c in rows:
+                        try:
+                            a["_ports"] = rookery_guard.assign_ports(conn, a["agent_id"], ucfg)
+                        except rookery_guard.PortError as e:
+                            a["_port_err"] = str(e)
                 finally:
                     conn.close()
                 for a, state, changed in rows:
@@ -416,6 +423,8 @@ def _up(args):
                                    "changed": changed, "_state": state})
                     if a.get("_wt_err"):
                         report[-1]["launch"] = f"not started: {a['_wt_err']}"
+                    elif a.get("_port_err"):
+                        report[-1]["launch"] = f"not started: {a['_port_err']}"
                     if changed:
                         notes.append(f"{a['name']}: changed {', '.join(changed)}")
                 md = rookery_views.rookery_md(root)
@@ -432,7 +441,7 @@ def _up(args):
                     conn = turn_block.open_db()
                     try:
                         for r, (a, _s, _c) in zip(report, rows):
-                            if a.get("_wt_err"):
+                            if a.get("_wt_err") or a.get("_port_err"):
                                 continue
                             r["launch"], r["binding"], pane = _launch_agent(
                                 conn, ucfg, session, a, r["workspace"], root, host)

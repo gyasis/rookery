@@ -351,7 +351,7 @@ warns. Two agents get different free ports.
   handlers, and the first three handlers are still equal to the `rookery init` output. A second `up` with a
   claim dropped from the team file sets it inactive, the guard ignores it, and the claims row count stays the same.
   Verify: `python3 -m unittest test_guard test_views test_finish_gc test_hooks test_turn_block -v`
-- [ ] T020 [US7] Add `assign_ports(conn, agent_id, config) -> dict` to `rookery_guard.py` and use it in
+- [x] T020 [US7] Add `assign_ports(conn, agent_id, config) -> dict` to `rookery_guard.py` and use it in
   `cmd_up`, so that `ROOKERY_PORTS` holds the JSON map (D16, FR-008). Needs T019 first. A port is free when
   no `ports` row has it and a bind on `127.0.0.1` succeeds. An agent that has ports keeps them on a second
   run. Write `test_ports.py` first. Cases: two agents get different ports for each name in `ports.names`,

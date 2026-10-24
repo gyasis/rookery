@@ -8,6 +8,8 @@ CLI wrapper in cli_hook turns any exception into a log line and exit 0.
 import os
 import json
 import shlex
+import socket
+import sqlite3
 import tempfile
 
 import rookery_identity
@@ -199,3 +201,51 @@ def watch(hook_input, env, conn, root=None):
     text = f"Rookery watch: this command wrote {', '.join(flagged)}, outside your folders."
     return {"systemMessage": text,
             "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}
+
+
+class PortError(Exception):
+    """No free port is left in the range. The message is the report text after 'not started: '."""
+
+
+def _bindable(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def assign_ports(conn, agent_id, config):
+    """The agent's {name: port} map (D16, FR-008). Names it already has keep their port. A new name gets the
+    lowest port in config["ports"]["range"] that no `ports` row has and that binds on 127.0.0.1. One
+    transaction, so two `up` runs cannot take the same port; a UNIQUE clash moves on to the next port."""
+    cfg = config.get("ports") or {}
+    lo, hi = cfg["range"]
+    names = cfg.get("names") or []
+    conn.commit()                       # BEGIN needs no transaction open
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        have = dict(conn.execute("SELECT name, port FROM ports WHERE agent_id=?", (agent_id,)).fetchall())
+        taken = {r[0] for r in conn.execute("SELECT port FROM ports")}
+        for name in names:
+            if name in have:
+                continue
+            for port in range(lo, hi + 1):
+                if port in taken or not _bindable(port):
+                    continue
+                try:
+                    conn.execute("INSERT INTO ports(agent_id, name, port) VALUES(?,?,?)", (agent_id, name, port))
+                except sqlite3.IntegrityError:
+                    taken.add(port)
+                    continue
+                taken.add(port)
+                have[name] = port
+                break
+            else:
+                raise PortError(f"no free port in {lo}-{hi}")
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+    return {n: have[n] for n in names if n in have}

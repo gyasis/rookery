@@ -100,7 +100,7 @@ class UpLaunch(unittest.TestCase):
         self.assertEqual(env["ROOKERY_SESSION"], out["session_id"])
         self.assertEqual(env["ROOKERY_ROOT"], self.root)
         self.assertEqual(env["ROOKERY_PROJECT_ROOT"], self.repo)
-        self.assertEqual(env["ROOKERY_PORTS"], "{}")
+        self.assertEqual(sorted(json.loads(env["ROOKERY_PORTS"])), ["api", "web"])
         self.assertEqual(env["ROOKERY_DB"], self.db)
         for k in ("ROOKERY_ROOT", "ROOKERY_PROJECT_ROOT", "ROOKERY_DB"):
             self.assertTrue(os.path.isabs(env[k]))
