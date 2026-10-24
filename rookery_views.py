@@ -63,7 +63,7 @@ def _scope_md(agent, team):
     return out + "\n".join(_card(a) for a in others)
 
 
-def _body_md(agent, session):
+def _body_md(agent, session, host_import=None, rules_link=False):
     return f"""# {agent['name']}
 
 You are **{agent['name']}**. Your agent ID is `{agent['agent_id']}`.
@@ -94,7 +94,16 @@ Do not poll. Do not sleep. Do not schedule inbox checks.
 - `ROOKERY.md` at the Rookery root says what each root folder holds.
 - `CONTEXT.md` in this folder says how you stage your work.
 - `_config/` in this folder holds your persona and your scope card.
-"""
+""" + _rules_md(host_import, rules_link)
+
+
+def _rules_md(host_import, rules_link):
+    out = ""
+    if host_import:
+        out += f"\n## Project rules\n\n@{host_import}\n"
+    if rules_link:
+        out += "\n## Project rules\n\nRead `HOST_RULES.md` in this folder. It holds the rules of the host repo.\n"
+    return out
 
 
 def _context_md(agent):
@@ -122,17 +131,55 @@ Rookery writes them again at the next start.
 """
 
 
-def workspace_files(root, session, agent, team, host, command="up"):
+def host_rules_file(host):
+    """The host repo's rules file for a reader: AGENTS.md, else CLAUDE.md, else None."""
+    for n in ("AGENTS.md", "CLAUDE.md"):
+        p = os.path.join(host, n) if host else None
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+def _host_rules_link(ws, host, notes):
+    """Make HOST_RULES.md a symlink to the host rules file. Return True when it is in place.
+    A regular file that a person put there stays, with a note."""
+    target = host_rules_file(host)
+    link = os.path.join(ws, "HOST_RULES.md")
+    if target is None:
+        if os.path.islink(link):
+            os.remove(link)
+        return False
+    if os.path.lexists(link) and not os.path.islink(link):
+        if notes is not None:
+            notes.append(f"{os.path.basename(ws)}: HOST_RULES.md is a file that you made, so Rookery kept it")
+        return False
+    if os.path.islink(link):
+        os.remove(link)
+    os.symlink(os.path.abspath(target), link)
+    return True
+
+
+def workspace_files(root, session, agent, team, host, command="up", notes=None):
     """Write the generated files of one agent workspace. Return the workspace path.
-    Never writes inside runs/, outbox/ or state/, and never touches HANDOFF.md."""
+    Never writes inside runs/, outbox/ or state/, and never touches HANDOFF.md.
+    For a reader, link the host rules (FR-012); a line is added to `notes` when it cannot."""
     ws = turn_block.workspace(root, session["name"], agent["name"])
     stamp = _stamp(command)
-    body = _body_md(agent, session)
+    reader = agent.get("role") != "writer"
+    imp = link = None
+    if reader:
+        link = _host_rules_link(ws, host, notes)
+        hc = os.path.join(host, "CLAUDE.md") if host else None
+        imp = os.path.abspath(hc) if hc and os.path.isfile(hc) else None
+        if notes is not None and host_rules_file(host) is None:
+            notes.append(f"{agent['name']}: the host repo has no CLAUDE.md or AGENTS.md")
+    body = _body_md(agent, session, imp)
+    agents_body = _body_md(agent, session, None, link)
     persona = _persona_md(agent)
     scope = _scope_md(agent, team)
     files = {
         "CLAUDE.md": body,
-        "AGENTS.md": body,
+        "AGENTS.md": agents_body,
         "CONTEXT.md": _context_md(agent),
         "_config/persona.md": persona,
         "_config/scope-card.md": scope,

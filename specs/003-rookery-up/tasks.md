@@ -316,7 +316,7 @@ fake agent sends one mail that its teammate gets.
 
 **Independent Test**: a host-only rule is reachable from the reader's generated files.
 
-- [ ] T018 [US6] Edit `rookery_views.workspace_files` (D7, FR-012). Needs T017 first (same file). For a
+- [x] T018 [US6] Edit `rookery_views.workspace_files` (D7, FR-012). Needs T017 first (same file). For a
   reader, `CLAUDE.md` gets the line `@<absolute host path>/CLAUDE.md` when that file exists. `HOST_RULES.md`
   is a symlink to the host `AGENTS.md`, else to the host `CLAUDE.md`. `AGENTS.md` tells the agent to read
   `HOST_RULES.md`. With no host rules file, the reader gets no import and no symlink, and `cmd_up` prints one

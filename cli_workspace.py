@@ -382,7 +382,7 @@ def _up(args):
                 finally:
                     conn.close()
                 for a, state, changed in rows:
-                    ws = rookery_views.workspace_files(root, session, a, team, host)
+                    ws = rookery_views.workspace_files(root, session, a, team, host, notes=notes)
                     writer_repo = (a.get("repo") or host) if a["role"] == "writer" else None
                     rookery_views.settings_json(os.path.join(ws, "_config", "settings.json"),
                                                 project, repo=writer_repo)

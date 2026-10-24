@@ -208,6 +208,98 @@ import sqlite3
 import test_up_build as tb
 
 
+class HostRules(Base):
+    """T018: reader import line and HOST_RULES.md symlink (FR-012, R11)."""
+    def host_file(self, name, text="host rule\n"):
+        with open(os.path.join(self.host, name), "w") as fh:
+            fh.write(text)
+        return os.path.join(self.host, name)
+
+    def test_reader_import_absolute_and_symlink(self):
+        hc = self.host_file("CLAUDE.md")
+        ws = self.run_agent(0)
+        lines = self.read(ws, "CLAUDE.md").splitlines()
+        self.assertIn("@" + os.path.abspath(hc), lines)
+        self.assertIn("## Project rules", lines)
+        link = os.path.join(ws, "HOST_RULES.md")
+        self.assertTrue(os.path.islink(link))
+        self.assertEqual(os.path.realpath(link), os.path.realpath(hc))
+        agents = self.read(ws, "AGENTS.md")
+        self.assertIn("HOST_RULES.md", agents)
+        self.assertNotIn("@", agents)
+
+    def test_agents_md_only(self):
+        ha = self.host_file("AGENTS.md")
+        ws = self.run_agent(0)
+        self.assertEqual(os.path.realpath(os.path.join(ws, "HOST_RULES.md")), os.path.realpath(ha))
+        self.assertNotIn("@" + self.host, self.read(ws, "CLAUDE.md"))
+        self.assertNotIn("\n@", self.read(ws, "CLAUDE.md"))
+
+    def test_agents_md_wins_over_claude_md(self):
+        self.host_file("CLAUDE.md")
+        ha = self.host_file("AGENTS.md")
+        ws = self.run_agent(0)
+        self.assertEqual(os.path.realpath(os.path.join(ws, "HOST_RULES.md")), os.path.realpath(ha))
+        self.assertIn("@" + os.path.join(self.host, "CLAUDE.md"), self.read(ws, "CLAUDE.md"))
+
+    def test_neither_gives_note_only(self):
+        notes = []
+        a = dict(self.team["agents"][0], agent_id="id-scout")
+        ws = rookery_views.workspace_files(self.root, self.session, a, self.team, self.host, notes=notes)
+        self.assertEqual(notes, ["scout: the host repo has no CLAUDE.md or AGENTS.md"])
+        self.assertFalse(os.path.lexists(os.path.join(ws, "HOST_RULES.md")))
+        self.assertNotIn("\n@", self.read(ws, "CLAUDE.md"))
+        self.assertNotIn("HOST_RULES", self.read(ws, "AGENTS.md"))
+
+    def test_writer_has_no_import_or_link(self):
+        self.host_file("CLAUDE.md")
+        ws = self.run_agent(1)
+        self.assertNotIn("\n@", self.read(ws, "CLAUDE.md"))
+        self.assertFalse(os.path.lexists(os.path.join(ws, "HOST_RULES.md")))
+
+    def test_rerun_fixes_symlink_and_keeps_person_file(self):
+        self.host_file("CLAUDE.md")
+        ws = self.run_agent(0)
+        link = os.path.join(ws, "HOST_RULES.md")
+        os.remove(link)
+        os.symlink(os.path.join(self.tmp, "gone"), link)
+        self.run_agent(0)
+        self.assertEqual(os.path.realpath(link), os.path.realpath(os.path.join(self.host, "CLAUDE.md")))
+        os.remove(link)
+        with open(link, "w") as fh:
+            fh.write("mine\n")
+        notes = []
+        a = dict(self.team["agents"][0], agent_id="id-scout")
+        rookery_views.workspace_files(self.root, self.session, a, self.team, self.host, notes=notes)
+        self.assertEqual(self.read(ws, "HOST_RULES.md"), "mine\n")
+        self.assertFalse(os.path.islink(link))
+        self.assertEqual(len(notes), 1)
+        self.assertIn("HOST_RULES.md", notes[0])
+
+    @unittest.skipUnless(shutil.which("ste-lint"), "ste-lint missing")
+    def test_ste_lint_with_host_rules(self):
+        self.host_file("CLAUDE.md")
+        ws = self.run_agent(0)
+        glossary = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ste-glossary.txt")
+        for rel in ("CLAUDE.md", "AGENTS.md"):
+            r = subprocess.run(["ste-lint", os.path.join(ws, rel), "--max-score", "2.0", "--glossary", glossary],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, f"{rel}\n{r.stdout}{r.stderr}")
+
+
+@unittest.skipUnless(tb.HAVE_GIT, "git is missing")
+class HostRulesNote(tb.UpBuild):
+    def run(self, result=None):
+        if self._testMethodName.startswith("test_hr_"):
+            return super().run(result)
+        return None
+
+    def test_hr_up_prints_note_when_no_rules(self):
+        r = self.up(self.team, "--no-launch")
+        self.assertIn("scout: the host repo has no CLAUDE.md or AGENTS.md", r.stdout)
+        self.assertFalse(os.path.lexists(os.path.join(self.root, "agents", "auth-fix", "scout", "HOST_RULES.md")))
+
+
 @unittest.skipUnless(tb.HAVE_GIT, "git is missing")
 class DbViews(tb.UpBuild):
     """T017: directory, teams, threads and mail mirror (D15; FR-025..FR-028)."""
