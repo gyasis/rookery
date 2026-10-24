@@ -389,7 +389,8 @@ R19 (Codex) gates the Codex launch.
 
 - **FR-025**: Rookery MUST generate `_directory/INDEX.md` (name, harness, pane, status, current task, team),
   the port map and the claims, plus `_teams/` and `_threads/`, from the database. Agents MUST only read these
-  files (RQ-2.3).
+  files (RQ-2.3). Amendment of 2026-10-24: the task and the criteria in `_teams/` come from the team file, so
+  `rookery up` writes `_teams/` and `rookery regen` keeps it.
 - **FR-026**: The `_threads/` mirror MUST hold metadata only: thread, sender, recipient, topic, time and
   state. It MUST NOT hold a message body. An agent reads a body only through the scoped reads of 002 D12
   (`rookery peek`, `rookery inbox`). A test MUST show that no body text appears under `_threads/`.

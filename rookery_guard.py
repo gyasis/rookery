@@ -46,8 +46,13 @@ def allowed_dirs(conn, env, hook_input=None, root=None):
         return None
     session, ident = found
     ws = os.path.realpath(os.path.join(root, "agents", session["name"], ident["name"]))
-    row = conn.execute("SELECT path FROM worktrees WHERE session_id=? AND agent_id=? AND state='active'",
-                       (session["session_id"], ident["agent_id"])).fetchone()
+    try:
+        row = conn.execute("SELECT path FROM worktrees WHERE session_id=? AND agent_id=? AND state='active'",
+                           (session["session_id"], ident["agent_id"])).fetchone()
+    except sqlite3.OperationalError as e:
+        if "no such table" not in str(e):
+            raise
+        row = None   # an old database without the up tables: no Rookery worktree
     return ws, (os.path.realpath(row[0]) if row else None)
 
 

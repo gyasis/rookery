@@ -255,9 +255,13 @@ database, with no other change. RQ-2.3 and RQ-2.16 ask for a regen test.
 | `ROOKERY.md` | L0 routing: what the root holds and where to look |
 | `_directory/INDEX.md` | each identity of open sessions: name, harness, pane, status, current task, role, team. Status is the `state` of `state/turn.json` (`idle`, `busy`), or `none` when the file is missing. Current task is the name of the newest `runs/<TASK-ID>/` folder, else `up_agents.task_id`, else `-`. Pane is the newest pane binding. |
 | `_directory/ports.md`, `_directory/claims.md` | the port map and the claims |
-| `_teams/<session>.md` | task, acceptance criteria, members (RQ-R.4) |
+| `_teams/<session>.md` | task, acceptance criteria, members (RQ-R.4). The task and the criteria come from the team file, so `rookery up` writes this view and `rookery regen` keeps it (final audit). |
 | `_threads/INDEX.md` | one line for each thread: thread, sender, recipient, topic, time, state. No body. |
 | `_mail/quarantine/<reason>/<id>.md`, `_mail/review/<id>.md` | the metadata of each quarantined or held row. No body. |
+
+`rookery regen` removes a stale file under `_mail/` only when its first line is Rookery's generated line.
+These files are views, not records, so this is not a destructive action under the constitution: the
+database keeps every row (final audit).
 
 Every generator reads the database with plain `SELECT` statements and writes no row, so nothing becomes
 read (002 D11). `_mail/` holds no body for the same reason as `_threads/`: an agent must not read a

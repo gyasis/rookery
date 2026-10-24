@@ -3,9 +3,62 @@ import datetime
 import json
 import os
 import re
+import stat
+import tempfile
 
 import cli_init
 import turn_block
+
+
+class LinkRefused(Exception):
+    """A generated file would go through a link or outside its base. Carries the path."""
+
+    def __init__(self, path):
+        self.path = path
+        super().__init__(f"{path} is a link. Rookery does not follow links in its generated files. "
+                         "Remove the link, then run rookery up again.")
+
+
+def _write_generated(path, text, base):
+    """Write a generated file below base. Refuse (LinkRefused) when any component from base down to the
+    file is a link or the folder resolves outside base. Writes a temp file and os.replace()s it, so a
+    link is never followed and never replaced."""
+    path = os.path.abspath(path)
+    base = os.path.abspath(base)
+    rel = os.path.relpath(path, base)
+    if rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):
+        raise LinkRefused(path)
+    cur = base
+    for part in rel.split(os.sep):
+        cur = os.path.join(cur, part)
+        if os.path.islink(cur):
+            raise LinkRefused(cur)
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    rb = os.path.realpath(base)
+    if os.path.commonpath([os.path.realpath(d), rb]) != rb:
+        raise LinkRefused(path)
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-", suffix=os.path.splitext(path)[1])
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        um = os.umask(0)
+        os.umask(um)
+        os.chmod(tmp, 0o666 & ~um)
+        if os.path.islink(path):
+            raise LinkRefused(path)
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return path
 
 
 def _stamp(command):
@@ -187,7 +240,7 @@ def workspace_files(root, session, agent, team, host, command="up", notes=None):
         "_config/system-prompt.md": persona + "\n" + scope,
     }
     for rel, text in files.items():
-        cli_init.write_text_atomic(os.path.join(ws, rel), stamp + text)
+        _write_generated(os.path.join(ws, rel), stamp + text, ws)
     for d in ("runs", "outbox", "state"):
         os.makedirs(os.path.join(ws, d), exist_ok=True)
     return ws
@@ -212,7 +265,7 @@ Read your own `CLAUDE.md` in your workspace first. Read the roster before you as
 Use the `rookery` commands to read and send mail.
 """
     path = os.path.join(root, "ROOKERY.md")
-    cli_init.write_text_atomic(path, _stamp(command) + text)
+    _write_generated(path, _stamp(command) + text, root)
     return path
 
 
@@ -236,25 +289,27 @@ def _committed_commands(repo):
     return found
 
 
-def settings_json(path, project, repo=None):
-    """Write the hooks file `_config/settings.json` (D8). With a repo that has the hooks committed,
-    each event copies the whole committed handler (and its group matcher), so Claude Code runs the same handler once.
+def settings_json(path, project, repo=None, base=None):
+    """Write the hooks file `_config/settings.json` (D8), built fresh on every run: an old file is
+    replaced, so a hand edit does not survive. With a repo that has the hooks committed, each event copies
+    the whole committed handler (and its group matcher), so Claude Code runs the same handler once.
     Never writes the repo file or ~/.claude/settings.json."""
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    cli_init.merge_hooks(path, project, with_permissions=True)
-    committed = _committed_commands(repo) if repo else {}
-    if committed:
-        with open(path, encoding="utf-8") as fh:
+    with tempfile.TemporaryDirectory() as tmp:
+        scratch = os.path.join(tmp, "settings.json")
+        cli_init.merge_hooks(scratch, project, with_permissions=True)
+        with open(scratch, encoding="utf-8") as fh:
             data = json.load(fh)
-        for event, (cgroup, chandler) in committed.items():
-            for g in data["hooks"][event]:
-                for i, h in enumerate(g["hooks"]):
-                    if cli_init._is_rookery(h):
-                        g["hooks"][i] = json.loads(json.dumps(chandler))
-                        if "matcher" in cgroup:
-                            g["matcher"] = cgroup["matcher"]
-        cli_init.write_text_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    _tool_handlers(path, project)
+    committed = _committed_commands(repo) if repo else {}
+    for event, (cgroup, chandler) in committed.items():
+        for g in data["hooks"][event]:
+            for i, h in enumerate(g["hooks"]):
+                if cli_init._is_rookery(h):
+                    g["hooks"][i] = json.loads(json.dumps(chandler))
+                    if "matcher" in cgroup:
+                        g["matcher"] = cgroup["matcher"]
+    _tool_handlers(data, project)
+    _write_generated(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                     base or os.path.dirname(os.path.abspath(path)))
     return path
 
 
@@ -262,12 +317,8 @@ _TOOL_HANDLERS = (("PreToolUse", "Write|Edit|MultiEdit|NotebookEdit", "guard"), 
 _TOOL_OURS = re.compile(r"(?:\S*/)?rookery hook (guard|watch) --project \S+")
 
 
-def _tool_handlers(path, project):
-    """Add the guard (PreToolUse) and watch (PostToolUse) handlers (T019). Idempotent: a handler of ours
-    is rewritten in place, never duplicated."""
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
-    before = json.dumps(data, sort_keys=True)
+def _tool_handlers(data, project):
+    """Add the guard (PreToolUse) and watch (PostToolUse) handlers (T019) to the settings object."""
     hooks = data.setdefault("hooks", {})
     for event, matcher, sub in _TOOL_HANDLERS:
         cmd = f"rookery hook {sub} --project {project}"
@@ -281,8 +332,6 @@ def _tool_handlers(path, project):
                     done = True
         if not done:
             groups.append({"matcher": matcher, "hooks": [{"type": "command", "command": cmd}]})
-    if json.dumps(data, sort_keys=True) != before:
-        cli_init.write_text_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 # --- views read from the database (T017, D15). SELECT only: nothing here writes a row or marks mail read.
@@ -336,7 +385,7 @@ def _names(conn):
 
 def _write(root, rel, text, command):
     path = os.path.join(root, *rel.split("/"))
-    cli_init.write_text_atomic(path, _stamp(command) + text)
+    _write_generated(path, _stamp(command) + text, root)
     return path
 
 
@@ -446,11 +495,13 @@ def mail_mirror(conn, root, command="regen"):
         want[os.path.normpath(os.path.join(root, *rel.split("/")))] = text
     mail = os.path.join(root, "_mail")
     for sub in ("quarantine", "review"):
+        if os.path.islink(os.path.join(mail, sub)) or os.path.islink(mail):
+            continue   # never walk or delete through a link
         for d, _dn, fs in os.walk(os.path.join(mail, sub)):
             for f in fs:
                 p = os.path.normpath(os.path.join(d, f))
-                if f.endswith(".md") and p not in want and _is_generated(p):
+                if f.endswith(".md") and p not in want and not os.path.islink(p) and _is_generated(p):
                     os.remove(p)   # a stale view Rookery wrote; a file a person made stays
     for p, text in want.items():
-        cli_init.write_text_atomic(p, _stamp(command) + text)
+        _write_generated(p, _stamp(command) + text, root)
     return sorted(want)

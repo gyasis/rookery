@@ -413,35 +413,49 @@ def _up(args):
                 finally:
                     conn.close()
                 for a, state, changed in rows:
-                    ws = rookery_views.workspace_files(root, session, a, team, host, notes=notes)
-                    writer_repo = (a.get("repo") or host) if a["role"] == "writer" else None
-                    rookery_views.settings_json(os.path.join(ws, "_config", "settings.json"),
-                                                project, repo=writer_repo)
+                    ws = turn_block.workspace(root, session["name"], a["name"])
+                    file_err = None
+                    try:
+                        ws = rookery_views.workspace_files(root, session, a, team, host, notes=notes)
+                        writer_repo = (a.get("repo") or host) if a["role"] == "writer" else None
+                        rookery_views.settings_json(os.path.join(ws, "_config", "settings.json"),
+                                                    project, repo=writer_repo, base=ws)
+                    except rookery_views.LinkRefused as e:
+                        file_err = str(e)
+                    except (OSError, cli_init.InitError) as e:
+                        file_err = f"{getattr(e, 'filename', None) or ws}: {getattr(e, 'strerror', None) or e}"
                     report.append({"name": a["name"], "agent_id": a["agent_id"], "role": a["role"],
                                    "workspace": ws, "worktree": a.get("_worktree"), "launch": launch,
                                    "binding": None, "first_start_dialogs": False,
                                    "changed": changed, "_state": state})
-                    if a.get("_wt_err"):
+                    if file_err:
+                        a["_file_err"] = file_err
+                        report[-1]["launch"] = f"not started: {file_err}"
+                        notes.append(f"{a['name']}: not started: {file_err}")
+                    elif a.get("_wt_err"):
                         report[-1]["launch"] = f"not started: {a['_wt_err']}"
                     elif a.get("_port_err"):
                         report[-1]["launch"] = f"not started: {a['_port_err']}"
                     if changed:
                         notes.append(f"{a['name']}: changed {', '.join(changed)}")
-                md = rookery_views.rookery_md(root)
-                conn = turn_block.open_db()
                 try:
-                    rookery_views.teams(conn, root, session, team)
-                    rookery_views.directory(conn, root, "up")
-                    rookery_views.threads(conn, root, "up")
-                    rookery_views.mail_mirror(conn, root, "up")
-                finally:
-                    conn.close()
+                    md = rookery_views.rookery_md(root)
+                    conn = turn_block.open_db()
+                    try:
+                        rookery_views.teams(conn, root, session, team)
+                        rookery_views.directory(conn, root, "up")
+                        rookery_views.threads(conn, root, "up")
+                        rookery_views.mail_mirror(conn, root, "up")
+                    finally:
+                        conn.close()
+                except rookery_views.LinkRefused as e:
+                    raise _Bad(str(e))
                 if not args.no_launch:
                     ucfg = _up_config(config)
                     conn = turn_block.open_db()
                     try:
                         for r, (a, _s, _c) in zip(report, rows):
-                            if a.get("_wt_err") or a.get("_port_err"):
+                            if a.get("_wt_err") or a.get("_port_err") or a.get("_file_err"):
                                 continue
                             r["launch"], r["binding"], pane = _launch_agent(
                                 conn, ucfg, session, a, r["workspace"], root, host)
@@ -562,6 +576,8 @@ def cmd_regen(args):
         return paths
     try:
         paths = _with_db(args, go)
+    except rookery_views.LinkRefused as e:
+        _fail(args, str(e), EXIT_BAD)
     except OSError as e:
         _fail(args, f"Rookery cannot write {e.filename or root}: {e.strerror}.", EXIT_BAD)
     except sqlite3.OperationalError as e:

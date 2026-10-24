@@ -138,7 +138,7 @@ _UP_TABLES = ("up_agents", "worktrees", "claims", "ports")
 
 def ensure_up_tables(conn: sqlite3.Connection) -> None:
     """Create the four rookery-up tables on an old database (additive, idempotent).
-    Hooks never call this; only rookery up / finish / gc / regen / guard do."""
+    Hooks never call this; only rookery up / finish / gc / regen do."""
     have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not set(_UP_TABLES) <= have:
         rookery.init_db(conn)

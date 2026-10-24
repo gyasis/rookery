@@ -63,6 +63,15 @@ class Guard(unittest.TestCase):
     def ws(self, name="coder"):
         return os.path.join(self.root, "agents", "s1", name)
 
+    def test_missing_up_tables_is_quiet(self):
+        self.start()
+        c = sqlite3.connect(self.db)
+        c.execute("DROP TABLE worktrees")
+        c.commit()
+        c.close()
+        self.assertEqual(self.write(os.path.join(self.ws(), "notes.md")), "")
+        self.assertEqual(self.log_lines(), [])
+
     def test_write_in_workspace_is_silent(self):
         self.start()
         self.assertEqual(self.write(os.path.join(self.ws(), "notes.md")), "")
