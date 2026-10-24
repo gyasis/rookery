@@ -233,7 +233,7 @@ fake agent sends one mail that its teammate gets.
   agent. With `state/turn.json` set to `{"state": "idle"}`, `postmaster.wake_identities` with the stored binding sends the wake to the fake tmux (FR-017). With no `state/turn.json`, it sends no wake (D10). A scan
   of the new modules finds no `herdr` or `tmux` string literal (constitution IX).
   Verify: `python3 -m unittest test_up_launch test_up_build test_up_idempotent test_wake test_hooks -v`
-- [ ] T014 [US2] Write `test_up_e2e.py`. Needs T002 and T013 first. In the test's `~/.rookery/config.json`,
+- [x] T014 [US2] Write `test_up_e2e.py`. Needs T002 and T013 first. In the test's `~/.rookery/config.json`,
   set a `fake-pane` launch kind that runs `fixtures/bin/fakepane --cwd {cwd} {env} -- {cmd}` with `capture`
   `^pane:(\S+)$`, and set `harness.claude.cmd` to `fixtures/bin/fakeagent`. Team: readers `a` and `b`. Set
   `FAKEAGENT_SEND_TO=b` for the run. Add a second mode to `fixtures/bin/fakeagent`: with `FAKEAGENT_BLOCK_TO` set, it writes a transcript whose last assistant message ends with a `rookery` block to that name, and runs `rookery_cli.py hook stop --project <project>` with the hook input built as `test_hooks` builds it. Cases: the inbox has one row from `a`'s agent ID to `b`'s agent ID in the
