@@ -80,6 +80,10 @@ class TeamFile(unittest.TestCase):
     def test_no_session(self):
         self.one({"agents": [agent()]}, None, None)
 
+    def test_reserved_session_names(self):
+        for bad in ("legacy", "rs-0123abcd", "ag-0123456789"):
+            self.one({"session": bad, "agents": [agent()]}, None, None)
+
     def test_no_agents(self):
         self.one({"session": "s1"}, None, None)
 

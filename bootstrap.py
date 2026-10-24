@@ -52,6 +52,7 @@ _PY_MODULES = [
     "rookery_identity.py",
     "rookery_team.py",
     "cli_init.py",
+    "cli_workspace.py",
     "cli_hook.py",
     "cli_rookery_session.py",
     # spec 002: every send path goes through the mail gate

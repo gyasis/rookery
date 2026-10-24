@@ -78,6 +78,12 @@ A team file that fails any rule changes nothing. The error lists each bad entry 
 `<ROOKERY_ROOT>` or `~/.rookery/projects/<project>/`, absolute and outside every repo (D5). It is not stored.
 `rookery up` writes only the generated views and the workspaces in it, and makes the worktrees under `wt/`.
 
+### Session ownership
+
+Sessions are global in the database. When `rookery up` makes a session, it adds the session binding
+`rookery-root:<root>`. A later `rookery up` reuses the session only from the same root. The binding table
+already exists, so this needs no schema change (wave 8 audit).
+
 ### Identity and its profile
 
 An `identities` row (spec 001) plus one `up_agents` row. `rookery up` makes both in one transaction. A

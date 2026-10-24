@@ -315,7 +315,7 @@ This feature differs from the OKF design in five places. The PR lists them, and 
 
 | Item | Second run |
 |---|---|
-| Session | `get_session(name)`; reuse it. An ended session: refuse, and tell the user to choose a new name. |
+| Session | `get_session(name)`; reuse it only when its `rookery-root` session binding is this root. A session that another root owns: refuse. A session with no such binding (made by hand): adopt it and add the binding. An ended session, `legacy`, or a name that looks like a Rookery ID: refuse (wave 8 audit). |
 | Identity | `get_identity(name, session)`; reuse it. |
 | Generated files | rewrite them. |
 | Agent files | do not touch them. |

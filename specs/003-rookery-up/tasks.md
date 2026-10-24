@@ -172,7 +172,7 @@ in one session. `git status` in the host repo is clean.
   rule. The file is valid JSON. A `repo` whose committed file has `/opt/bin/rookery hook stop --project app`
   gives exactly that `Stop` command text, and only one `Stop` handler.
   Verify: `python3 -m unittest test_views test_cli_init_unit test_init -v`
-- [ ] T011 [US1] Create `cli_workspace.py` with `add_parser(sub)` and `cmd_up(args)`, and register it in
+- [x] T011 [US1] Create `cli_workspace.py` with `add_parser(sub)` and `cmd_up(args)`, and register it in
   `rookery_cli.build_parser`. Needs T003, T004, T007 and T010 first.
   `rookery up TEAM_FILE [--no-launch] [--json]` follows D22 steps 1, 2, 3, 5 and 7 (launch comes in T013,
   worktrees in T015). Resolve the host

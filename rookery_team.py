@@ -91,6 +91,9 @@ def load(path, config=None) -> dict:
         err(None, None, "The team file has no session name.")
     elif (p := _safe(session, "session name")):
         err(None, None, p)
+    elif session == "legacy" or rookery_identity._ID_LOOKALIKE.fullmatch(session):
+        err(None, None, "Rookery keeps this session name for itself, or it looks like a Rookery ID. "
+                        "Choose another session name.")
     if "task" in team and not isinstance(team["task"], str):
         err(None, None, "The task must be text.")
     if "acceptance" in team and not _is_text_list(team["acceptance"]):
