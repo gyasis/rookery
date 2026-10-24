@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -31,9 +31,8 @@
 
 ## Notes
 
-- Three [NEEDS CLARIFICATION] markers stay open on purpose (FR-030 to FR-032). They carry Q1 to Q4. The user
-  said on 2026-10-23 to leave them for `/speckit-clarify`, research and plan. Settle them there. Do not
-  settle them in the spec.
+- `/speckit-clarify` on 2026-10-24 settled Q1 to Q4 and the `_threads/` and `wt/` questions. No
+  [NEEDS CLARIFICATION] markers remain. The answers are in the spec, under Clarifications.
 - Implementation names (command names, file paths, environment variables) appear in the spec. This
   feature is a CLI and folder layout, so these names are the user-facing surface, not internal design.
   Specs 001 and 002 used the same convention.
