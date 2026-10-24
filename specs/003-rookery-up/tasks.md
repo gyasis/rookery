@@ -382,7 +382,7 @@ warns. Two agents get different free ports.
   into one temporary file and lint it too (FR-033). Fix each text that fails. Needs T020 first. Skip the case
   only when `ste-lint` is not on `PATH`.
   Verify: `python3 -m unittest test_views -v`
-- [ ] T024 Run the full suite, the coverage gate and quickstart step 1 (the schema change on a COPY of the
+- [x] T024 Run the full suite, the coverage gate and quickstart step 1 (the schema change on a COPY of the
   live database). Needs T021, T022 and T023 first. Fix any test that fails in this task.
   Verify: `python3 -m unittest discover -p 'test_*.py' && spec-pane cover . 2 ~/Documents/code/inter-agent-comms/okf/requirements/rookery-0-7.md`
 
