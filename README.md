@@ -335,6 +335,70 @@ Note: do not run `rookery turn` for a turn in a Claude Code session that has the
 
 To send one mail now, without a turn, run `rookery send TO "SAY" --task TASK --kind KIND`. It goes through the same checks as a block. The sender is always your identity: there is no `--as`.
 
+## Build a team: rookery up
+
+`rookery up TEAM_FILE` builds a team from one JSON file. The old `rookery up URL` is now `rookery join URL`.
+
+```json
+{
+  "session": "auth-fix",
+  "task": "Fix the token refresh race.",
+  "acceptance": ["test_refresh passes 100 times", "no change to the public API"],
+  "agents": [
+    {"name": "scout", "harness": "claude", "role": "reader",
+     "persona": "You read code and report. You do not edit.",
+     "scope": {"does": ["read the auth module"], "does_not": ["edit files", "run the server"]}},
+    {"name": "fixer", "harness": "claude", "role": "writer", "task_id": "T1",
+     "binding": "tmux-pane", "claims": ["auth/*.py"]}
+  ]
+}
+```
+
+Run `rookery up team.json`. Add `--no-launch` to build everything and start no agent. Add `--json` for one JSON object.
+
+What it builds:
+
+- A session, and an identity for each agent.
+- A folder for each agent, with generated files: `CLAUDE.md`, `AGENTS.md`, `CONTEXT.md`, and a persona and a scope card in `_config/`.
+- A git worktree for each writer, in `wt/<session>/<name>/<repo>/`. A reader has no worktree. A reader keeps the host project rules.
+- A port map for each agent, in `ROOKERY_PORTS`.
+- The generated views: `ROOKERY.md`, `_directory/`, `_teams/`, `_threads/` and `_mail/`.
+
+Rookery starts each pane with the steps in the configuration (`launch` and `alive`). Rookery has no code for one terminal tool. To use another tool, add a binding kind to the configuration. The defaults cover `herdr-pane` and `tmux-pane`.
+
+First start: Claude Code shows a trust dialog in each new folder. A reader also shows an import dialog. You answer both one time in each new pane. Rookery does not edit `~/.claude.json`. The postmaster does not wake an agent until its first turn has started.
+
+Mail: agents that `rookery up` starts use the CLI only: `rookery send`, `rookery inbox` and `rookery ack`.
+
+Other commands:
+
+- `rookery finish NAME --message TEXT [--session S]` shows the change, asks three times, then commits, pushes and deletes the worktree. It never deletes the branch. An answer other than `yes` stops it. Set `BROTUNDWASSER=1` to skip the questions.
+- `rookery gc` lists stale worktree rows and the reason for each. It deletes nothing.
+- `rookery regen` writes the generated views again from the database. It changes no row.
+
+Guardrails: `rookery hook guard` denies a write outside the folders of the agent. `rookery hook watch` warns when a shell command wrote outside them. A claim (`claims` in the team file) warns the agent that another agent owns a file. These checks stop accidents. They are not a security boundary, and they do not catch every shell command.
+
+Folder layout of the root:
+
+```text
+~/.rookery/projects/<project>/
+├── ROOKERY.md                 generated: what the root holds
+├── _directory/                generated: INDEX.md, ports.md, claims.md
+├── _teams/                    generated: one file for each session
+├── _threads/                  generated: one line for each thread
+├── _mail/                     generated: quarantine/ and review/
+├── agents/<session>/<name>/   one folder for each agent
+│   ├── _config/               persona, scope card, settings
+│   ├── runs/                  one folder for each task
+│   ├── outbox/                mail the agent sends
+│   └── state/                 turn.json
+├── wt/<session>/<name>/<repo>/   the worktree of a writer
+├── postmaster/
+│   ├── outbox/                mail the postmaster takes
+│   └── pushed/                mail already pushed
+└── logs/                      gate.jsonl and the other logs
+```
+
 ## Federation — multiple mailrooms (`node@mailroom`)
 
 Run several independent mailrooms (one per machine / trust domain) and relay
@@ -470,6 +534,11 @@ is the dispatcher; see QUICKSTART Scenario 4 for the wiring.
 | `notifier.py` | out-of-band approval notifications (ntfy / Pushover / webhook). Silent no-op when `ROOKERY_NOTIFY_METHOD` is unset or `none` |
 | `cli_serve.py` | `rookery serve` subcommand handler |
 | `cli_join.py` | `rookery join` subcommand handler |
+| `cli_workspace.py` | `rookery up`, `rookery finish`, `rookery gc` and `rookery regen` |
+| `rookery_team.py` | read and check a team file |
+| `rookery_worktree.py` | one git worktree for each writer |
+| `rookery_guard.py` | the `guard` and `watch` hooks |
+| `rookery_views.py` | the generated files: workspace files, `ROOKERY.md` and the views |
 | `cli_approve.py` | `rookery approve` subcommand handler |
 | `cli_known_hosts.py` | `rookery known-hosts list` / `forget <host> [--yes]` for managing TOFU pins |
 | `config_manager.py` | idempotent `~/.claude.json` merge with `.bak.<epoch>` |

@@ -283,8 +283,8 @@ node runner, the terminal node and the postmaster wake keep their raw-name reads
   boundary is the HTTP mailroom when it binds beyond localhost. That boundary keeps its shared token, its
   local bind by default and its explicit opt-ins (D8).
 - **Trade-off**: on the local machine one agent can send under the name of another agent. The gate log
-  records the asked sender and the principal, so the user can see it. Strong local checks need RQ-2.9, a
-  later phase.
+  records the asked sender and the principal, so the user can see it. RQ-2.9 (spec 003) adds only
+  guardrails against accidents, not security. No phase makes local names a security boundary.
 - **Keeps**: one gate for every path, the screening, the loop limits, the quarantine, the log, reads that
   never mark mail read, notices with no body, and `rookery loop reset` (D23).
 ## Out of scope (recorded)

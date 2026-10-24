@@ -1,4 +1,5 @@
 """test_views — the generated workspace files and ROOKERY.md (T009; D7, D15; FR-007, FR-010, FR-013, FR-030)."""
+import ast
 import json
 import os
 import shutil
@@ -452,6 +453,127 @@ class DbViews(tb.UpBuild):
             r = subprocess.run(["ste-lint", f, "--max-score", "2.0", "--glossary", glossary],
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"{f}\n{r.stdout}{r.stderr}")
+
+
+CONTRACT_TEAM = {
+    "session": "auth-fix",
+    "task": "Fix the token refresh race.",
+    "acceptance": ["test_refresh passes 100 times", "no change to the public API"],
+    "agents": [
+        {"name": "scout", "harness": "claude", "role": "reader",
+         "persona": "You read code and report. You do not edit.",
+         "scope": {"does": ["read the auth module"], "does_not": ["edit files", "run the server"]}},
+        {"name": "fixer", "harness": "claude", "role": "writer", "task_id": "T1",
+         "binding": "tmux-pane", "claims": ["auth/*.py"]},
+    ],
+}
+LINT_MODULES = ("rookery_team.py", "cli_workspace.py", "rookery_worktree.py", "rookery_guard.py")
+MESSAGE_HELPERS = {"error", "note", "warn", "warning", "die", "fail", "_err", "_note", "_warn", "_fail", "err",
+                   "print", "_deny", "Refusal", "_Bad", "_LaunchFail", "PortError", "GuardError", "TeamError"}
+
+
+def _lint(path):
+    here = os.path.dirname(os.path.abspath(__file__))
+    return subprocess.run(["ste-lint", path, "--max-score", "2.0", "--glossary",
+                           os.path.join(here, "ste-glossary.txt")], capture_output=True, text=True)
+
+
+def _const_text(node):
+    """The text of a string constant or f-string; each {placeholder} becomes NAME. None for other nodes."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant) else "NAME" for v in node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        a, b = _const_text(node.left), _const_text(node.right)
+        return None if a is None or b is None else a + b
+    return None
+
+
+def collect_messages(path):
+    """Sentence-like string literals of a module, and the literal args of its message helpers."""
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    docs = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)):
+            b = n.body
+            if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant):
+                docs.add(id(b[0].value))
+    out = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call):
+            f = n.func
+            name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+            noted = name == "append" and isinstance(f.value, ast.Name) and f.value.id == "notes"
+            if name in MESSAGE_HELPERS or noted:
+                for a in n.args:
+                    t = _const_text(a)
+                    if t:
+                        out.append(t)
+        if isinstance(n, (ast.Constant, ast.JoinedStr)) and id(n) not in docs:
+            t = _const_text(n)
+            if t and " " in t.strip() and t.rstrip().endswith("."):
+                out.append(t)
+    seen, uniq = set(), []
+    for t in out:
+        t = t.strip()
+        if t and t not in seen:
+            seen.add(t)
+            uniq.append(t.replace("\n", " "))
+    return uniq
+
+
+@unittest.skipUnless(tb.HAVE_GIT, "git is missing")
+@unittest.skipUnless(shutil.which("ste-lint"), "ste-lint missing")
+class SteLintAll(tb.UpBuild):
+    """T023: every generated Markdown file and every agent-facing text passes ste-lint (FR-033, RQ-2.17)."""
+    def run(self, result=None):
+        if self._testMethodName.startswith("test_lint_"):
+            return super().run(result)
+        return None
+
+    def test_lint_generated_files(self):
+        with open(os.path.join(self.repo, "CLAUDE.md"), "w") as fh:
+            fh.write("# Host rules\n\nRun the tests before you commit.\n")
+        tb.git(self.repo, "add", ".")
+        tb.git(self.repo, "commit", "-q", "-m", "rules")
+        self.write_team(CONTRACT_TEAM)
+        self.up(self.team, "--no-launch")
+        r = subprocess.run([sys.executable, tb.CLI, "regen"], cwd=self.repo, env=self.env,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        files = [os.path.join(self.root, "ROOKERY.md")]
+        for session in sorted(os.listdir(os.path.join(self.root, "agents"))):
+            for agent in sorted(os.listdir(os.path.join(self.root, "agents", session))):
+                ws = os.path.join(self.root, "agents", session, agent)
+                files += [os.path.join(ws, x) for x in GENERATED]
+        for d in ("_directory", "_teams", "_threads"):
+            for dp, _, fs in os.walk(os.path.join(self.root, d)):
+                files += [os.path.join(dp, f) for f in fs if f.endswith(".md")]
+        self.assertGreaterEqual(len(files), 16)
+        for f in files:
+            self.assertTrue(os.path.isfile(f), f)
+            res = _lint(f)
+            if res.returncode != 0:
+                with open(f, encoding="utf-8") as fh:
+                    print(f"--- {f}\n{fh.read()}\n{res.stdout}{res.stderr}")
+            self.assertEqual(res.returncode, 0, f"{f}\n{res.stdout}{res.stderr}")
+
+    def test_lint_message_texts(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        texts = []
+        for m in LINT_MODULES:
+            found = collect_messages(os.path.join(here, m))
+            self.assertTrue(found, m)
+            texts += found
+        path = os.path.join(self.tmp.name, "messages.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n\n".join(texts) + "\n")
+        res = _lint(path)
+        if res.returncode != 0:
+            print(f"--- {path}\n{open(path, encoding='utf-8').read()}\n{res.stdout}{res.stderr}")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
 
 
 if __name__ == "__main__":

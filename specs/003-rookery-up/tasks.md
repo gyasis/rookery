@@ -366,17 +366,17 @@ warns. Two agents get different free ports.
 
 ## Phase 10: Polish and cross-cutting concerns
 
-- [ ] T021 [P] Edit `specs/002-mail-gate/research.md` (D24) and `specs/002-mail-gate/spec.md`: the pointer to
+- [x] T021 [P] Edit `specs/002-mail-gate/research.md` (D24) and `specs/002-mail-gate/spec.md`: the pointer to
   RQ-2.9 now says that RQ-2.9 is a guardrail against accidents, not security (D18, FR-029).
   Verify: `grep -n 'RQ-2.9' specs/002-mail-gate/research.md specs/002-mail-gate/spec.md && for f in specs/002-mail-gate/research.md specs/002-mail-gate/spec.md; do ste-lint $f --max-score 2.0 --glossary ste-glossary.txt | tail -1; done`
-- [ ] T022 [P] Edit `README.md`, `docs/QUICKSTART.md`, `CHANGELOG.md` and `skills/rookery/SKILL.md`. Document
+- [x] T022 [P] Edit `README.md`, `docs/QUICKSTART.md`, `CHANGELOG.md` and `skills/rookery/SKILL.md`. Document
   `rookery up`, `finish`, `gc` and `regen`, the team file, the first-start dialogs (D10) and CLI-only mail
   for these agents. The README layout tree shows `postmaster/outbox/`, `postmaster/pushed/`, `logs/` and
   `agents/<session>/<name>/state/` (FR-034). CHANGELOG gets "### Added" and "### Changed" (the `join`
   rename, the gate log home). Add a case to `test_text_hints.py` first: SKILL.md names `rookery up` and
   `rookery join`, and the README tree names `postmaster/` and `state/`.
   Verify: `python3 -m unittest test_text_hints -v && for f in README.md docs/QUICKSTART.md CHANGELOG.md skills/rookery/SKILL.md; do ste-lint $f --max-score 2.0 --glossary ste-glossary.txt | tail -1; done`
-- [ ] T023 Add a lint case to `test_views.py`: produce every generated Markdown file from the contract's
+- [x] T023 Add a lint case to `test_views.py`: produce every generated Markdown file from the contract's
   example team file and run `ste-lint --max-score 2.0 --glossary ste-glossary.txt` on each. Collect every
   error and note text of `rookery_team.py`, `cli_workspace.py`, `rookery_worktree.py` and `rookery_guard.py`
   into one temporary file and lint it too (FR-033). Fix each text that fails. Needs T020 first. Skip the case

@@ -50,6 +50,14 @@ class TextHints(unittest.TestCase):
         for legacy in ("mailctl.py", "send_mail.py", "read_mail.py"):
             self.assertIn(legacy, text)
 
+    def test_docs_name_up_join_and_tree(self):
+        skill = (ROOT / "skills/rookery/SKILL.md").read_text()
+        self.assertIn("`rookery up`", skill)
+        self.assertIn("`rookery join`", skill)
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("postmaster/", readme)
+        self.assertIn("state/", readme)
+
 
 if __name__ == "__main__":
     unittest.main()

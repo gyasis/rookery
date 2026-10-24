@@ -2,8 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- `rookery up TEAM_FILE [--no-launch] [--json]` builds a team from a JSON team file. It makes a session, an identity and a folder for each agent. It makes a git worktree for each writer and a port map in `ROOKERY_PORTS`. It starts each pane through configured steps (`launch`, `alive`). Agents that it starts use the CLI only for mail.
+- `rookery finish NAME --message TEXT` shows the change, asks three times, then commits, pushes and deletes the worktree. It never deletes the branch.
+- `rookery gc` lists stale worktree rows. It deletes nothing.
+- `rookery regen` writes the generated views again from the database: `ROOKERY.md`, `_directory/`, `_teams/`, `_threads/` and `_mail/`.
+- The hooks `rookery hook guard` and `rookery hook watch` are accident guards. Guard denies a write outside the folders of the agent. Watch warns about a shell command that wrote outside them.
+- Claims: `claims` in the team file gives file patterns to an agent. A write to a claimed file warns the agent.
+
 ### Changed
 
+- The old `rookery up URL` is now `rookery join URL`. The arguments are the same.
+- The gate log always lives in `~/.rookery/logs`.
 - A mailroom on a local host (`127.0.0.1`, `::1` or `localhost`) now starts with no token. It prints one `NOTE:` line. Any local program can already write the database, so a local token adds no protection. A host that is not local needs `--allow-public` and a token (`--token` or `$ROOKERY_TOKEN`). `--allow-no-auth` no longer turns auth off on such a host. The flag has no effect now, and old start commands still parse.
 
 ### Fixed

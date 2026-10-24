@@ -364,6 +364,22 @@ README — but it's no longer the recommended path.
 
 ---
 
+## Bring up a team
+
+Use `rookery up` to build a team of agents from one file. Run it in a project that has `rookery init`.
+
+1. Write `team.json`. Give it a `session`, a `task` and a list of `agents`. A `reader` reads and does not edit. A `writer` gets its own git worktree. The README has a full example.
+2. Run `rookery up team.json --no-launch`. Rookery builds the folders, the worktrees and `ROOKERY.md`, and starts no agent.
+3. Read `ROOKERY.md` in the Rookery root. Then run `rookery up team.json` to start each agent in a pane.
+4. In each new Claude Code pane, answer the trust dialog. A reader also shows an import dialog. You answer these one time in each pane.
+5. The agents send mail with `rookery send`, `rookery inbox` and `rookery ack`. They do not use the old scripts.
+6. When a writer is done, run `rookery finish NAME --message "TEXT"`. It asks three times, then commits, pushes and deletes the worktree. It never deletes the branch.
+7. Run `rookery gc` to list old worktree rows. It deletes nothing. Run `rookery regen` to write the generated views again.
+
+To join a peer mailroom, use `rookery join URL`. This was `rookery up URL` in earlier versions.
+
+---
+
 ## Where to go next
 
 - `COOKBOOK.md` — copy-paste recipes: research queues, CIBA credential gate,
