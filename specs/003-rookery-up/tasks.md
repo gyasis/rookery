@@ -268,7 +268,7 @@ fake agent sends one mail that its teammate gets.
   scan of the new modules finds no `GIT_DIR`, `GIT_WORK_TREE`, `LD_PRELOAD`, `overlay` or `node_modules`
   (FR-024).
   Verify: `python3 -m unittest test_worktree test_up_build test_up_launch test_up_idempotent -v`
-- [ ] T016 [US4] Add `finish` and `gc` to `rookery_worktree.py` and the subcommands
+- [x] T016 [US4] Add `finish` and `gc` to `rookery_worktree.py` and the subcommands
   `rookery finish NAME [--session S] --message TEXT [--json]` and `rookery gc [--json]` to `cli_workspace.py` (D13, D14). Needs
   T015 first. `finish` shows `git status --short`, `git diff --stat` and the changed files that another agent
   claims. It asks `Type yes to continue (n of 3)` three times on stdin, or accepts `BROTUNDWASSER=1`. Then it

@@ -454,9 +454,73 @@ def cmd_up(args):
         _fail(args, str(e), EXIT_BAD)
 
 
+def _with_db(args, fn):
+    import turn_block
+    conn = turn_block.open_db()
+    try:
+        turn_block.ensure_up_tables(conn)
+        return fn(conn)
+    finally:
+        conn.close()
+
+
+def _root_or_none():
+    """The Rookery root for the cwd (as `rookery up` finds it), else ROOKERY_ROOT, else None (no filter)."""
+    try:
+        host, project = host_repo(os.getcwd())
+        return _resolve_root(host, project)
+    except _Bad:
+        env_root = os.environ.get("ROOKERY_ROOT")
+        return os.path.abspath(env_root) if env_root else None
+
+
+def cmd_finish(args):
+    import rookery_worktree
+    session = args.session or os.environ.get("ROOKERY_SESSION")
+    try:
+        kw = {}
+        if os.environ.get("ROOKERY_FINISH_TIMEOUT"):
+            kw["timeout"] = float(os.environ["ROOKERY_FINISH_TIMEOUT"])
+        res = _with_db(args, lambda conn: rookery_worktree.finish(
+            conn, _root_or_none(), session, args.name, args.message,
+            out=sys.stderr if args.json else sys.stdout, **kw))
+    except (rookery_worktree.Refusal, ValueError) as e:
+        _fail(args, str(e), EXIT_BAD)
+    except sqlite3.OperationalError as e:
+        msg = str(e).lower()
+        _fail(args, f"database error: {e}", EXIT_BUSY if ("locked" in msg or "busy" in msg) else EXIT_BAD)
+    if args.json:
+        print(json.dumps(dict(res, ok=True)))
+
+
+def cmd_gc(args):
+    import rookery_worktree
+    try:
+        found = _with_db(args, lambda conn: rookery_worktree.gc(conn, _root_or_none()))
+    except sqlite3.OperationalError as e:
+        msg = str(e).lower()
+        _fail(args, f"database error: {e}", EXIT_BUSY if ("locked" in msg or "busy" in msg) else EXIT_BAD)
+    if args.json:
+        print(json.dumps(found))
+        return
+    if not found:
+        print("No stale worktree rows.")
+    for f in found:
+        print(f"{f['path']}\t{f['session']}\t{f['agent']}\t{f['branch']}\t{f['reason']}")
+
+
 def add_parser(subparsers):
     p = subparsers.add_parser("up", help="Build a team from a team file.")
     p.add_argument("team_file", metavar="TEAM_FILE", help="Path to a JSON team file.")
     p.add_argument("--no-launch", action="store_true", help="Build everything and run no agent.")
     p.add_argument("--json", action="store_true", help="Print one JSON object.")
     p.set_defaults(func=cmd_up)
+    f = subparsers.add_parser("finish", help="Commit, push and remove a writer's worktree.")
+    f.add_argument("name", metavar="NAME", help="The writer's name.")
+    f.add_argument("--session", help="Session name or ID (default: ROOKERY_SESSION).")
+    f.add_argument("--message", required=True, help="Commit message.")
+    f.add_argument("--json", action="store_true", help="Print one JSON object.")
+    f.set_defaults(func=cmd_finish)
+    g = subparsers.add_parser("gc", help="List stale worktree rows. Deletes nothing.")
+    g.add_argument("--json", action="store_true", help="Print a JSON list.")
+    g.set_defaults(func=cmd_gc)
