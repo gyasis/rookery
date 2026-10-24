@@ -465,7 +465,8 @@ Removed IDs stay in the list, so that every other ID stays stable.
 - **Local identity is bookkeeping (D24)**: all agents run as one Unix user, and the user owns every agent. A
   local agent can set `ROOKERY_SESSION` or `ROOKERY_NODE` to any name, or open the database file. This
   feature does not try to stop that. The log records the asked sender and the principal. The only
-  security boundary is the mailroom when it binds beyond localhost. Stronger local checks need RQ-2.9.
+  security boundary is the mailroom when it binds beyond localhost. RQ-2.9 (spec 003) is a guardrail
+  against accidents, not security.
 - **`--from` stays** as an accepted flag of `send_mail.py` and `mailctl.py`. When given, it is the sender.
   `rk` and its `--as` are gone (PR #12).
 - The `legacy` session keeps the old rows. Mail from a sender with no session goes there.

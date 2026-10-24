@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
-"""Test double for herdr (T035). Appends json.dumps(sys.argv[1:]) as one line to the file named by env
-HERDR_RECORD, then exits 0. It does nothing else and never talks to a real herdr."""
+"""Test double for herdr (T035, T001). Appends json.dumps(sys.argv[1:]) as one line to the file named by env
+HERDR_RECORD, then exits 0. `tab create` prints {"pane_id": "h<n>"} (n = log lines before this call); `pane get X`
+exits 0 only if X is a word in env ROOKERY_FIXTURE_ALIVE, else 1. Never talks to a real herdr."""
 import json
 import os
 import sys
 
-with open(os.environ["HERDR_RECORD"], "a") as fh:
-    fh.write(json.dumps(sys.argv[1:]) + "\n")
+log = os.environ.get("HERDR_RECORD")
+count = 0
+if log:
+    if os.path.exists(log):
+        with open(log) as fh:
+            count = sum(1 for _ in fh)
+    with open(log, "a") as fh:
+        fh.write(json.dumps(sys.argv[1:]) + "\n")
+
+if sys.argv[1:3] == ["tab", "create"]:
+    print(json.dumps({"pane_id": "h%d" % count}))
+elif sys.argv[1:3] == ["pane", "get"] and len(sys.argv) > 3:
+    sys.exit(0 if sys.argv[3] in os.environ.get("ROOKERY_FIXTURE_ALIVE", "").split() else 1)
 
 # Optional: HERDR_STATUS=<idle|working|blocked|done> makes `agent list` report that status for pane w1:p2.
 if sys.argv[1:3] == ["agent", "list"] and os.environ.get("HERDR_STATUS"):

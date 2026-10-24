@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""fakepane — test stand-in for a terminal pane: prints pane:fp<n>, then runs CMD in DIR with extra env."""
+import os
+import subprocess
+import sys
+
+
+def main(argv):
+    cwd, env, cmd = None, dict(os.environ), []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--":
+            cmd = argv[i + 1:]
+            break
+        if a == "--cwd":
+            cwd = argv[i + 1]
+            i += 2
+        elif a == "--env":
+            k, _, v = argv[i + 1].partition("=")
+            env[k] = v
+            i += 2
+        else:
+            sys.exit(f"fakepane: unexpected argument {a!r}")
+    if cwd is None or not cmd:
+        sys.exit("usage: fakepane --cwd DIR [--env K=V]... -- CMD...")
+    if "/" in cmd[0] and not os.path.isabs(cmd[0]):
+        cmd[0] = os.path.abspath(cmd[0])     # resolve against the caller's cwd, not DIR
+    n = 0
+    log = os.environ.get("ROOKERY_FIXTURE_LOG")
+    if log and os.path.exists(log):
+        with open(log) as fh:
+            n = sum(1 for _ in fh)
+    print(f"pane:fp{n}", flush=True)
+    sys.exit(subprocess.run(cmd, cwd=cwd, env=env).returncode)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

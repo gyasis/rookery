@@ -99,11 +99,14 @@ def log_event(root, stream: str = "turn-block", **fields) -> None:
     """Append one JSON line (ts + fields) to the stream's rotated log (D15).
 
     Fields by convention: session, agent_id, name, task, adapter, outcome,
-    reason, msg_id. Logging never raises. The `gate` stream takes root=None
-    (see gate_root) and prints one line to stderr when a write fails.
+    reason, msg_id. Logging never raises. The `gate` stream always writes under ~/.rookery,
+    whatever root or ROOKERY_ROOT holds, so that one gate log covers every project (003 D2).
+    It prints one line to stderr when a write fails.
     """
     try:
-        if root is None:
+        if stream == "gate":
+            root = os.path.expanduser("~/.rookery")
+        elif root is None:
             root = gate_root()
         rel = _LOG_FILES[stream]
         rec = {"ts": rookery.now()}
@@ -128,6 +131,17 @@ def _schema_current(conn: sqlite3.Connection) -> bool:
         return False
     return conn.execute(
         "SELECT 1 FROM rookery_sessions WHERE session_id='legacy'").fetchone() is not None
+
+
+_UP_TABLES = ("up_agents", "worktrees", "claims", "ports")
+
+
+def ensure_up_tables(conn: sqlite3.Connection) -> None:
+    """Create the four rookery-up tables on an old database (additive, idempotent).
+    Hooks never call this; only rookery up / finish / gc / regen do."""
+    have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not set(_UP_TABLES) <= have:
+        rookery.init_db(conn)
 
 
 def open_db() -> sqlite3.Connection:

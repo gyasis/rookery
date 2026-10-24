@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
-"""Test double for tmux (T002). Appends json.dumps(sys.argv[1:]) as one line to the file named by env
-ROOKERY_FIXTURE_LOG, then exits 0. It does nothing else and never talks to a real tmux."""
+"""Test double for tmux (T002, T001). Appends json.dumps(sys.argv[1:]) as one line to the file named by env
+ROOKERY_FIXTURE_LOG, then exits 0. `new-window` prints %<n> (n = log lines before this call); `display-message -p -t X`
+exits 0 only if X is a word in env ROOKERY_FIXTURE_ALIVE, else 1. Never talks to a real tmux."""
 import json
 import os
 import sys
 
-with open(os.environ["ROOKERY_FIXTURE_LOG"], "a") as fh:
-    fh.write(json.dumps(sys.argv[1:]) + "\n")
+argv = sys.argv[1:]
+log = os.environ.get("ROOKERY_FIXTURE_LOG")
+count = 0
+if log:
+    if os.path.exists(log):
+        with open(log) as fh:
+            count = sum(1 for _ in fh)
+    with open(log, "a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+
+if argv[:1] == ["new-window"]:
+    print("%%%d" % count)
+elif argv[:1] == ["display-message"] and "-t" in argv[:-1]:
+    target = argv[argv.index("-t") + 1]
+    sys.exit(0 if target in os.environ.get("ROOKERY_FIXTURE_ALIVE", "").split() else 1)

@@ -117,6 +117,40 @@ CREATE TABLE IF NOT EXISTS loop_counts (
   count      INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(session_id, task, a, b)
 );
+CREATE TABLE IF NOT EXISTS up_agents (
+  agent_id     TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL,
+  harness      TEXT NOT NULL,
+  role         TEXT NOT NULL,
+  repo         TEXT,
+  task_id      TEXT,
+  binding_kind TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS worktrees (
+  path       TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  agent_id   TEXT NOT NULL,
+  repo       TEXT NOT NULL,
+  branch     TEXT NOT NULL,
+  state      TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE TABLE IF NOT EXISTS claims (
+  session_id TEXT NOT NULL,
+  agent_id   TEXT NOT NULL,
+  pattern    TEXT NOT NULL,
+  active     INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(session_id, agent_id, pattern)
+);
+CREATE TABLE IF NOT EXISTS ports (
+  agent_id TEXT NOT NULL,
+  name     TEXT NOT NULL,
+  port     INTEGER NOT NULL UNIQUE,
+  PRIMARY KEY(agent_id, name)
+);
 """
 
 

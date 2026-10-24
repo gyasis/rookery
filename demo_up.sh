@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rookery `rookery up` — full LAN-style demo on one machine. Proves:
+# Rookery `rookery join` — full LAN-style demo on one machine. Proves:
 #   1. bootstrap installer downloads + installs the zipapp
 #   2. discovery + handshake (with slug) + TOFU pin against signed card
 #   3. auto-merge of ~/.claude.json (in a temp HOME so we don't touch the real one)
@@ -69,7 +69,7 @@ print(d['pending'][0]['request_id']) if d.get('pending') else None" 2>/dev/null)
 ) &
 AA=$!
 
-echo "## 3) rookery up — one command, the whole UX"
+echo "## 3) rookery join — one command, the whole UX"
 "$HOME/.local/bin/rookery" up "$URL" --node-id claude-on-B 2>&1 | sed 's/^/   /'
 echo
 
@@ -94,7 +94,7 @@ echo
 echo "## 6) actual mail flow — admin sends, claude-on-B is in the DB"
 curl -s -X POST "$URL/send" \
   -H "Authorization: Bearer $ADMIN_TOK" -H "Content-Type: application/json" \
-  -d '{"sender":"admin","recipient":"claude-on-B","body":"hello via rookery up"}' | sed 's/^/   /'
+  -d '{"sender":"admin","recipient":"claude-on-B","body":"hello via rookery join"}' | sed 's/^/   /'
 echo
 
 sqlite3 -header -column "$DIR/rookery.db" \

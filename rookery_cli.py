@@ -3,7 +3,7 @@
 
 rookery_cli.py serve   [--host] [--port] [--public-url] [--card-key] [--token]
                          [--allow-public] [--allow-no-auth]
-rookery_cli.py up      [url]    [--node-id] [--insecure-tls]
+rookery_cli.py join    [url]    [--node-id] [--insecure-tls]
 rookery_cli.py approve [--url]  [--token]
 
 Optional plugins (see plugins.py) may add further subcommands; each attaches
@@ -19,10 +19,11 @@ import plugins
 from cli_approve import cmd_approve
 from cli_known_hosts import cmd_known_hosts_forget, cmd_known_hosts_list
 from cli_serve import cmd_serve
-from cli_up import cmd_up
+from cli_join import cmd_up
 import cli_rookery_session
 import cli_hook
 import cli_init
+import cli_workspace
 
 # ---------------------------------------------------------------------------
 # Argument parser
@@ -72,21 +73,21 @@ def build_parser():
     )
     p_serve.set_defaults(func=cmd_serve)
 
-    # --- up ---
-    p_up = sub.add_parser("up", help="Bring a peer node online via a remote mailroom.")
-    p_up.add_argument(
+    # --- join ---
+    p_join = sub.add_parser("join", help="Bring a peer node online via a remote mailroom.")
+    p_join.add_argument(
         "url",
         nargs="?",
         default=None,
         help="Mailroom URL (e.g. http://host:8765); defaults to $ROOKERY_URL",
     )
-    p_up.add_argument("--node-id", default=None, help="Node identifier to register")
-    p_up.add_argument(
+    p_join.add_argument("--node-id", default=None, help="Node identifier to register")
+    p_join.add_argument(
         "--insecure-tls",
         action="store_true",
         help="Skip TLS certificate verification (trusted LAN only)",
     )
-    p_up.set_defaults(func=cmd_up)
+    p_join.set_defaults(func=cmd_up)
 
     # --- approve ---
     p_approve = sub.add_parser("approve", help="Approve a pending credential request.")
@@ -110,6 +111,9 @@ def build_parser():
 
     # --- init ---
     cli_init.add_parser(sub)
+
+    # --- up ---
+    cli_workspace.add_parser(sub)
 
     # --- known-hosts ---
     p_kh = sub.add_parser(

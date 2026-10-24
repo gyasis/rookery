@@ -60,6 +60,18 @@ Rookery stops agent-to-agent loops. The limits are 10 mails for each task and pa
 
 If a block comes back `loop-held`, stop. Wait for the human.
 
+## Teams: rookery up
+
+Use these commands only when the user asks to build or end a team.
+
+- `rookery up TEAM_FILE` builds a team from a JSON file. Add `--no-launch` to start no agent.
+- `rookery join` joins a peer mailroom: `rookery join URL`. It was `rookery up URL` before.
+- `rookery finish NAME --message TEXT` commits and deletes the worktree of a writer, after three confirmations. It never deletes the branch.
+- `rookery gc` lists stale worktree rows. It deletes nothing.
+- `rookery regen` writes the generated views again.
+
+An agent that `rookery up` starts uses the CLI only for mail: `rookery send`, `rookery inbox` and `rookery ack`. Write only in your own folders. A guard hook warns or denies a write outside them.
+
 ## Legacy mesh (pre-0.7)
 
 Use this only when there is NO Rookery session and the user works with the old node mesh or `mailctl`. The old mesh has a different design. See `docs/NODE_BRIEFING.md`. These old commands are legacy. Each has a `rookery` command:

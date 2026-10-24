@@ -1,4 +1,4 @@
-"""cli_up — `rookery up` subcommand implementation."""
+"""cli_join — `rookery join` subcommand implementation."""
 
 import json
 import os
@@ -50,7 +50,7 @@ def cmd_up(args):
         if not combined:
             print(
                 "No mailroom found on the LAN. "
-                "Pass `rookery up <url>` for an explicit address.",
+                "Pass `rookery join <url>` for an explicit address.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -182,7 +182,7 @@ def cmd_up(args):
                 f"  got:      {card_pubkey}\n"
                 "Someone could be eavesdropping (man-in-the-middle attack).\n"
                 "If you trust the new key, remove the old line from ~/.rookery/known_hosts\n"
-                "and re-run `rookery up`.",
+                "and re-run `rookery join`.",
                 file=sys.stderr,
             )
             sys.exit(1)

@@ -109,6 +109,42 @@ def stop(args):
         _safe_log(root, outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
 
 
+def _tool_hook(args, fn_name, adapter):
+    """PreToolUse guard / PostToolUse watch (D16, FR-029). Prints the hook JSON or nothing; never raises,
+    always exits 0. A bad input or an internal error is one log line."""
+    root = None
+    try:
+        import turn_block
+        import rookery_identity
+        import rookery_guard
+
+        if _no_session_possible(turn_block, rookery_identity):
+            return
+        root = turn_block.project_root(args.project)
+        hook_input, bad = _read_input()
+        if bad:
+            turn_block.log_event(root, adapter=adapter, outcome="bad-input", reason=bad)
+            return
+        conn = turn_block.open_db()
+        try:
+            result = getattr(rookery_guard, fn_name)(hook_input, os.environ, conn, root)
+        finally:
+            conn.close()
+        if result:
+            sys.stdout.write(json.dumps(result) + "\n")
+            sys.stdout.flush()
+    except Exception as exc:
+        _safe_log(root, adapter=adapter, outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
+
+
+def guard(args):
+    _tool_hook(args, "guard", "guard")
+
+
+def watch(args):
+    _tool_hook(args, "watch", "watch")
+
+
 def _keep_ended(turn_block, root, session, identity, text):
     """Stop in an ended session: send nothing. Keep a valid block under outbox/failed
     (as the outbox scan does for `session-ended`) and log `session-ended` once."""
@@ -656,7 +692,7 @@ def add_parser(sub):
     p.error = _raise_arg_error
     hs = p.add_subparsers(dest="hook_command", metavar="<hook>")
     hs.required = True
-    for name, fn in (("session-start", session_start), ("prompt", prompt), ("stop", stop)):
+    for name, fn in (("session-start", session_start), ("prompt", prompt), ("stop", stop), ("guard", guard), ("watch", watch)):
         hp = hs.add_parser(name, help=f"{name} hook")
         hp.error = _raise_arg_error
         hp.add_argument("--project", required=True, help="Rookery project name")

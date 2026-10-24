@@ -42,7 +42,7 @@ class GateBase(Base):
         return self.conn.execute("SELECT COUNT(*) FROM inbox").fetchone()[0]
 
     def gate_log(self):
-        p = os.path.join(self.root, "logs", "gate.jsonl")
+        p = os.path.join(self.tmp.name, ".rookery", "logs", "gate.jsonl")   # one gate log (003 D2)
         if not os.path.exists(p):
             return []
         with open(p) as fh:

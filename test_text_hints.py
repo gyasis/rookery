@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-TEXT_FILES = ("cli_up.py", "terminal_node.py", "plugin_herdr/cli.py")
+TEXT_FILES = ("cli_join.py", "terminal_node.py", "plugin_herdr/cli.py")
 BANNED = ("send_mail.py", "rookery.send(", "mailctl.py")
 
 
@@ -49,6 +49,14 @@ class TextHints(unittest.TestCase):
         self.assertIn("`ack` tool", text)
         for legacy in ("mailctl.py", "send_mail.py", "read_mail.py"):
             self.assertIn(legacy, text)
+
+    def test_docs_name_up_join_and_tree(self):
+        skill = (ROOT / "skills/rookery/SKILL.md").read_text()
+        self.assertIn("`rookery up`", skill)
+        self.assertIn("`rookery join`", skill)
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("postmaster/", readme)
+        self.assertIn("state/", readme)
 
 
 if __name__ == "__main__":
