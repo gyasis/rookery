@@ -169,8 +169,17 @@ A new tool needs only configuration.
   runs no agent and names the kind.
 
 The herdr output format of `tab create` was not checked on a live server, so that the check did not open a
-tab in the user's session. The quickstart has a live check for it. The default `capture` for herdr is
-UNTESTED until that check passes.
+tab in the user's session. The quickstart has a live check for it. Treat the default `capture` for herdr as UNTESTED until that check passes.
+
+Wave 10 audit decisions:
+
+- A step can set `join_cmd`. Then `{cmd}` becomes one shell-quoted argument. herdr types `pane run` text
+  into the pane's shell, so the default herdr step sets it. This stays UNTESTED until quickstart 5.
+- The alive check has a 5 s limit. When it cannot decide, `rookery up` reports the agent and does not start a
+  second copy. It checks only the agent's own binding kind.
+- When a step fails after a pane exists, the report names the open pane. Rookery has no tool code to close it.
+- A pane ID that tmux reuses after a restart can move a binding inside one session. The move goes to the
+  log as `binding-moved`.
 
 - *Not taken*: Python code for herdr or tmux (constitution IX).
 

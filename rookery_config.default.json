@@ -1,6 +1,144 @@
-{"loop_limit": 10, "busy_stale_s": 1800, "herdr_probe": true, "loop_pair_limit": 30,
+{
+ "loop_limit": 10,
+ "busy_stale_s": 1800,
+ "herdr_probe": true,
+ "loop_pair_limit": 30,
  "_comment": "TMUX_PANE is UNTESTED: no tmux pane ran in the session that wrote this default (research D19).",
- "identity_binding_sources": {"HERDR_PANE_ID": "herdr-pane", "TMUX_PANE": "tmux-pane"},
- "session_binding_sources": {"HERDR_WORKSPACE_ID": "herdr-workspace"},
- "wake": {"herdr-pane": [["herdr","agent","prompt","{value}","{text}"]],
-          "tmux-pane": [["tmux","send-keys","-t","{value}","-l","{text}"],["tmux","send-keys","-t","{value}","Enter"]]}}
+ "identity_binding_sources": {
+  "HERDR_PANE_ID": "herdr-pane",
+  "TMUX_PANE": "tmux-pane"
+ },
+ "session_binding_sources": {
+  "HERDR_WORKSPACE_ID": "herdr-workspace"
+ },
+ "wake": {
+  "herdr-pane": [
+   [
+    "herdr",
+    "agent",
+    "prompt",
+    "{value}",
+    "{text}"
+   ]
+  ],
+  "tmux-pane": [
+   [
+    "tmux",
+    "send-keys",
+    "-t",
+    "{value}",
+    "-l",
+    "{text}"
+   ],
+   [
+    "tmux",
+    "send-keys",
+    "-t",
+    "{value}",
+    "Enter"
+   ]
+  ]
+ },
+ "default_binding": "herdr-pane",
+ "launch": {
+  "herdr-pane": {
+   "env_flag": "--env",
+   "steps": [
+    {
+     "argv": [
+      "herdr",
+      "tab",
+      "create",
+      "--cwd",
+      "{cwd}",
+      "--label",
+      "{label}",
+      "--no-focus",
+      "{env}"
+     ],
+     "capture": "\"pane_id\"\\s*:\\s*\"([^\"]+)\""
+    },
+    {
+     "argv": [
+      "herdr",
+      "pane",
+      "run",
+      "{pane}",
+      "{cmd}"
+     ],
+     "join_cmd": true
+    }
+   ]
+  },
+  "tmux-pane": {
+   "env_flag": "-e",
+   "steps": [
+    {
+     "argv": [
+      "tmux",
+      "new-window",
+      "-d",
+      "-P",
+      "-F",
+      "#{pane_id}",
+      "-n",
+      "{label}",
+      "-c",
+      "{cwd}",
+      "{env}",
+      "{cmd}"
+     ],
+     "capture": "^(%\\d+)$"
+    }
+   ]
+  }
+ },
+ "alive": {
+  "herdr-pane": [
+   "herdr",
+   "pane",
+   "get",
+   "{value}"
+  ],
+  "tmux-pane": [
+   "tmux",
+   "display-message",
+   "-p",
+   "-t",
+   "{value}",
+   "#{pane_id}"
+  ]
+ },
+ "harness": {
+  "claude": {
+   "cmd": [
+    "claude"
+   ],
+   "settings_flag": "--settings",
+   "prompt_file_flag": "--append-system-prompt-file",
+   "add_dir_flag": "--add-dir"
+  },
+  "pi": {
+   "cmd": [
+    "pi"
+   ],
+   "prompt_flag": "--append-system-prompt"
+  },
+  "omp": {
+   "cmd": [
+    "omp"
+   ],
+   "prompt_flag": "--append-system-prompt"
+  }
+ },
+ "ports": {
+  "range": [
+   47100,
+   47999
+  ],
+  "names": [
+   "api",
+   "web"
+  ]
+ }
+}

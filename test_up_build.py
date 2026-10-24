@@ -99,9 +99,9 @@ class UpBuild(unittest.TestCase):
         self.assertIn("scout: made", r.stdout)
         self.assertIn("mapper: made", r.stdout)
         self.assertIn(os.path.join(self.root, "ROOKERY.md"), r.stdout)
-        r = self.up(self.team, "--json")
-        self.assertEqual(json.loads(r.stdout)["agents"][0]["launch"],
-                         "not started: no launch yet")
+        env = dict(self.env, PATH=os.path.join(HERE, "fixtures", "bin") + os.pathsep + self.env["PATH"])
+        r = self.up(self.team, "--json", env=env)   # fake herdr: no real pane is started
+        self.assertEqual(json.loads(r.stdout)["agents"][0]["launch"], "started")
 
     def test_host_repo_untouched(self):
         collect = lambda: subprocess.run(

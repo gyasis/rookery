@@ -213,7 +213,7 @@ send mail through the gate.
 **Independent Test**: with fake panes, the recorded launch has the right folder, environment and flags. A
 fake agent sends one mail that its teammate gets.
 
-- [ ] T013 [US2] Add the launch to `cli_workspace.py` (D9, D10, D11) and the new keys `default_binding`,
+- [x] T013 [US2] Add the launch to `cli_workspace.py` (D9, D10, D11) and the new keys `default_binding`,
   `launch`, `alive`, `harness`, `ports` to `rookery_config.default.json` as in the contract. Needs T001 and
   T012 first. For each agent: run the `alive` probe on each pane binding of the identity and skip a live
   agent (`running`). Else expand the steps: `{cwd}` (reader: workspace. Writer: worktree, from T015, until
