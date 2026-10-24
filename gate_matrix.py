@@ -48,7 +48,7 @@ class SendMatrix:
         return self._query("SELECT * FROM inbox ORDER BY id")
 
     def gate_records(self):
-        p = os.path.join(self.root, "logs", "gate.jsonl")
+        p = os.path.join(self.tmp.name, ".rookery", "logs", "gate.jsonl")   # one gate log (003 D2)
         if not os.path.exists(p):
             return []
         with open(p) as fh:

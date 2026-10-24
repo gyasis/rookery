@@ -3,7 +3,7 @@
 
     python3 -m unittest test_gate_log -v
 
-A gate record goes to <ROOKERY_ROOT>/logs/gate.jsonl, else ~/.rookery/logs/gate.jsonl.
+A gate record always goes to ~/.rookery/logs/gate.jsonl, whatever ROOKERY_ROOT holds (003 D2).
 A failed write prints one line to stderr and never raises.
 """
 import contextlib
@@ -22,9 +22,13 @@ class GateLog(Base):
         with open(path) as f:
             return [json.loads(line) for line in f]
 
-    def test_root_set_writes_under_root(self):
+    def home_log(self):
+        return os.path.join(self.tmp.name, ".rookery", "logs", "gate.jsonl")
+
+    def test_root_set_still_writes_under_home(self):
         TB.log_event(None, "gate", path="send", outcome="sent")
-        recs = self.read(os.path.join(self.root, "logs", "gate.jsonl"))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "logs", "gate.jsonl")))
+        recs = self.read(self.home_log())
         self.assertEqual(len(recs), 1)
         self.assertEqual((recs[0]["path"], recs[0]["outcome"]), ("send", "sent"))
         self.assertIn("ts", recs[0])
@@ -45,7 +49,7 @@ class GateLog(Base):
         for t in ts:
             t.join()
         self.assertEqual(errs, [])
-        p = os.path.join(self.root, "logs", "gate.jsonl")
+        p = self.home_log()
         self.assertEqual(len(self.read(p)), n)
         self.assertEqual(len(TB._logger_for(p).handlers), 1)
 
@@ -58,7 +62,8 @@ class GateLog(Base):
 
     def test_unwritable_folder_prints_one_line_and_does_not_raise(self):
         # a file where the logs folder should be, so the folder cannot be made
-        with open(os.path.join(self.root, "logs"), "w") as f:
+        os.makedirs(os.path.join(self.tmp.name, ".rookery"), exist_ok=True)
+        with open(os.path.join(self.tmp.name, ".rookery", "logs"), "w") as f:
             f.write("x")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):

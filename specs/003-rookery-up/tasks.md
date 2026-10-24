@@ -92,7 +92,7 @@ then writes the code. No task leaves a failing test.
   three bad entries gives three errors. Bad JSON gives one error with the line number. A reader named
   `x.lock` gives no error (only writers need a branch part).
   Verify: `python3 -m unittest test_team_file test_text_hints -v`
-- [ ] T005 Edit `turn_block.log_event` (`turn_block.py:~98`). Needs T003 first (same file). The stream
+- [x] T005 Edit `turn_block.log_event` (`turn_block.py:~98`). Needs T003 first (same file). The stream
   `gate` always writes to `~/.rookery/logs/gate.jsonl`, whatever `root` or `ROOKERY_ROOT` holds. The other
   streams keep their roots. Do not change `gate_root()` (D2). Write `test_d2_gate_home.py` first. Cases: with
   `ROOKERY_ROOT=<tmp>/p1`, then `<tmp>/p2`, one `submit` each: both records are in

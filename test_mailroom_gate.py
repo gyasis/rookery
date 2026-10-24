@@ -38,7 +38,7 @@ class GateHttpBase(ServerMixin, Base):
             return c.execute("SELECT COUNT(*) FROM inbox").fetchone()[0]
 
     def gate_log(self):
-        path = os.path.join(self.root, "logs", "gate.jsonl")
+        path = os.path.join(self.tmp.name, ".rookery", "logs", "gate.jsonl")   # one gate log (003 D2)
         if not os.path.exists(path):
             return []
         with open(path) as f:
