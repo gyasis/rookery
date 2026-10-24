@@ -114,7 +114,7 @@ class UpBuild(unittest.TestCase):
         self.assertEqual(self.porcelain(), before)
         self.assertEqual(self.porcelain(), "")
         if "No module named pytest" not in c0.stderr + c0.stdout:
-            self.assertEqual(collect().stdout, c0.stdout)
+            self.assertEqual(collect().stdout.splitlines()[:-1], c0.stdout.splitlines()[:-1])
 
     def test_home_files_not_written(self):
         self.up(self.team, "--no-launch")

@@ -192,7 +192,7 @@ in one session. `git status` in the host repo is clean.
   worktree of the host repo uses the host project name. `~/.claude.json` and `~/.claude/settings.json` in the
   temporary `HOME` do not exist after the run (FR-030, FR-031).
   Verify: `python3 -m unittest test_up_build test_views test_team_file test_identity test_init test_hooks -v`
-- [ ] T012 [US1] Write `test_up_idempotent.py` and fix `cli_workspace.cmd_up` where it fails. Needs T011
+- [x] T012 [US1] Write `test_up_idempotent.py` and fix `cli_workspace.cmd_up` where it fails. Needs T011
   first. Cases: a second run with the same team file makes 0 new sessions, 0 new identities and 0 new
   `up_agents` rows. It says `reused` for each agent (FR-006, SC-003). Files that an agent wrote in `runs/`,
   `outbox/` and `HANDOFF.md` are byte for byte the same (FR-010). A generated file that the test edited by hand
