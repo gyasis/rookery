@@ -23,7 +23,7 @@ _ROOKERY_DIR = os.path.dirname(os.path.abspath(__file__))
 _PY_MODULES = [
     "rookery_cli.py",
     "cli_serve.py",
-    "cli_up.py",
+    "cli_join.py",
     "cli_approve.py",
     "cli_known_hosts.py",
     "plugins.py",
@@ -257,5 +257,5 @@ os.makedirs(os.path.dirname(DEST), exist_ok=True)
 print(f"Downloading rookery from {{PYZ_URL}} ...")
 urllib.request.urlretrieve(PYZ_URL, DEST)
 os.chmod(DEST, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-print(f"OK rookery installed at {{DEST}}  (run: rookery up <url>)")
+print(f"OK rookery installed at {{DEST}}  (run: rookery join <url>)")
 """

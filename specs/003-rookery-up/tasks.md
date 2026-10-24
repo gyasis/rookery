@@ -119,7 +119,7 @@ then writes the code. No task leaves a failing test.
 
 **Independent Test**: `rookery join` takes the old flags. The old peer tests pass against `join`.
 
-- [ ] T007 [P] [US3] Rename `cli_up.py` to `cli_join.py` with `git mv`. In `rookery_cli.py:75-89`, the
+- [x] T007 [P] [US3] Rename `cli_up.py` to `cli_join.py` with `git mv`. In `rookery_cli.py:75-89`, the
   subparser `up` becomes `join`, with the same flags and `func=cmd_up` from `cli_join`. Change the texts
   at `cli_join.py:53,185` and the docstring to `rookery join`. Edit `bootstrap.py:26` (module name) and
   `:259` (installer text), and `test_text_hints.py:6` (`TEXT_FILES`). Write `test_join_rename.py` first.

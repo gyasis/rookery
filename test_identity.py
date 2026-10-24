@@ -501,7 +501,7 @@ class CliSessionIdentity(unittest.TestCase):
         import subprocess
         r = subprocess.run([sys.executable, self.CLI, "--help"], env=self.env,
                            capture_output=True, text=True, timeout=60)
-        for w in ("serve", "up", "approve", "session", "identity"):
+        for w in ("serve", "join", "approve", "session", "identity"):
             self.assertIn(w, r.stdout)
 
 
