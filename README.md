@@ -64,7 +64,7 @@ interactive session you want to *watch*, never the cross-harness mechanism.
 ## Install
 
 One self-contained binary — the **same** `rookery` command hosts a mailroom
-(`rookery serve`) *or* joins one (`rookery up`). You choose the role at
+(`rookery serve`) *or* joins one (`rookery join`). You choose the role at
 run time, not at install time.
 
 ```bash
@@ -188,7 +188,7 @@ cd ~/Documents/code/rookery
 ./demo_signed_card.sh     # A2A signed agent card (Ed25519): valid verifies, tampered fails
 ./demo_hardened.sh        # hardened policy: per-node identity + per-target ACL (guest denied reviewer)
 ./demo_invite.sh          # invite/handshake: A mints per-node token; B verifies pin + joins (no hand-edits)
-./demo_up.sh              # one-command join: `rookery up` (bootstrap installer + handshake + TOFU pin + auto-config)
+./demo_up.sh              # one-command join: `rookery join` (bootstrap installer + handshake + TOFU pin + auto-config)
 ./demo_tls.sh             # HTTPS sidecar (self-signed cert) + token = auth + encryption
 # paid (real models):
 ./demo_real.sh            # Claude architect ↔ Codex reviewer
@@ -418,13 +418,13 @@ peer: TOFU pin-check against the served card, then either print the
 `~/.claude.json` snippet or start the legacy `mailctl loop` directly. `./demo_invite.sh`
 proves the round-trip — including refusing a tampered invite (pubkey flipped).
 
-**One-command join (`rookery up`).** The easy wrapper around the
+**One-command join (`rookery join`).** The easy wrapper around the
 invite + MCP wiring. On A, `rookery serve` starts the sidecar AND an
 interactive approval watcher. It also announces presence via **mDNS** (Linux:
 `avahi-browse`, macOS: `dns-sd`, Windows: `dns-sd.exe`/Bonjour) **with a
 UDP-broadcast fallback** when you have no DNS-SD browser. On the peer
 B, one bootstrap (`curl -sSL http://A:8765/bootstrap | python3 -`) installs
-`~/.local/bin/rookery`, then `rookery up` (no args) discovers A on the LAN,
+`~/.local/bin/rookery`, then `rookery join` (no args) discovers A on the LAN,
 generates a 3-word slug, knocks on A's `/join`, waits for A's "approve?
 [y/N]" prompt. The slug is the visual check: does the joining machine show
 this same code? Then it TOFU-pins A's Ed25519 card pubkey to
@@ -461,7 +461,7 @@ is the dispatcher; see QUICKSTART Scenario 4 for the wiring.
 | `node_identity.example.json` | template for the per-node token + `may_task` ACL registry (copy to `node_identity.json`) |
 | `gen_card_key.py` / `verify_card.py` | generate the Ed25519 card key / verify a served card's signature |
 | `rookery_join.py` | consume an invite (`/invite`) — pin-check the card, then print the `~/.claude.json` snippet or start the legacy `mailctl loop` directly |
-| `rookery_cli.py` | unified CLI — `rookery serve`, `rookery up`, `rookery approve` |
+| `rookery_cli.py` | unified CLI — `rookery serve`, `rookery join`, `rookery approve` |
 | `identity.py` | per-node Ed25519 keypair at `~/.rookery/id_ed25519` |
 | `known_hosts.py` | SSH-style TOFU pin store at `~/.rookery/known_hosts` (`ok` / `changed` / `unknown`) |
 | `discovery.py` | LAN discovery — mDNS shell-out (`avahi-browse` / `dns-sd`) + UDP-broadcast fallback |
@@ -469,7 +469,7 @@ is the dispatcher; see QUICKSTART Scenario 4 for the wiring.
 | `mailroom_handshake.py` | HTTP route handlers for `/join`, `/approve`, `GET /approve` form, `/pending` |
 | `notifier.py` | out-of-band approval notifications (ntfy / Pushover / webhook). Silent no-op when `ROOKERY_NOTIFY_METHOD` is unset or `none` |
 | `cli_serve.py` | `rookery serve` subcommand handler |
-| `cli_up.py` | `rookery up` subcommand handler |
+| `cli_join.py` | `rookery join` subcommand handler |
 | `cli_approve.py` | `rookery approve` subcommand handler |
 | `cli_known_hosts.py` | `rookery known-hosts list` / `forget <host> [--yes]` for managing TOFU pins |
 | `config_manager.py` | idempotent `~/.claude.json` merge with `.bak.<epoch>` |

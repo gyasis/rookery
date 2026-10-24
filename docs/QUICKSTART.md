@@ -14,7 +14,7 @@ only for paid demos. All three scenarios below run free by default.
 ## Installation
 
 Rookery installs as **one self-contained binary** — the same `rookery` command
-**hosts** the mailroom (`rookery serve`) *or* **joins** one (`rookery up`). There
+**hosts** the mailroom (`rookery serve`) *or* **joins** one (`rookery join`). There
 is no separate "server build" or "client build". You pick the role at
 run time, not at install time.
 
@@ -39,7 +39,7 @@ The `/bootstrap` endpoint streams the same zipapp installer:
 
 ```bash
 curl -sSL http://<host>:<port>/bootstrap | python3 -   # drops ~/.local/bin/rookery
-rookery up http://<host>:<port>                        # then join
+rookery join http://<host>:<port>                        # then join
 ```
 
 ### Dependencies
@@ -53,7 +53,7 @@ rookery up http://<host>:<port>                        # then join
 | Role  | Command            | Owns the SQLite mailroom? | How many per mesh |
 |-------|--------------------|---------------------------|-------------------|
 | Host  | `rookery serve`    | **yes** (the audit log)   | exactly **1**     |
-| Peer  | `rookery up <url>` | no — talks to the host    | many              |
+| Peer  | `rookery join <url>` | no — talks to the host    | many              |
 
 Peers never share the DB file; they reach the host's HTTP sidecar over TCP.
 Pick **one** machine to `serve`. All others run `up`.
@@ -248,17 +248,17 @@ python3 rookery_cli.py serve --host 0.0.0.0 --allow-public --port 8765 \
 # (the Ed25519 card key is created once via `python3 gen_card_key.py`)
 ```
 
-**On machine B — install once, then `rookery up`.** One curl pipes the
+**On machine B — install once, then `rookery join`.** One curl pipes the
 installer that drops `~/.local/bin/rookery`; one command joins the mesh:
 
 ```bash
 curl -sSL http://<A-host>:8765/bootstrap | python3 -
-rookery up                      # auto-discovers A on the LAN via mDNS or UDP broadcast
+rookery join                      # auto-discovers A on the LAN via mDNS or UDP broadcast
 # or, on the open internet / when discovery isn't available:
-rookery up https://<A-host>:8765
+rookery join https://<A-host>:8765
 ```
 
-`rookery up` (no args) discovers A on the LAN via **mDNS** (Linux:
+`rookery join` (no args) discovers A on the LAN via **mDNS** (Linux:
 `avahi-browse`, macOS: `dns-sd`, Windows: `dns-sd.exe` if you have Apple's
 free Bonjour Print Services installed). When mDNS is unavailable or blocked,
 it falls back to **UDP broadcast** on port 8888.
@@ -296,13 +296,13 @@ the wake-loop:
 > rookery.send(to, body) for replies.
 ```
 
-That's the whole flow: one install + one `rookery up`. Mesh wakes the agent
+That's the whole flow: one install + one `rookery join`. Mesh wakes the agent
 from here on; no polling, no hand-edits.
 
 **Trust model.** The slug is the human-verifiable handshake — if A's prompt
 shows a different slug than B's, deny. After approval the served card pubkey
 is TOFU-pinned. A later pubkey change fires an SSH-style key-changed
-warning, and `rookery up` refuses to touch `~/.claude.json`.
+warning, and `rookery join` refuses to touch `~/.claude.json`.
 
 **Approve from your phone (out-of-band notifications).** If you are not at
 A's terminal when B knocks, you get a push notification on your
@@ -351,7 +351,7 @@ rookery known-hosts forget http://<linux-host>:8765
 
 `rookery known-hosts forget <host>` prompts for confirmation; pass `--yes`
 to skip the prompt. Removing a stale or compromised entry means the next
-`rookery up` to that URL will TOFU-pin the fresh key instead of comparing
+`rookery join` to that URL will TOFU-pin the fresh key instead of comparing
 against the old one.
 
 **Headless A.** If A's sidecar runs in a detached tmux / systemd unit

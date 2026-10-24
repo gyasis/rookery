@@ -1,5 +1,7 @@
 """test_join_rename — `rookery up` became `rookery join` (spec 003 D1, FR-001, T007)."""
+import glob
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -54,6 +56,19 @@ class JoinRename(unittest.TestCase):
     def test_bootstrap_modules(self):
         self.assertIn("cli_join.py", bootstrap._PY_MODULES)
         self.assertNotIn("cli_up.py", bootstrap._PY_MODULES)
+
+
+class DocsNameJoin(unittest.TestCase):
+    def test_docs_use_join_not_up(self):
+        old = re.compile(r"rookery up (https?://|<url>|\[url\])")
+        files = [os.path.join(HERE, "README.md")]
+        files += glob.glob(os.path.join(HERE, "docs", "*")) + glob.glob(os.path.join(HERE, "demo_*.sh"))
+        for f in files:
+            if not os.path.isfile(f):
+                continue
+            text = open(f, encoding="utf-8").read()
+            self.assertIsNone(old.search(text), f"{f} still has the old peer-join form")
+            self.assertNotIn("cli_up.py", text, f)
 
 
 if __name__ == "__main__":

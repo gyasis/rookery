@@ -128,7 +128,7 @@ then writes the code. No task leaves a failing test.
   rename for the expected text. `rookery --help` lists `join`. The zipapp module list has `cli_join.py` and
   not `cli_up.py`. Run `test_demo_starts` after the change and fix `demo_up.sh` lines 2, 72, 97 to `rookery join`.
   Verify: `python3 -m unittest test_join_rename test_text_hints test_demo_starts test_identity test_cli_init_unit -v`
-- [ ] T008 [US3] Edit the docs that name the old command. In `README.md`, edit lines 67, 191, 421-427, 464, 472 and
+- [x] T008 [US3] Edit the docs that name the old command. In `README.md`, edit lines 67, 191, 421-427, 464, 472 and
   the file table row for `cli_up.py`. In `docs/QUICKSTART.md`, edit lines 17, 42, 56, 251-262, 299, 305, 354.
   In `docs/rookery-explained.html`, edit lines 416-420, 451, 555. Each peer-join use becomes `rookery join`. Needs T007
   first. Add a case to `test_join_rename.py` first: no file in `README.md`, `docs/` or `demo_*.sh` matches

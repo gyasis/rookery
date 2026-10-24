@@ -413,11 +413,11 @@ python3 mailroom_server.py \<br>
     </div>
 
     <div class="box moss">
-      <div class="title">rookery up<span class="tag">peer b, one command</span></div>
+      <div class="title">rookery join<span class="tag">peer b, one command</span></div>
       <div class="body">
         <ul>
-          <li><code>rookery up</code> (auto-discover)</li>
-          <li><code>rookery up &lt;url&gt;</code> (explicit)</li>
+          <li><code>rookery join</code> (auto-discover)</li>
+          <li><code>rookery join &lt;url&gt;</code> (explicit)</li>
           <li><code>--node-id &lt;name&gt;</code> <code>--insecure-tls</code></li>
           <li class="muted">Discovers, knocks with slug, TOFU-pins A's card, merges <code>~/.claude.json</code>.</li>
         </ul>
@@ -448,7 +448,7 @@ python3 mailroom_server.py \<br>
     </div>
 
   </div>
-  <p class="note">Install once on B (<code>curl -sSL http://A:8765/bootstrap | python3 -</code>); then <code>rookery up</code> is the daily UX.</p>
+  <p class="note">Install once on B (<code>curl -sSL http://A:8765/bootstrap | python3 -</code>); then <code>rookery join</code> is the daily UX.</p>
 </section>
 
 <hr>
@@ -552,7 +552,7 @@ python3 mailroom_server.py \<br>
     <div class="fe"><code>terminal_node.py</code> &mdash; bridges a human/terminal-agent (tmux/wezterm/zellij) into the mesh</div>
     <div class="fe"><code>gen_card_key.py</code> / <code>verify_card.py</code> &mdash; generate and verify Ed25519 signed cards</div>
     <div class="fe"><code>rookery_cli.py</code> &mdash; unified CLI entrypoint (4 subcommands: serve, up, approve, known-hosts)</div>
-    <div class="fe"><code>cli_serve.py</code> / <code>cli_up.py</code> / <code>cli_approve.py</code> &mdash; subcommand handlers (lazy-imported per command)</div>
+    <div class="fe"><code>cli_serve.py</code> / <code>cli_join.py</code> / <code>cli_approve.py</code> &mdash; subcommand handlers (lazy-imported per command)</div>
     <div class="fe"><code>cli_known_hosts.py</code> &mdash; <code>rookery known-hosts list/forget</code> for managing TOFU pins</div>
     <div class="fe"><code>identity.py</code> &mdash; this node's Ed25519 keypair at <code>~/.rookery/id_ed25519</code></div>
     <div class="fe"><code>known_hosts.py</code> &mdash; SSH-style TOFU pin store at <code>~/.rookery/known_hosts</code></div>
