@@ -27,7 +27,9 @@ class _Bad(Exception):
 
 def _git_out(cwd, *args):
     try:
-        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=10)
+        import rookery_worktree
+        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=10,
+                           env=rookery_worktree.git_env())
     except (OSError, subprocess.SubprocessError):
         raise _Bad("Rookery needs git to find the host repo. Install git, then run the command again.")
     return r.stdout.strip() if r.returncode == 0 else None
@@ -87,8 +89,8 @@ def _up_config(config):
 
 
 def _agent_cwd(a, ws):
-    """Working folder of a started agent. Writers get their worktree in T015; until then the workspace."""
-    return ws
+    """Working folder of a started agent: a writer's worktree, else the workspace."""
+    return a.get("_worktree") or ws
 
 
 _PLACEHOLDER = re.compile(r"\{(cwd|label|pane|value)\}")
@@ -316,7 +318,13 @@ def _build_rows(conn, team, host, root, config):
                 (ident["agent_id"], session["session_id"], a["harness"], a["role"],
                  repo, a.get("task_id") if writer else None,
                  a.get("binding") or default, ri._now_iso()))
-            rows.append((dict(a, agent_id=ident["agent_id"]), state, changed))
+            row = dict(a, agent_id=ident["agent_id"])
+            if writer:
+                import rookery_worktree
+                row["_wt"] = rookery_worktree.register(
+                    conn, root, session["name"], session["session_id"], a["name"], ident["agent_id"],
+                    repo, a["task_id"], ri._now_iso())
+            rows.append((row, state, changed))
     except BaseException:
         conn.rollback()
         raise
@@ -329,6 +337,7 @@ def _up(args):
     import rookery_identity
     import rookery_team
     import rookery_views
+    import rookery_worktree
     import turn_block
 
     if args.team_file.startswith(("http://", "https://")):
@@ -346,20 +355,43 @@ def _up(args):
             conn = turn_block.open_db()
             try:
                 turn_block.ensure_up_tables(conn)
+                try:
+                    rookery_worktree.check_session_free(conn, root, team["session"])
+                except rookery_worktree.Refusal as e:
+                    raise _Bad(str(e))
+                try:
+                    for a in team["agents"]:
+                        if a["role"] == "writer":
+                            rookery_worktree.check_agent_free(conn, root, team["session"], a["name"],
+                                                              a.get("repo") or host)
+                except rookery_worktree.Refusal as e:
+                    raise _Bad(str(e))
                 session, rows, notes = _build_rows(conn, team, host, root, _up_config(config))
             finally:
                 conn.close()
             report = []
             try:
+                conn = turn_block.open_db()
+                try:
+                    for a, _s, _c in rows:
+                        if a.get("_wt"):
+                            a["_worktree"], a["_wt_err"], note = rookery_worktree.add(conn, a["_wt"])
+                            notes.extend(a["_wt"]["notes"])
+                            if note:
+                                notes.append(note)
+                finally:
+                    conn.close()
                 for a, state, changed in rows:
                     ws = rookery_views.workspace_files(root, session, a, team, host)
                     writer_repo = (a.get("repo") or host) if a["role"] == "writer" else None
                     rookery_views.settings_json(os.path.join(ws, "_config", "settings.json"),
                                                 project, repo=writer_repo)
                     report.append({"name": a["name"], "agent_id": a["agent_id"], "role": a["role"],
-                                   "workspace": ws, "worktree": None, "launch": launch,
+                                   "workspace": ws, "worktree": a.get("_worktree"), "launch": launch,
                                    "binding": None, "first_start_dialogs": False,
                                    "changed": changed, "_state": state})
+                    if a.get("_wt_err"):
+                        report[-1]["launch"] = f"not started: {a['_wt_err']}"
                     if changed:
                         notes.append(f"{a['name']}: changed {', '.join(changed)}")
                 md = rookery_views.rookery_md(root)
@@ -368,6 +400,8 @@ def _up(args):
                     conn = turn_block.open_db()
                     try:
                         for r, (a, _s, _c) in zip(report, rows):
+                            if a.get("_wt_err"):
+                                continue
                             r["launch"], r["binding"], pane = _launch_agent(
                                 conn, ucfg, session, a, r["workspace"], root, host)
                             if r["launch"] == "started" and a["harness"] == "claude":
@@ -384,14 +418,16 @@ def _up(args):
         raise _Bad(str(e))
     if args.json:
         agents = [{k: v for k, v in r.items() if k not in ("_state", "_pane")} for r in report]
-        ok = all(r["launch"] in ("started", "running") for r in report) or args.no_launch
+        ok = all(r["launch"] in ("started", "running") for r in report) or (
+            args.no_launch and not any(r["launch"].startswith("not started") for r in report))
         print(json.dumps({"ok": ok, "root": root, "session_id": session["session_id"],
                           "agents": agents, "notes": notes, "errors": []}))
     else:
         for n in notes:
             print(n)
         for r in report:
-            print(f"{r['name']}: {r['_state']}" + ("" if args.no_launch else f"; {r['launch']}"))
+            show = not args.no_launch or r["launch"].startswith("not started")
+            print(f"{r['name']}: {r['_state']}" + (f"; {r['launch']}" if show else ""))
             if r.get("_pane"):
                 print(FIRST_START.format(pane=r["_pane"]))
         print(f"Root: {root}")

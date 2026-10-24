@@ -253,7 +253,7 @@ fake agent sends one mail that its teammate gets.
 **Independent Test**: one writer gets its worktree and branch. The host repo does not change. `finish` and
 `gc` act only on registered worktrees.
 
-- [ ] T015 [US4] Create `rookery_worktree.py` with `add(conn, root, session, agent, repo, task_id) -> path`
+- [x] T015 [US4] Create `rookery_worktree.py` with `add(conn, root, session, agent, repo, task_id) -> path`
   and wire it into `cli_workspace.cmd_up` for writers (D12, D22 step 4). Needs T013 first. Before the
   transaction, refuse the session if `<root>/wt/<session>/` exists and has no registry row (FR-021a). Insert
   the `worktrees` row, then run `git -C <repo> worktree add` (existing branch: no `-b`, no reset; new branch:
