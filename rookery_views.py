@@ -207,3 +207,174 @@ def settings_json(path, project, repo=None):
                             g["matcher"] = cgroup["matcher"]
         cli_init.write_text_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     return path
+
+
+# --- views read from the database (T017, D15). SELECT only: nothing here writes a row or marks mail read.
+
+def _cell(v, limit=80):
+    """One table cell: one line, no pipe, short."""
+    s = " ".join(str(v if v is not None else "-").split()).replace("|", "/")
+    return (s[:limit] or "-")
+
+
+def _table(head, rows):
+    out = "| " + " | ".join(head) + " |\n|" + "---|" * len(head) + "\n"
+    return out + "".join("| " + " | ".join(_cell(c) for c in r) + " |\n" for r in rows)
+
+
+def _iso(epoch):
+    try:
+        return datetime.datetime.fromtimestamp(int(epoch), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "-"
+
+
+def _turn_status(root, session, name):
+    try:
+        with open(os.path.join(turn_block.workspace(root, session, name), "state", "turn.json"),
+                  encoding="utf-8") as fh:
+            state = json.load(fh).get("state")
+    except (OSError, ValueError, AttributeError, KeyError):
+        return "none"
+    return state if state in ("idle", "busy") else "none"
+
+
+def _newest_run(root, session, name):
+    runs = os.path.join(root, "agents", session, name, "runs")
+    best = None
+    try:
+        for e in os.scandir(runs):
+            if e.is_dir():
+                m = e.stat().st_mtime
+                if best is None or (m, e.name) > best:
+                    best = (m, e.name)
+    except OSError:
+        return None
+    return best[1] if best else None
+
+
+def _names(conn):
+    """agent_id -> identity name, for mail rows that carry agent IDs."""
+    return {r[0]: r[1] for r in conn.execute("SELECT agent_id, name FROM identities")}
+
+
+def _write(root, rel, text, command):
+    path = os.path.join(root, *rel.split("/"))
+    cli_init.write_text_atomic(path, _stamp(command) + text)
+    return path
+
+
+def directory(conn, root, command="regen"):
+    """_directory/INDEX.md, ports.md, claims.md. Returns the INDEX path."""
+    rows = []
+    q = conn.execute(
+        "SELECT i.agent_id, i.name, s.name AS session, u.harness, u.role, u.task_id "
+        "FROM identities i JOIN rookery_sessions s ON s.session_id=i.session_id "
+        "LEFT JOIN up_agents u ON u.agent_id=i.agent_id "
+        "WHERE s.state='open' ORDER BY s.name, i.name").fetchall()
+    for r in q:
+        b = conn.execute("SELECT kind, value FROM bindings WHERE owner_type='identity' AND owner_id=? "
+                         "ORDER BY created_at DESC, rowid DESC LIMIT 1", (r["agent_id"],)).fetchone()
+        try:
+            run = _newest_run(root, r["session"], r["name"])
+        except ValueError:
+            run = None
+        try:
+            status = _turn_status(root, r["session"], r["name"])
+        except ValueError:
+            status = "none"
+        rows.append((r["name"], r["harness"] or "-", f"{b['kind']}:{b['value']}" if b else "-", status,
+                     run or r["task_id"] or "-", r["role"] or "-", r["session"]))
+    index = _write(root, "_directory/INDEX.md",
+                   "# Directory\n\nOne row for each agent of the open sessions.\n\n" +
+                   _table(["name", "harness", "pane", "status", "current task", "role", "team"], rows), command)
+    ports = conn.execute(
+        "SELECT i.name, p.name, p.port FROM ports p LEFT JOIN identities i ON i.agent_id=p.agent_id "
+        "ORDER BY i.name, p.name").fetchall()
+    _write(root, "_directory/ports.md", "# Ports\n\n" + _table(
+        ["agent", "name", "port"], [(r[0] or "-", r[1], r[2]) for r in ports]), command)
+    claims = conn.execute(
+        "SELECT s.name, i.name, c.pattern FROM claims c "
+        "LEFT JOIN rookery_sessions s ON s.session_id=c.session_id "
+        "LEFT JOIN identities i ON i.agent_id=c.agent_id WHERE c.active=1 "
+        "ORDER BY s.name, i.name, c.pattern").fetchall()
+    _write(root, "_directory/claims.md", "# Claims\n\nActive claims only.\n\n" + _table(
+        ["session", "agent", "pattern"], [(r[0] or "-", r[1] or "-", r[2]) for r in claims]), command)
+    return index
+
+
+def teams(conn, root, session, team, command="up"):
+    """_teams/<session>.md: the task, the acceptance criteria and the members."""
+    import rookery_identity
+    name = rookery_identity.safe_name(session["name"], "session name")
+    members = conn.execute(
+        "SELECT i.name, u.role, u.harness FROM identities i LEFT JOIN up_agents u ON u.agent_id=i.agent_id "
+        "WHERE i.session_id=? ORDER BY i.name", (session["session_id"],)).fetchall()
+    text = f"# Team {name}\n\n## Task\n\n{(team or {}).get('task') or '-'}\n\n## Acceptance criteria\n\n"
+    crit = (team or {}).get("acceptance") or []
+    text += (_bullets(crit) if crit else "- none\n")
+    text += "\n## Members\n\n" + _table(["name", "role", "harness"],
+                                         [(r[0], r[1] or "-", r[2] or "-") for r in members])
+    return _write(root, f"_teams/{name}.md", text, command)
+
+
+def threads(conn, root, command="regen"):
+    """_threads/INDEX.md: one line for each group of mail with the same topic, sender and recipient.
+    Metadata only. The body column is never read."""
+    ids = _names(conn)
+    rows = conn.execute(
+        "SELECT topic, sender, recipient, COUNT(*) AS n, MAX(created_at) AS last, MAX(id) AS last_id "
+        "FROM inbox GROUP BY session_id, topic, sender, recipient ORDER BY last DESC, last_id DESC").fetchall()
+    out = []
+    for r in rows:
+        st = conn.execute("SELECT status FROM inbox WHERE id=?", (r["last_id"],)).fetchone()[0]
+        out.append((r["topic"] or "-", ids.get(r["sender"], r["sender"]), ids.get(r["recipient"], r["recipient"]),
+                    r["n"], _iso(r["last"]), st))
+    return _write(root, "_threads/INDEX.md",
+                  "# Threads\n\nOne line for each thread. No mail body is here.\n\n" +
+                  _table(["thread", "sender", "recipient", "mails", "time", "state"], out), command)
+
+
+def _safe_file(s):
+    return "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(s or "unknown"))[:64].strip(".") or "unknown"
+
+
+def _is_generated(path):
+    """True when the file starts with the line that Rookery writes on every generated view."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.readline().startswith("<!-- generated by rookery ")
+    except OSError:
+        return False
+
+
+def mail_mirror(conn, root, command="regen"):
+    """_mail/quarantine/<reason>/<id>.md and _mail/review/<id>.md: the metadata of each quarantined or
+    held row. No body. Files of rows that left these states are removed. Returns the paths written."""
+    ids = _names(conn)
+    want = {}
+    q = conn.execute(
+        "SELECT m.id, m.sender, m.recipient, m.topic, m.status, m.reason, m.decided_by, m.created_at, "
+        "m.decided_at, s.name AS session FROM inbox m LEFT JOIN rookery_sessions s ON s.session_id=m.session_id "
+        "WHERE m.status IN ('quarantined','held') ORDER BY m.id").fetchall()
+    for r in q:
+        rel = (f"_mail/quarantine/{_safe_file(r['reason'])}/{int(r['id'])}.md" if r["status"] == "quarantined"
+               else f"_mail/review/{int(r['id'])}.md")
+        text = f"# Mail {int(r['id'])}\n\nState: {r['status']}. The body is not here.\n\n" + _bullets([
+            f"id: {int(r['id'])}", f"session: {_cell(r['session'])}",
+            f"sender: {_cell(ids.get(r['sender'], r['sender']))}",
+            f"recipient: {_cell(ids.get(r['recipient'], r['recipient']))}",
+            f"topic: {_cell(r['topic'])}", f"reason: {_cell(r['reason'])}",
+            f"decided by: {_cell(r['decided_by'])}",
+            f"time: {_iso(r['decided_at'] or r['created_at'])}"])
+        want[os.path.normpath(os.path.join(root, *rel.split("/")))] = text
+    mail = os.path.join(root, "_mail")
+    for sub in ("quarantine", "review"):
+        for d, _dn, fs in os.walk(os.path.join(mail, sub)):
+            for f in fs:
+                p = os.path.normpath(os.path.join(d, f))
+                if f.endswith(".md") and p not in want and _is_generated(p):
+                    os.remove(p)   # a stale view Rookery wrote; a file a person made stays
+    for p, text in want.items():
+        cli_init.write_text_atomic(p, _stamp(command) + text)
+    return sorted(want)

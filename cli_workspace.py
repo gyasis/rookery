@@ -395,6 +395,14 @@ def _up(args):
                     if changed:
                         notes.append(f"{a['name']}: changed {', '.join(changed)}")
                 md = rookery_views.rookery_md(root)
+                conn = turn_block.open_db()
+                try:
+                    rookery_views.teams(conn, root, session, team)
+                    rookery_views.directory(conn, root, "up")
+                    rookery_views.threads(conn, root, "up")
+                    rookery_views.mail_mirror(conn, root, "up")
+                finally:
+                    conn.close()
                 if not args.no_launch:
                     ucfg = _up_config(config)
                     conn = turn_block.open_db()
@@ -509,6 +517,29 @@ def cmd_gc(args):
         print(f"{f['path']}\t{f['session']}\t{f['agent']}\t{f['branch']}\t{f['reason']}")
 
 
+def cmd_regen(args):
+    import rookery_views
+    root = _root_or_none()
+    if root is None:
+        _fail(args, "Set ROOKERY_ROOT or run from the host repo.", EXIT_BAD)
+
+    def go(conn):
+        paths = [rookery_views.directory(conn, root), rookery_views.threads(conn, root)]
+        paths += rookery_views.mail_mirror(conn, root)
+        return paths
+    try:
+        paths = _with_db(args, go)
+    except OSError as e:
+        _fail(args, f"Rookery cannot write {e.filename or root}: {e.strerror}.", EXIT_BAD)
+    except sqlite3.OperationalError as e:
+        msg = str(e).lower()
+        _fail(args, f"database error: {e}", EXIT_BUSY if ("locked" in msg or "busy" in msg) else EXIT_BAD)
+    if args.json:
+        print(json.dumps({"ok": True, "root": root, "files": paths}))
+    else:
+        print(f"Wrote {len(paths)} files under {root}.")
+
+
 def add_parser(subparsers):
     p = subparsers.add_parser("up", help="Build a team from a team file.")
     p.add_argument("team_file", metavar="TEAM_FILE", help="Path to a JSON team file.")
@@ -524,3 +555,6 @@ def add_parser(subparsers):
     g = subparsers.add_parser("gc", help="List stale worktree rows. Deletes nothing.")
     g.add_argument("--json", action="store_true", help="Print a JSON list.")
     g.set_defaults(func=cmd_gc)
+    r = subparsers.add_parser("regen", help="Write the generated views again from the database.")
+    r.add_argument("--json", action="store_true", help="Print one JSON object.")
+    r.set_defaults(func=cmd_regen)

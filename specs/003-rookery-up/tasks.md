@@ -294,7 +294,7 @@ fake agent sends one mail that its teammate gets.
 **Independent Test**: after `rookery up`, `ROOKERY.md` and `_directory/INDEX.md` exist. A roster change and
 `rookery regen` update INDEX.
 
-- [ ] T017 [US5] Add to `rookery_views.py` the generators `directory(conn, root)` (`_directory/INDEX.md`,
+- [x] T017 [US5] Add to `rookery_views.py` the generators `directory(conn, root)` (`_directory/INDEX.md`,
   `ports.md`, `claims.md`), `teams(conn, root, session, team)` (`_teams/<session>.md`), `threads(conn, root)`
   (`_threads/INDEX.md`, metadata only) and `mail_mirror(conn, root)` (`_mail/quarantine/<reason>/<id>.md`,
   `_mail/review/<id>.md`, metadata only) (D15). Each uses `SELECT` only. Call them at the end of `cmd_up`, and
