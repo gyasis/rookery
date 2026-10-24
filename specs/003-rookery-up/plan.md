@@ -45,8 +45,8 @@ edit of `~/.claude.json` or `~/.claude/settings.json`. Rookery refuses Codex unt
 Gates from `.specify/memory/constitution.md` (v1.2.1):
 
 - [x] **I. Mailroom is the record**: the new state goes in four new tables (D6). Rookery generates the views
-      from the database, and agents only read them. Rookery deletes no row, except the registry row of a worktree
-      that git failed to make in the same run (data-model). Quickstart 1 runs the change on a COPY of the live
+      from the database, and agents only read them. Rookery deletes no row: a worktree that git failed to make
+      keeps its registry row as `failed`, and dropped claims become inactive (data-model). Quickstart 1 runs the change on a COPY of the live
       database.
 - [x] **II. Proven, not claimed**: each FR has a test in the trace below. R9 to R14 each get the proof test of
       the register (D19), and a task moves each from `open` to `proven` in the OKF register. The live checks carry
@@ -106,12 +106,12 @@ rookery.py                 EDIT four CREATE TABLE IF NOT EXISTS (D6)
 cli_init.py                NO CHANGE (merge_hooks is reused as it is)
 rookery_config.default.json EDIT default_binding, launch, alive, harness, ports
 bootstrap.py               EDIT module list: cli_join, cli_workspace, rookery_team, rookery_views, rookery_worktree, rookery_guard
-fixtures/bin/claude fixtures/bin/pi   NEW  fake harnesses that record arguments, folder and environment
+fixtures/bin/fakepane fixtures/bin/fakeagent   NEW  a fake pane tool that runs a command; a fake agent that records arguments, folder and environment, and sends mail
 fixtures/bin/herdr fixtures/bin/tmux  EDIT print a pane ID for tab create / new-window
 specs/002-mail-gate/research.md, spec.md  EDIT D24 pointer: RQ-2.9 is a guardrail (D18)
 README.md docs/QUICKSTART.md docs/rookery-explained.html demo_up.sh CHANGELOG.md   EDIT join rename; rookery up docs; layout tree (FR-034)
 skills/rookery/SKILL.md    EDIT rookery up, finish, gc; CLI only for these agents
-test_join_rename.py test_d2_gate_home.py test_d3_root.py           NEW
+test_up_schema.py test_join_rename.py test_d2_gate_home.py test_d3_root.py   NEW
 test_team_file.py test_up_build.py test_up_launch.py test_up_idempotent.py   NEW
 test_views.py test_worktree.py test_finish_gc.py test_guard.py test_ports.py test_up_e2e.py   NEW
 test_gate_log.py test_text_hints.py   EDIT (D2 path; cli_join.py file name)
@@ -172,7 +172,7 @@ Phase requirements and the FRs that build them:
 | FR-031 | `_config/settings.json` with `merge_hooks` (D8) | `test_up_build`: handlers equal to `rookery init` output. `--settings` in argv. No write to host or user configuration |
 | FR-032 | `_config/` from the team file (D7) | `test_up_idempotent`: a new session from the same team file gives the same `_config/` |
 | FR-033 | lint of generated files and error texts | `test_views` runs `ste-lint` on each rendered file |
-| FR-034 | README and docs layout tree | review. `test_views` checks the tree text names `postmaster/`, `logs/`, `state/` |
+| FR-034 | README and docs layout tree | review. `test_text_hints` checks the tree text names `postmaster/`, `logs/`, `state/` |
 
 SC-001 to SC-010 map to the same tests.
 SC-001 `test_up_build`, SC-002 R10 in `test_up_build`, SC-003

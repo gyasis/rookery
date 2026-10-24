@@ -80,6 +80,12 @@ With one reader and one writer up, ask the reader to send the writer one mail wi
 the writer's pane gets a wake. `rookery peek` in the writer's pane shows the mail. `~/.rookery/logs/gate.jsonl`
 has the decision (D2).
 
+## 7a. Live: a committed hook runs once (FR-031)
+
+Use a scratch repo where `rookery init` wrote the hooks and the hooks are committed. Bring up one writer in that
+repo and one reader. Ask the writer to send the reader one mail with a `rookery` block. Expected: the reader's
+inbox has exactly one new row, and `~/.rookery/logs/gate.jsonl` has exactly one decision for it.
+
 ## 8. Live: the guard (R9)
 
 Ask the writer to write `/tmp/outside.txt` with its Write tool. Expected: Claude Code shows the Rookery guard

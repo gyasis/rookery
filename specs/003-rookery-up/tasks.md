@@ -39,7 +39,7 @@ then writes the code. No task leaves a failing test.
 - No new code writes `~/.claude.json`, `~/.claude/settings.json` or any file in the host repo.
 - No new code removes a branch. Only `rookery finish` removes a worktree, after three confirmations.
 - Each text that an agent or the user reads passes `ste-lint --max-score 2.0 --glossary ste-glossary.txt`
-  (FR-033): error texts, the first-launch note, the generated Markdown files.
+  (FR-033): error texts, the first-start note, the generated Markdown files.
 - The existing suites are
   `test_turn_block test_send test_hooks test_outbox test_wake test_identity test_init test_gate test_gate_log`.
   Each `Verify:` of a code task runs them.
@@ -161,12 +161,15 @@ in one session. `git status` in the host repo is clean.
   (FR-013). No generated file contains `check_inbox`, `await_message` or `mcp__`. No `CLAUDE.md` above the
   workspace.
   Verify: `python3 -m unittest test_views test_text_hints -v`
-- [ ] T010 [US1] Add `settings_json(path, project)` to `rookery_views.py`. Needs T009 first. It calls
-  `cli_init.merge_hooks(path, project, with_permissions=True)` (D8) and nothing more for now (T019 adds the
+- [ ] T010 [US1] Add `settings_json(path, project, repo=None)` to `rookery_views.py`. Needs T009 first. It calls
+  `cli_init.merge_hooks(path, project, with_permissions=True)` (D8). When `repo` has a committed
+  `.claude/settings.json` with Rookery handlers (`cli_init._is_rookery`), it copies their exact command text for
+  those events instead (D8, H1). Nothing more for now (T019 adds the
   guard and watch handlers). Add cases to `test_views.py` first. The `SessionStart`, `UserPromptSubmit` and
   `Stop` handler commands are byte for byte the same as those that `cli_init.merge_hooks` writes into a
   fresh `.claude/settings.json` for the same project (FR-031). `permissions.allow` has the `rookery inbox`
-  rule. The file is valid JSON.
+  rule. The file is valid JSON. A `repo` whose committed file has `/opt/bin/rookery hook stop --project app`
+  gives exactly that `Stop` command text, and only one `Stop` handler.
   Verify: `python3 -m unittest test_views test_cli_init_unit test_init -v`
 - [ ] T011 [US1] Create `cli_workspace.py` with `add_parser(sub)` and `cmd_up(args)`, and register it in
   `rookery_cli.build_parser`. Needs T003, T004, T007 and T010 first.
@@ -182,7 +185,7 @@ in one session. `git status` in the host repo is clean.
   `bootstrap._PY_MODULES`. Write `test_up_build.py` first. Cases: a two-reader team with `--no-launch`
   gives the root, `ROOKERY.md`, two workspaces, one session, two identities, two `up_agents` rows (SC-001
   for readers). The root is outside the repo. `git status --porcelain` in the host repo is the same before
-  and after. `python3 -m unittest discover` finds the same number of tests in a host fixture with one test
+  and after. `pytest --collect-only -q` finds the same number of tests in a host fixture with one test
   file (R10, SC-002). A relative `ROOKERY_ROOT` exits 2. A root inside the repo exits 2. A bad team file
   makes no root and no session. `up http://x` exits 2 and names `rookery join`. Running from a linked
   worktree of the host repo uses the host project name. `~/.claude.json` and `~/.claude/settings.json` in the
@@ -218,7 +221,7 @@ fake agent sends one mail that its teammate gets.
   command with its D11 flags). `{pane}` (from `capture`). After the last step, `rookery_identity.bind` the
   identity to `<kind>:<pane>`. A missing `launch` kind, a step that exits non-zero, or a `capture` with no
   match gives `not started: <reason>` for that agent, and the other agents still launch (FR-018). Print the
-  first-launch note for each new Claude Code agent. `--no-launch` skips all of this. Write `test_up_launch.py`
+  first-start note for each new Claude Code agent. `--no-launch` skips all of this. Write `test_up_launch.py`
   first, with `fixtures/bin` first on `PATH` and `ROOKERY_FIXTURE_LOG` set. Cases: the default
   `tmux-pane` config gives the fake tmux the argv of the contract, with `-c <workspace>` and one `-e K=V` for
   each FR-008 variable, every path absolute (FR-008, FR-014). Rookery stores the binding `tmux-pane:%0` (FR-017).
@@ -226,14 +229,14 @@ fake agent sends one mail that its teammate gets.
   `--add-dir <host>`, and the writer argv has `--settings` and `--append-system-prompt-file` (FR-016). A `pi` agent gets
   `--append-system-prompt`. Rookery skips a pane in `$ROOKERY_FIXTURE_ALIVE` (FR-018). The report names a kind with no
   `launch` entry, and the workspace still exists. One failing step does not stop the other
-  agent. `postmaster.wake_identities` with the stored binding sends the wake to the fake tmux (FR-017). A scan
+  agent. With `state/turn.json` set to `{"state": "idle"}`, `postmaster.wake_identities` with the stored binding sends the wake to the fake tmux (FR-017). With no `state/turn.json`, it sends no wake (D10). A scan
   of the new modules finds no `herdr` or `tmux` string literal (constitution IX).
   Verify: `python3 -m unittest test_up_launch test_up_build test_up_idempotent test_wake test_hooks -v`
 - [ ] T014 [US2] Write `test_up_e2e.py`. Needs T002 and T013 first. In the test's `~/.rookery/config.json`,
   set a `fake-pane` launch kind that runs `fixtures/bin/fakepane --cwd {cwd} {env} -- {cmd}` with `capture`
   `^pane:(\S+)$`, and set `harness.claude.cmd` to `fixtures/bin/fakeagent`. Team: readers `a` and `b`. Set
-  `FAKEAGENT_SEND_TO=b` for the run. Cases: the inbox has one row from `a`'s agent ID to `b`'s agent ID in the
-  session (SC-005). `rookery identity show` run with `a`'s recorded environment shows `a`, the session and the
+  `FAKEAGENT_SEND_TO=b` for the run. Add a second mode to `fixtures/bin/fakeagent`: with `FAKEAGENT_BLOCK_TO` set, it writes a transcript whose last assistant message ends with a `rookery` block to that name, and runs `rookery_cli.py hook stop --project <project>` with the hook input built as `test_hooks` builds it. Cases: the inbox has one row from `a`'s agent ID to `b`'s agent ID in the
+  session (SC-005). A run with `FAKEAGENT_BLOCK_TO=b` instead adds one row from `a` to `b` through the Stop hook path (US2 scenario 3). `rookery identity show` run with `a`'s recorded environment shows `a`, the session and the
   project root (SC-004). The gate log under `~/.rookery/logs/` has the decision (D2). `~/.claude.json` does
   not exist (FR-030). If a case fails, fix `cli_workspace.py` in this task.
   Verify: `python3 -m unittest test_up_e2e test_up_launch test_gate test_send -v`
@@ -253,12 +256,14 @@ fake agent sends one mail that its teammate gets.
   and wire it into `cli_workspace.cmd_up` for writers (D12, D22 step 4). Needs T013 first. Before the
   transaction, refuse the session if `<root>/wt/<session>/` exists and has no registry row (FR-021a). Insert
   the `worktrees` row, then run `git -C <repo> worktree add` (existing branch: no `-b`, no reset; new branch:
-  `-b agent/<session>/<name>/<task_id>` from `HEAD`). If git fails, remove that one row and report the agent
-  as `not started: <git error>`. A second run reuses the row and the path. The writer's launch `{cwd}` is the
+  `-b agent/<session>/<name>/<task_id>` from `HEAD`). Pass the writer repo to `settings_json` (T010) so that the
+  hook text matches the repo's committed handlers. Insert the row as `pending`. Set it to `active` when git succeeds. If git fails, set it to `failed` (never
+  delete it) and report the agent as `not started: <git error>`. A second run reuses the row and the path, and
+  sets a `failed` row back to `pending` before it runs git again. The writer's launch `{cwd}` is the
   worktree. Add the module to `bootstrap._PY_MODULES`. Write `test_worktree.py` first. Cases: the path is
   `<root>/wt/<session>/<name>/<repo>/` on branch `agent/<session>/<name>/T1` (FR-020). An existing branch
   keeps its commit. A human folder at `<root>/wt/s1/` refuses session `s1` and changes nothing. The host
-  repo's `git status --porcelain` and test count are the same (R10). A git error leaves no registry row. A
+  repo's `git status --porcelain` and test count are the same (R10). A git error leaves the row as `failed` and no worktree. A second run after the fix makes the worktree and sets the row `active`. The row count never goes down. A
   scan of the new modules finds no `GIT_DIR`, `GIT_WORK_TREE`, `LD_PRELOAD`, `overlay` or `node_modules`
   (FR-024).
   Verify: `python3 -m unittest test_worktree test_up_build test_up_launch test_up_idempotent -v`
@@ -268,11 +273,11 @@ fake agent sends one mail that its teammate gets.
   claims. It asks `Type yes to continue (n of 3)` three times on stdin, or accepts `BROTUNDWASSER=1`. Then it
   commits, pushes if the repo has a remote (else it says so), runs `git worktree remove`, and sets the row to
   `finished`. A git error stops at that step and keeps the row `active`. `gc` lists rows with reason
-  `session-ended`, `finished-path-exists` or `path-missing`, and writes nothing. Write `test_finish_gc.py`
+  `session-ended`, `finished-path-exists`, `path-missing`, `failed` or `pending-stale` (data-model), and writes nothing. Write `test_finish_gc.py`
   first. Cases: three `yes` answers commit the change on the branch, remove the worktree, keep the branch, and
   set `finished` (FR-022). The answer `no` at any of the three prompts exits 2 and changes nothing. A fixture
   with no remote finishes and says so. `gc` after `rookery session end s1` lists the worktree with
-  `session-ended`. `gc` lists a `finished` row whose path still exists, and a row whose path is missing. The
+  `session-ended`. `gc` lists a `finished` row whose path still exists, an `active` row whose path is missing, a `failed` row, and a `pending` row older than one hour. The
   branch count and the file count under `wt/` are the same before and after `gc` (FR-023, R14, SC-008). `gc`
   never lists a human folder under `wt/`.
   Verify: `python3 -m unittest test_finish_gc test_worktree test_identity -v`
@@ -333,8 +338,8 @@ warns. Two agents get different free ports.
   `watch(hook_input, env, conn) -> dict | None` (D16). Register `rookery hook guard` and `rookery hook watch` in
   `cli_hook.py` the same way as the other hook subcommands, so that an error never exits non-zero. Add the
   `PreToolUse` (`Write|Edit|NotebookEdit`) and `PostToolUse` (`Bash`) handlers to
-  `rookery_views.settings_json`. Store each agent's `claims` from the team file in `cmd_up` (replace the
-  session's rows for that agent). Needs T016 and T018 first. Add the module to `bootstrap._PY_MODULES`.
+  `rookery_views.settings_json`. Store each agent's `claims` from the team file in `cmd_up`: add new patterns,
+  set `active = 1` on the patterns that stay and `active = 0` on dropped ones. Never delete a claims row. Needs T016 and T018 first. Add the module to `bootstrap._PY_MODULES`.
   Write `test_guard.py` first. Cases: a Write inside the workspace gives no output. A Write to `/tmp/x` gives
   the contract's deny JSON (R9). An Edit inside the active worktree gives no output. A Write to a file that
   matches another agent's claim gives an allow with the claims reason, and one `turn-block` log line (R12).
@@ -342,7 +347,8 @@ warns. Two agents get different free ports.
   JSON on stdin gives exit 0 and one log line. `watch` on `echo x > /tmp/foreign` gives the warning and a
   `watch-flag` log line (R9). `watch` on `echo x > out.txt` inside the worktree gives nothing. The guard runs
   in under 1 s with 10,000 inbox rows (as `test_hooks.HookTiming`). `settings_json` now has the two new
-  handlers, and the first three handlers are still equal to the `rookery init` output.
+  handlers, and the first three handlers are still equal to the `rookery init` output. A second `up` with a
+  claim dropped from the team file sets it inactive, the guard ignores it, and the claims row count stays the same.
   Verify: `python3 -m unittest test_guard test_views test_finish_gc test_hooks test_turn_block -v`
 - [ ] T020 [US7] Add `assign_ports(conn, agent_id, config) -> dict` to `rookery_guard.py` and use it in
   `cmd_up`, so that `ROOKERY_PORTS` holds the JSON map (D16, FR-008). Needs T019 first. A port is free when

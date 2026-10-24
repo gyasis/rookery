@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
   agent_id   TEXT NOT NULL,
   repo       TEXT NOT NULL,           -- absolute path of the host repo
   branch     TEXT NOT NULL,           -- agent/<session>/<name>/<task_id>
-  state      TEXT NOT NULL DEFAULT 'active',   -- active | finished
+  state      TEXT NOT NULL DEFAULT 'pending',  -- pending | active | failed | finished
   created_at TEXT NOT NULL,
   finished_at TEXT
 );
@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS claims (
   session_id TEXT NOT NULL,
   agent_id   TEXT NOT NULL,
   pattern    TEXT NOT NULL,           -- a glob, relative to the repo top folder
+  active     INTEGER NOT NULL DEFAULT 1,       -- 0 when a later team file drops the pattern
+  updated_at TEXT NOT NULL,
   PRIMARY KEY(session_id, agent_id, pattern)
 );
 CREATE TABLE IF NOT EXISTS ports (
@@ -91,22 +93,29 @@ One `worktrees` row for each worktree that Rookery made. It is the only proof th
 under `wt/` (FR-021a).
 
 ```text
-(none) --rookery up--> active --rookery finish (3x confirmed)--> finished
+(none) --rookery up--> pending --git worktree add ok--> active --rookery finish (3x confirmed)--> finished
+                          \--git worktree add fails--> failed --next rookery up--> pending
 ```
 
-- `rookery up` makes the row before it runs `git worktree add`. If git fails, it deletes that one row in the
-  same run, because the worktree was never made. This is not mail and not a record of work.
+- `rookery up` adds the row as `pending` before it runs `git worktree add`. It sets `active` when git
+  succeeds, and `failed` with the git error in the run report when git fails. No command deletes a
+  registry row (constitution, Security: a row delete needs 3x confirmation).
+- A later `rookery up` for the same agent sets a `failed` row back to `pending` and runs git again.
+- A `pending` or `failed` row still proves ownership of its path for FR-021a, so a later run never takes
+  that path for a human folder.
 - `finish` changes `active` to `finished` only after commit, push and `git worktree remove` succeed.
-- No command deletes a `finished` row. `gc` reads rows and writes none.
+- `gc` reads rows and writes none.
 
-Stale (for `gc`): the session's state is `ended`, or the row is `finished` and the path exists, or the path is
-missing.
+Stale (for `gc`): the session's state is `ended`; or the row is `finished` and the path exists; or the row is
+`active` and the path is missing; or the row is `failed`; or the row is `pending` and older than one hour
+(a run that stopped part way).
 
 ### Claim
 
 A `claims` row: an agent owns the files that match a glob. The guard hook compares the absolute target of a
-write with each other agent's patterns, from the repo top folder. A match gives a warning, not a deny
-(RQ-2.10).
+write with each other agent's active patterns, from the repo top folder. A match gives a warning, not a deny
+(RQ-2.10). A second `rookery up` adds the team file's new patterns, sets `active = 1` on the patterns that stay,
+and sets `active = 0` on the patterns that the team file dropped. No command deletes a claims row.
 
 ### Port map
 

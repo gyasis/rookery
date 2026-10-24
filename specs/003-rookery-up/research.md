@@ -111,6 +111,10 @@ The shapes are in [data-model.md](data-model.md).
 | `_config/settings.json` | generated | the Rookery hooks (D8) |
 | `runs/`, `outbox/`, `state/` | agents | made empty if missing; `rookery up` never writes inside them |
 
+One writer for each item (constitution VII): Rookery owns the generated files, `HOST_RULES.md` and `_config/`.
+The agent owns `runs/`, `outbox/` and `state/`. No Rookery command writes inside an agent item, and the
+agent must not edit a Rookery item (the next run writes it again).
+
 A second run rewrites each generated file atomically (`cli_init.write_text_atomic`). It does not touch
 `runs/`, `outbox/`, `state/` or any `HANDOFF.md`.
 
@@ -128,6 +132,13 @@ the `rookery inbox`, `peek` and `ack` allow rules, so that the agent gets no pro
 say that the same handler in two settings files runs once. So a worktree whose repo has the hooks committed
 still sends each mail once (FR-031). The project string must be the same in both files, and D5 makes it the
 same.
+
+The code accepts a Rookery handler with a path in front of `rookery` (`cli_init._OURS`). So a repo can have
+its hooks committed with other command text than `merge_hooks` writes, and the two texts would not match. For a
+writer, `rookery up` first reads the writer repo's committed `.claude/settings.json`. If it has Rookery handlers
+(`cli_init._is_rookery`), the generated file copies their exact command text for the same events. Else it uses
+the `merge_hooks` text. A reader runs in its workspace, where no project settings file exists, so the
+`merge_hooks` text is enough.
 
 The generated file also gets two handlers that `rookery init` does not write: `PreToolUse` runs
 `rookery hook guard`, and `PostToolUse` on `Bash` runs `rookery hook watch` (D16).
@@ -198,7 +209,8 @@ is for Claude Code only. FR-031 names Claude Code agents.
   `git worktree add -b <branch> <path>` makes it from the host's current `HEAD`.
 - `rookery up` refuses the session if `wt/<session>/` exists and the registry has no row for it (FR-021a). This
   protects the human worktrees that are already under `wt/`.
-- Each new worktree gets a registry row in the same transaction as the identity.
+- Each new worktree gets a `pending` registry row in the same transaction as the identity. Git success sets
+  `active`, and git failure sets `failed`. No command deletes a registry row (data-model).
 - No in-repo worktree, no symlinked `node_modules`, no OverlayFS, no custom shell, no `LD_PRELOAD`, no hand-set
   `GIT_DIR` or `GIT_WORK_TREE` (FR-024). A scan test checks the new modules for these names.
 
@@ -217,9 +229,9 @@ step and the git error.
 
 ## D14. `rookery gc` only lists
 
-`rookery gc` lists registry rows that are stale: the session ended, the row is `finished` but the path still
-exists, or the path is missing. It never deletes a worktree or a branch (constitution: "`rookery gc` only
-lists"). It reads only the registry, so it never lists a human folder under `wt/`. It has `--json`.
+`rookery gc` lists the registry rows that are stale. Data-model gives the rules: the session ended; a
+`finished` row whose path still exists; an `active` row whose path is missing; a `failed` row; a `pending`
+row older than one hour.
 
 - *Not taken*: `gc --delete` with confirmation. The constitution keeps `gc` to listing. A delete belongs to
   `finish`.
@@ -232,7 +244,7 @@ database, with no other change. RQ-2.3 and RQ-2.16 ask for a regen test.
 | View | Content |
 |---|---|
 | `ROOKERY.md` | L0 routing: what the root holds and where to look |
-| `_directory/INDEX.md` | each identity of open sessions: name, harness, pane, status, current task, role, team |
+| `_directory/INDEX.md` | each identity of open sessions: name, harness, pane, status, current task, role, team. Status is the `state` of `state/turn.json` (`idle`, `busy`), or `none` when the file is missing. Current task is the name of the newest `runs/<TASK-ID>/` folder, else `up_agents.task_id`, else `-`. Pane is the newest pane binding. |
 | `_directory/ports.md`, `_directory/claims.md` | the port map and the claims |
 | `_teams/<session>.md` | task, acceptance criteria, members (RQ-R.4) |
 | `_threads/INDEX.md` | one line for each thread: thread, sender, recipient, topic, time, state. No body. |
@@ -276,7 +288,7 @@ The spec of 002 (D24) says that RQ-2.9 gives stronger local controls. This featu
 | Risk | Automatic test | Live check (quickstart) |
 |---|---|---|
 | R9 | guard denies a Write outside; watch flags `echo x > /tmp/foreign` | one Claude Code agent tries a Write outside |
-| R10 | after `rookery up` on a fixture repo, `git status --porcelain` is empty and the `unittest` discover count is the same | the same on the Rookery repo |
+| R10 | after `rookery up` on a fixture repo, `git status --porcelain` is empty and the `pytest --collect-only -q` count is the same (the register's proof) | the same on the Rookery repo |
 | R11 | the reader's CLAUDE.md has `@<abs host>/CLAUDE.md`; `HOST_RULES.md` points at the host file | a reader quotes a host-only rule (SC-009) |
 | R12 | guard warns on a write to a file that another agent claims; `finish` lists claimed files | none |
 | R13 | two agents get different ports and both bind | none |
@@ -309,7 +321,7 @@ This feature differs from the OKF design in five places. The PR lists them, and 
 | Agent files | do not touch them. |
 | Worktree | reuse the registry row and the path. |
 | Running agent | skip it (D9). |
-| Ports, claims | keep the ports that the agent has; replace the claims with the team file's claims. |
+| Ports, claims | keep the ports that the agent has. Add new claims, and mark dropped claims inactive (no delete). |
 
 ## D22. Order of work in one run
 
@@ -317,7 +329,7 @@ This feature differs from the OKF design in five places. The PR lists them, and 
 2. Resolve the host repo, project and root (D5). Take the lock.
 3. In one database transaction: the session, the identities, `up_agents`, `ports`, `claims`, and the
    `worktrees` rows for new worktrees.
-4. Make the worktrees with git. If git fails, remove the registry row for that worktree, and report it.
+4. Make the worktrees with git. Set each registry row to `active`, or to `failed` when git fails, and report it.
 5. Write the workspaces and the generated views.
 6. Run the agents (D9). Report each agent that did not come up, with the reason. Keep the others.
 7. Print a summary, or JSON with `--json`.

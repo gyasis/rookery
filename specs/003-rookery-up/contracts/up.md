@@ -80,7 +80,7 @@ rookery gc [--json]
 ```
 
 It lists stale registry rows: path, session, agent, branch, reason (`session-ended`, `finished-path-exists`,
-`path-missing`). It deletes nothing and writes nothing.
+`path-missing`, `failed`, `pending-stale`). It deletes nothing and writes nothing.
 
 ## `rookery regen`
 
@@ -102,7 +102,8 @@ The file is the output of `cli_init.merge_hooks(path, project, with_permissions=
 | `PreToolUse` | `Write\|Edit\|NotebookEdit` | `rookery hook guard --project <project>` |
 | `PostToolUse` | `Bash` | `rookery hook watch --project <project>` |
 
-The first three handler texts are byte for byte the same as those of `rookery init`. So Claude Code runs each
+For a writer whose repo has Rookery handlers committed, the first three handler texts are copied from that
+file. Else they are byte for byte the same as those of `rookery init`. So Claude Code runs each
 once when a repo also has them (FR-031). A test compares the two outputs.
 
 ### `rookery hook guard`
