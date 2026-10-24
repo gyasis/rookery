@@ -147,7 +147,7 @@ workspaces. The host repo does not change.
 **Independent Test**: a two-reader team in a scratch repo gives the root, two workspaces and two identities
 in one session. `git status` in the host repo is clean.
 
-- [ ] T009 [US1] Create `rookery_views.py` with `workspace_files(root, session, agent, team, host)`. Needs
+- [x] T009 [US1] Create `rookery_views.py` with `workspace_files(root, session, agent, team, host)`. Needs
   T004 first. It writes the generated items of the D7 table for one agent: `CLAUDE.md`, `AGENTS.md`,
   `CONTEXT.md`, `_config/persona.md`, `_config/scope-card.md` and `_config/system-prompt.md`.
   `_config/scope-card.md` has the "does" and "does NOT do" lists, plus the cards of the other agents in the

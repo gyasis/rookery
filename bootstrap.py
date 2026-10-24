@@ -22,6 +22,7 @@ _ROOKERY_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _PY_MODULES = [
     "rookery_cli.py",
+    "rookery_views.py",
     "cli_serve.py",
     "cli_join.py",
     "cli_approve.py",
