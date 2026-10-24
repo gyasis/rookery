@@ -51,14 +51,14 @@ then writes the code. No task leaves a failing test.
 
 **Purpose**: the fixtures that later phases need.
 
-- [ ] T001 [P] Edit `fixtures/bin/tmux` and `fixtures/bin/herdr`. Keep the current behavior: append the
+- [x] T001 [P] Edit `fixtures/bin/tmux` and `fixtures/bin/herdr`. Keep the current behavior: append the
   arguments as one JSON line to `$ROOKERY_FIXTURE_LOG` (herdr: its current record variable) and exit 0. Add:
   `tmux new-window ...` prints `%<n>` on stdout, where `<n>` counts the lines already in the log.
   `herdr tab create ...` prints `{"pane_id": "h<n>"}`. `tmux display-message -p -t X ...` and `herdr pane get X` exit 0
   only when `X` is a word in `$ROOKERY_FIXTURE_ALIVE`, else exit 1. `test_wake` must still pass with no
   change to its file.
   Verify: `python3 -m unittest test_wake -v && L=$(mktemp) && ROOKERY_FIXTURE_LOG=$L fixtures/bin/tmux new-window -d -P`
-- [ ] T002 [P] Create `fixtures/bin/fakepane` and `fixtures/bin/fakeagent` (executable, Python).
+- [x] T002 [P] Create `fixtures/bin/fakepane` and `fixtures/bin/fakeagent` (executable, Python).
   `fakepane --cwd DIR [--env K=V]... -- CMD...` prints `pane:fp<n>`, then runs `CMD` in `DIR` with the given variables
   added to its environment, waits for it, and exits 0. `fakeagent` appends one JSON line
   `{"argv", "cwd", "env"}` (only the `ROOKERY_*` variables) to `$ROOKERY_FIXTURE_LOG`. If you set `$FAKEAGENT_SEND_TO`, it then

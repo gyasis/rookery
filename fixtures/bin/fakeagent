@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""fakeagent — test stand-in for an agent harness: logs argv/cwd/ROOKERY_* env, optionally sends mail or emits a rookery block via the Stop hook."""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CLI = os.path.join(REPO, "rookery_cli.py")
+
+
+def main(argv):
+    log = os.environ.get("ROOKERY_FIXTURE_LOG")
+    if log:
+        rec = {"argv": argv, "cwd": os.getcwd(),
+               "env": {k: v for k, v in os.environ.items() if k.startswith("ROOKERY_")}}
+        with open(log, "a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    to = os.environ.get("FAKEAGENT_SEND_TO")
+    if to:
+        subprocess.run([sys.executable, CLI, "send", to, "hello"], env=os.environ.copy())
+    to = os.environ.get("FAKEAGENT_BLOCK_TO")
+    if to:
+        block = {"to": to, "task": "TASK-1", "kind": "ask", "say": "hello", "status": "in-progress"}
+        text = "Passing this on.\n\n```rookery\n" + json.dumps(block, indent=2) + "\n```\n"
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+            fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": "go"}}) + "\n")
+            fh.write(json.dumps({"type": "assistant", "message": {
+                "role": "assistant", "content": [{"type": "text", "text": text}]}}) + "\n")
+            tpath = fh.name
+        root = os.environ.get("ROOKERY_PROJECT_ROOT") or os.environ.get("ROOKERY_ROOT") or ""
+        project = os.path.basename(root.rstrip("/")) or "p"
+        data = {"hook_event_name": "Stop", "session_id": "fakeagent-" + str(os.getpid()),
+                "cwd": os.getcwd(), "transcript_path": tpath, "last_assistant_message": text}
+        subprocess.run([sys.executable, CLI, "hook", "stop", "--project", project],
+                       input=json.dumps(data), text=True, env=os.environ.copy())
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
