@@ -151,8 +151,25 @@ def _named_peer(block, names):
     return found[0] if len(found) == 1 else None
 
 
-def screen_one(conn, mail_id, cfg, backend):
-    """Screen one mail: one T1 record (a label or a failure), and a suggest record for wrong-recipient.
+def _hunch(conn, mail, cfg, hunch, state, t1):
+    """The second opinion (D11): ask hunch the same route question, only for a T1 answer in the band `review`, and
+    write the record (a label, or a failure). It has no band of its own: _act_pre compares its label with T1's."""
+    mode = cfg["checks"].get("hunch", "off")
+    if hunch is None or mode == "off" or _band(t1.confidence, (cfg.get("bands") or {}).get("t1")) != "review":
+        return
+    by = "hunch:vote6:" + cfg["hunch"]["model"]
+    try:
+        ans = hunch.decide(state, LABELS, INSTRUCTIONS, question="route")
+    except screener_backend.BackendError as e:
+        _write(conn, mail, stage="hunch", check_name="hunch", mode=mode, decided_by=by, failure=e.cause)
+        return
+    _write(conn, mail, stage="hunch", check_name="hunch", mode=mode, decided_by=by, label=ans.label,
+           confidence=ans.confidence, impl=ans.impl, usage=ans.usage)
+
+
+def screen_one(conn, mail_id, cfg, backend, hunch=None):
+    """Screen one mail: one T1 record (a label or a failure), a suggest record for wrong-recipient, and a hunch
+    record for an answer in the band `review` (when a hunch backend is passed and checks.hunch is not off).
     Returns the T1 label, or None for a failure or a mode of off (no record then). Changes no inbox row."""
     if cfg["checks"]["t1"] == "off":
         return None
@@ -190,6 +207,8 @@ def screen_one(conn, mail_id, cfg, backend):
                    failure="envelope-too-large", detail=f"chars={len(sstate)} limit={cfg['envelope_max_chars']}")
         else:
             _decide(conn, mail, cfg, backend, sstate, peers + ["none"], SUGGEST_INSTRUCTIONS, "suggest", "suggest")
+    if ans is not None:
+        _hunch(conn, mail, cfg, hunch, state, ans)
     return ans.label if ans is not None else None
 
 
@@ -374,8 +393,9 @@ def _already_decided(conn, mail_id, owner, cfg, envelope):
 def _act_pre(conn, mail_id, owner, cfg, envelope):
     """Act on one screened mail that the screener holds (FR-027, FR-012a, D11). The status change, the `action` of
     the T1 record and the end of the claim commit together. In the band `accept`, deliver releases and a reject label
-    quarantines with that label (never a loop reason, FR-002) and `suggest`. Any other band escalates, with no retry
-    (the same answer would come back). A failure escalates, with a retry_at. Nothing else releases a held mail: no
+    quarantines with that label (never a loop reason, FR-002) and `suggest`. In the band `review`, when hunch is live,
+    a hunch label that equals the T1 label acts the same way; a disagreement or a hunch failure escalates. Any other
+    case escalates, with no retry (the same answer would come back). A failure escalates, with a retry_at. Nothing else releases a held mail: no
     lease, no time. A mail that a person decided first is left as it is: action `none`, the claim ends as decided.
     Returns True when the claim is finished here, False when the mail changed under us (the caller ends the claim)."""
     by = "screener:" + cfg["model"]
@@ -385,9 +405,19 @@ def _act_pre(conn, mail_id, owner, cfg, envelope):
     skipped = rec["label"] == "skipped"   # an approved thread (D16): no band, released as it is
     if skipped:
         by = "t0:thread"
-    if rec["label"] and rec["band"] != "accept" and not skipped:   # T018 adds the hunch for the review band here
-        return _escalate_pre(conn, mail_id, owner, cfg, envelope, f"low-confidence {rec['label']}", rec["id"], retry=False,
-                               label=rec["label"]) or _already_decided(conn, mail_id, owner, cfg, envelope)
+    if rec["label"] and rec["band"] != "accept" and not skipped:
+        reason = f"low-confidence {rec['label']}"
+        h = _last(conn, mail_id, "hunch") if rec["band"] == "review" and cfg["checks"].get("hunch") == "live" else None
+        if h is not None and h["id"] < rec["id"]:   # the record of an earlier try, not of this answer
+            h = None
+        if h is not None and h["label"] == rec["label"]:
+            pass   # agreement (D11): the label acts as in the accept band, below. An act by agreement counts as a
+                   # reviewed deliver, so a deliver of the first mail approves its thread (D16).
+        else:
+            if h is not None:
+                reason = f"hunch {h['failure']}" if h["failure"] else "t1 and hunch disagree"
+            return _escalate_pre(conn, mail_id, owner, cfg, envelope, reason, rec["id"], retry=False,
+                                 label=rec["label"]) or _already_decided(conn, mail_id, owner, cfg, envelope)
     if not rec["label"]:
         return _escalate_pre(conn, mail_id, owner, cfg, envelope, rec["failure"], rec["id"]) \
             or _already_decided(conn, mail_id, owner, cfg, envelope)
@@ -469,7 +499,7 @@ def open_sessions(conn, names=None):
     return out
 
 
-def _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop):
+def _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop, hunch=None):
     """Screen up to PER_SESSION mails of one session. A mail that raises is logged and ends as failed; the next
     mail goes on. Returns the number of mails taken. The lease (lease_s, at least twice timeout_s by
     screener_config.check) is longer than one decision, so the owner is not rechecked before a write."""
@@ -499,7 +529,7 @@ def _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop):
             if live and _skip_approved(conn, mail_id, cfg, scfg["checks"]["t1"]):
                 label = "skipped"
             else:
-                label = screen_one(conn, mail_id, scfg, backend)
+                label = screen_one(conn, mail_id, scfg, backend, **({"hunch": hunch} if hunch else {}))
             screened = True
             if kind == "pre" and _act_pre(conn, mail_id, owner, cfg, env):
                 continue
@@ -554,6 +584,12 @@ def run(sessions=None, once=False, poll=2.0):
                     _log(None, None, f"{type(e).__name__}: {e}")
                     backend = None
                     code = 2
+                hunch = None
+                if cfg["checks"].get("hunch", "off") != "off":
+                    try:   # no second opinion: a review-band answer escalates (fail closed)
+                        hunch = screener_backend.hunch_vote(cfg)
+                    except Exception as e:
+                        _log(None, None, f"hunch backend: {type(e).__name__}: {e}")
                 cutoff = rookery.now() - cfg["lease_s"]
                 for n in (sessions or [None]) if backend is not None else ():
                     try:
@@ -565,7 +601,7 @@ def run(sessions=None, once=False, poll=2.0):
                         continue
                     for sid, name in found:
                         try:
-                            taken += _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop)
+                            taken += _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop, hunch)
                         except Exception as e:
                             conn.rollback()
                             _log(name, None, f"{type(e).__name__}: {e}")

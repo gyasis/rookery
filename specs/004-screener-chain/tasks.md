@@ -327,7 +327,7 @@ refuses the mail and bounces it. With B3 in shadow mode the gate delivers it wit
 **Independent Test**: with bands set, a review-band answer calls the fake hunch. Agreement acts. Disagreement with
 no T2 command leaves the mail `escalated`, and the boss gets a notice with no body.
 
-- [ ] T018 [US4] Files: `screener.py`, `test_screen_tiers.py`.
+- [x] T018 [US4] Files: `screener.py`, `test_screen_tiers.py`.
   Edit `screener.py` (D11, D14, FR-009, FR-029). With bands set for `t1`, apply the `band()` rule:
   `accept` acts, `review` asks `hunch_vote` the same question, and lower escalates. Record the hunch answer with
   stage `hunch` and `decided_by = hunch:vote6:<model>`. Agreement acts. Disagreement escalates. With unset bands,

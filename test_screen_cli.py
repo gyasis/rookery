@@ -208,10 +208,10 @@ class Hardening(Cli):
         ids = [self.send("CASE-DELIVER n%d" % i) for i in range(3)]
         real = self.screener.screen_one
 
-        def poison(conn, mail_id, cfg, backend):
+        def poison(conn, mail_id, cfg, backend, **kw):
             if mail_id == ids[1]:
                 raise RuntimeError("boom")
-            return real(conn, mail_id, cfg, backend)
+            return real(conn, mail_id, cfg, backend, **kw)
         with mock.patch.object(self.screener, "screen_one", poison):
             code, _ = self.run_once()
         self.assertEqual(code, 0)
@@ -286,9 +286,9 @@ class Hardening(Cli):
         order = []
         real = self.screener.screen_one
 
-        def spy(conn, mail_id, cfg, backend):
+        def spy(conn, mail_id, cfg, backend, **kw):
             order.append(conn.execute("SELECT session_id FROM inbox WHERE id=?", (mail_id,)).fetchone()[0])
-            return real(conn, mail_id, cfg, backend)
+            return real(conn, mail_id, cfg, backend, **kw)
         with mock.patch.object(self.screener, "screen_one", spy):
             self.assertEqual(self.run_once()[0], 0)
         a, bs = self.sid, b["session_id"]
