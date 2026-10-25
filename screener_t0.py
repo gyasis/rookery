@@ -266,7 +266,7 @@ def thread_stored(conn, session_id, thread, mail_id, verdict, cfg):
 # Only block mail of kind `ask` counts. A plain mail has no kind and no `say`, and the 002 loop breaker already
 # limits it. The hash of an ask lives in screen_mail.ask_hash, so the gate writes a screen_mail row for each ask. That
 # row has the state `queued`: the screener queue and _claim take a `queued` row like a mail with no row, so T1 still
-# screens the ask. Precedence when holds meet: loop (002) > budget > duplicate > screening. The loop hold comes from
+# screens the ask. Precedence when holds meet: loop (002) > budget > duplicate > gates (T022) > screening. The loop hold comes from
 # _send_counted; the gate gives the budget or duplicate reason as the hold reason, and drops both B2 records and
 # the bounce when the loop breaker holds the mail.
 BUDGET_BOUNCE = ("Rookery held this ask. The task {task} has used its budget of {limit} asks. "
@@ -328,6 +328,40 @@ def ask_stored(conn, sid, mail_id, digest, budget, dup, cfg, loop_held=False):
             mode = cfg["checks"][check]
             record(conn, mail_id=mail_id, session_id=sid, stage="t0", check_name=check, mode=mode,
                    decided_by=f"t0:{check}", label=label, action="hold" if mode == "live" else "none", detail=detail)
+
+
+# --- the worker gates (004 T022, D19, FR-030) ---
+# Code checks G1, G2, G3 and G5 only. G4 (peer match) and P1 (in my scope) stay in the personas.
+GATE_LABELS = ("g1-task-complete", "g2-no-gap", "g3-gap-in-scope", "g5-ask-not-allowed")
+
+
+def gate_anomalies(block, budget_over, b1_failed):
+    """The worker-gate anomalies of one block: a list of (label, detail), empty for anything but an ask. Reads only
+    `self_check`: `task_complete` true is g1, a `gap` text that is empty is g2 (a block with no `gap` says nothing),
+    `gap_in_my_scope` true is g3. An ask over the B2 budget (budget_over) or one that failed the B1 roster check
+    (b1_failed) is g5. The detail never holds the gap text."""
+    if not isinstance(block, dict) or block.get("kind") != "ask":
+        return []
+    sc = block.get("self_check")
+    sc = sc if isinstance(sc, dict) else {}
+    out = []
+    if sc.get("task_complete") is True:
+        out.append(("g1-task-complete", "task_complete is true"))
+    if isinstance(sc.get("gap"), str) and not sc["gap"].strip():
+        out.append(("g2-no-gap", "gap is empty"))
+    if sc.get("gap_in_my_scope") is True:
+        out.append(("g3-gap-in-scope", "gap_in_my_scope is true"))
+    if budget_over or b1_failed:
+        out.append(("g5-ask-not-allowed", "roster check failed" if b1_failed else "over budget"))
+    return out
+
+
+def gates_record(conn, session_id, mail_id, anomalies, mode, action="none"):
+    """One `gates` record for each anomaly. `action` is `escalate` only for the mail that the gate parked. The caller
+    commits. A mail has one record for each (check, attempt), so the anomalies take attempt 1, 2, 3."""
+    for n, (label, detail) in enumerate(anomalies, 1):
+        record(conn, mail_id=mail_id, session_id=session_id, stage="t0", check_name="gates", mode=mode,
+               decided_by="t0:gates", label=label, attempt=n, action=action if mode == "live" else "none", detail=detail)
 
 
 def duplicate_time(created_at):

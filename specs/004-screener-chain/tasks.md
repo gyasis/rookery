@@ -392,7 +392,7 @@ injection fixture goes to quarantine, and the recipient is not woken.
 **Independent Test**: an ask with `task_complete: true` gives `g1-task-complete`. An ask with
 `gap_in_my_scope: true` gives `g3-gap-in-scope`.
 
-- [ ] T022 [US6] Files: `screener_t0.py`, `mail_gate.py`, `test_screen_gates.py`. Add
+- [x] T022 [US6] Files: `screener_t0.py`, `mail_gate.py`, `test_screen_gates.py`. Add
   `screener_t0.gate_anomalies(block, budget_over, b1_failed)` (D19, FR-030). On an ask:
   `task_complete: true` gives `g1-task-complete`, an empty `gap` gives `g2-no-gap`, `gap_in_my_scope: true` gives
   `g3-gap-in-scope`, and over budget or a B1 failure gives `g5-ask-not-allowed`. Each is its own record with check

@@ -318,8 +318,8 @@ The user chose this on 2026-10-25.
   - `gap_in_my_scope: true` gives `g3-gap-in-scope`.
   - Over budget gives `g5-ask-not-allowed` (D17). A B1 failure is already quarantined as off-team or wrong
     recipient, and it also writes `g5-ask-not-allowed`.
-- **Modes**: in shadow mode an anomaly is a record. In live mode it holds the mail as `escalated` for T2 or a
-  person (the design sends T0 anomalies to T2). The checks share one mode, `gates`.
+- **Modes**: in shadow mode an anomaly is a record. In live mode it holds the mail as `escalated` for a person,
+  with a notice. T2 does not take it: T2 takes only mail that the screener escalated for a model answer (D15). The checks share one mode, `gates`.
 
 ### D20. User calls, the agreement, and the export (Q6, Q7)
 

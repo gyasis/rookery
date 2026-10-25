@@ -1091,6 +1091,7 @@ class TurnCommand(Base):
         import shutil
         self.conn.execute("DELETE FROM inbox")
         self.conn.execute("DELETE FROM screen_mail")   # ids restart at 1; a stale row would collide
+        self.conn.execute("DELETE FROM screen_decisions")   # same: a gates record of the first run would collide
         try:   # bounce bodies carry the original row id, so both runs must count from 1
             self.conn.execute("DELETE FROM sqlite_sequence WHERE name='inbox'")
         except sqlite3.Error:

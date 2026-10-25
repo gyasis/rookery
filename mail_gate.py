@@ -229,6 +229,10 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
             recipient, problem = _find_recipient(conn, sid, sender, to)
             if problem:
                 out = quarantine(to, *problem)
+                gmode = cfg["checks"].get("gates", "off") if cfg else "off"
+                if gmode != "off":                         # G5: a B1 failure, the mail is already quarantined
+                    screener_t0.gates_record(conn, sid, out["msg_id"], screener_t0.gate_anomalies(block, False, True),
+                                             gmode)
                 conn.commit()
                 return out
         if not verdict:                                    # 6
@@ -262,6 +266,10 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
                 reason = "budget"
             elif dup and cfg["checks"]["duplicate"] == "live":
                 reason = "duplicate"
+        gmode = cfg["checks"].get("gates", "off") if cfg else "off"
+        anomalies = screener_t0.gate_anomalies(block, budget is not None, False) if gmode != "off" else []
+        if anomalies and gmode == "live" and reason not in ("budget", "duplicate"):
+            reason = "gates"                               # loop > budget > duplicate > gates > screening
         msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic, thread, hold_reason=reason)
         bounce_id = None
         if digest:
@@ -274,9 +282,22 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
                     recipient=_show(to), time=screener_t0.duplicate_time(dup)))
         if tcheck:
             screener_t0.thread_stored(conn, sid, thread, msg_id, tcheck, get_cfg())
+        gated = bool(anomalies) and not loop_held          # a loop hold drops the gate records, as for B2
+        if gated:
+            parked = reason == "gates"
+            screener_t0.gates_record(conn, sid, msg_id, anomalies, gmode, "escalate" if parked else "none")
+            if parked:                                     # same transaction as the store; the notice follows the commit
+                why = "gates found " + ", ".join(a[0] for a in anomalies)
+                rookery._decide(conn, msg_id, "held", "escalated", "escalate", why, "t0:gates", commit=False)
         if hit:                                            # shadow: record and deliver
             screener_t0.injection_record(conn, sid, msg_id, hit, "shadow")
         conn.commit()
+        if gated and parked:
+            try:
+                screener_t0.notify_escalated(conn, msg_id, why)
+            except Exception as err:                       # the escalation stands; a failed notice is logged
+                conn.rollback()
+                _tb.log_event(None, "gate", event="notice-failed", msg_id=msg_id, error=str(err))
         if loop_held:
             return _result("loop-held", "loop", warning, msg_id)
         return _result("sent", reason, warning, msg_id, bounce_id)
