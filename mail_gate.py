@@ -28,15 +28,12 @@ def is_system_name(name) -> bool:
     return isinstance(name, str) and name.split("@", 1)[0].lower() in rookery.SYSTEM_SENDERS
 
 
-def _screen_pre_store(conn):
+def _screen_pre_store(conn, get_cfg):
     """The default `pre_store` hook: a live T1 check in review mode `pre` holds the mail as `screening` (D13).
     A configuration that cannot be read holds nothing: the mail must still be stored."""
     def hook(recipient):
-        try:
-            cfg = screener_config.load()
-        except (ValueError, OSError):
-            return None
-        return screener_t0.pre_hold(conn, recipient, cfg)
+        cfg = get_cfg()
+        return None if cfg is None else screener_t0.pre_hold(conn, recipient, cfg)
     return hook
 
 
@@ -94,6 +91,18 @@ def quarantine_malformed(conn, ctx, recipient, body, topic, reason, note, sugges
     _log(ctx.get("root"), "block", (ctx["session"], ctx["identity"]), sender, None, recipient, sid,
          _result("quarantined", reason, msg_id=msg_id, bounce_id=bounce_id), "turn-block-parser")
     return msg_id
+
+
+def _bounce(conn, sid, sender, topic, text):
+    """A plain-text bounce from `rookery` to the sender, in the caller's transaction. A bounce loop is held (FR-039).
+    Returns the bounce ID."""
+    held = rookery.count_loop(conn, sid, [("~bounce", "rookery", sender, loop_limit())])
+    bid = rookery.send(conn, "rookery", sender, text, topic=topic, session_id=sid, hold=True if held else None,
+                       commit=False)
+    if held:
+        conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
+                     ("Held: too many bounces to this agent with no human prompt in between.", bid))
+    return bid
 
 
 def _send_counted(conn, sender_id, recipient_id, body, task, sid, topic=None, thread=None, hold_reason=None):
@@ -191,6 +200,16 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
     if not isinstance(to, str) or not to or not isinstance(body, str) or not body:
         return _result("refused", "bad-input")
     topic = topic or None
+    cfg_box = []
+
+    def get_cfg():   # one read for this send, shared by pre_hold and the thread check; None when unreadable
+        if not cfg_box:
+            try:
+                cfg_box.append(screener_config.load())
+            except (ValueError, OSError) as err:
+                cfg_box.append(None)
+                _tb.log_event(None, "gate", event="config-unreadable", error=str(err))
+        return cfg_box[0]
     # Screening reads no database row, so it runs before the write lock (a slow policy must not hold it).
     verdict = security.get_policy().inspect_inbound(sender, to, body)
 
@@ -213,14 +232,22 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
             conn.commit()
             return out
         if pre_store is None:
-            pre_store = _screen_pre_store(conn)
+            pre_store = _screen_pre_store(conn, get_cfg)
         held = None
         if pre_store is not None:
             held = pre_store(conn.execute("SELECT * FROM identities WHERE agent_id=?",
                                           (recipient,)).fetchone())
+        tcheck = screener_t0.thread_check(conn, sid, thread, sender, held is not None, get_cfg()) if thread else None
+        if tcheck == "denied":                             # B3 live (D16): not stored, a bounce, no wake
+            out = _result("refused", "thread-closed", warning,
+                          bounce_id=_bounce(conn, sid, sender, topic, screener_t0.THREAD_BOUNCE.format(thread=_show(thread))))
+            conn.commit()
+            return out
         key = task or topic or "-"                         # 7, 8
         msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic, thread,
                                           hold_reason=held[1] if held else None)
+        if tcheck:
+            screener_t0.thread_stored(conn, sid, thread, msg_id, tcheck, get_cfg())
         conn.commit()
         if loop_held:
             return _result("loop-held", "loop", warning, msg_id)

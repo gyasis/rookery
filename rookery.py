@@ -504,7 +504,9 @@ def _decide_from_open(conn, msg_id, to_status, verdict, reason, decided_by, comm
 
 def release(conn, msg_id, decided_by):
     """Approve a held or escalated message: it becomes 'pending', so the postmaster wakes the recipient."""
-    _decide_from_open(conn, msg_id, "pending", "release", None, decided_by)
+    _decide_from_open(conn, msg_id, "pending", "release", None, decided_by, commit=False)
+    conn.execute("UPDATE threads SET status='open' WHERE first_mail=? AND status='held'", (msg_id,))   # D16
+    conn.commit()
 
 
 def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce=True,

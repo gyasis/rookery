@@ -163,6 +163,46 @@ def pre_hold(conn, recipient, cfg):
     return ("held", "screening")
 
 
+THREAD_BOUNCE = ("Rookery did not deliver this mail. The thread {thread} has closed. "
+                 "Start a new thread for new work.")
+
+
+def thread_check(conn, session_id, thread, sender, held, cfg):
+    """The thread step of the gate (D16, FR-020, FR-022), inside the gate transaction, before the mail is stored.
+    A new thread value makes the `threads` row (`held` when `held`, else `open`; first_mail is set by
+    thread_stored). Returns "new" for that, "denied" for a closed thread with B3 live (a `denied` record with
+    mail_id NULL is written: the mail is not stored), "would-deny" for a closed thread with B3 in shadow mode
+    (thread_stored writes the record once the mail has an ID), else None. Mail with no thread does nothing.
+    Cheap on purpose: one query. A cfg of None (unreadable configuration) leaves B3 off."""
+    if not thread:
+        return None
+    row = conn.execute("SELECT status FROM threads WHERE session_id=? AND thread=?", (session_id, thread)).fetchone()
+    if row is None:
+        conn.execute("INSERT INTO threads(session_id, thread, status, opened_by, first_mail, opened_at) "
+                     "VALUES(?,?,?,?,0,?)", (session_id, thread, "held" if held else "open", sender, rookery.now()))
+        return "new"
+    mode = cfg["checks"].get("thread", "off") if cfg else "off"
+    if row[0] != "closed" or mode == "off":
+        return None
+    if mode == "live":
+        record(conn, mail_id=None, session_id=session_id, stage="t0", check_name="thread", mode="live",
+               decided_by="t0:thread", label="denied", action="refuse", detail=f"thread={thread}"[:500])
+        return "denied"
+    return "would-deny"
+
+
+def thread_stored(conn, session_id, thread, mail_id, verdict, cfg):
+    """After the gate stores the mail: a "new" thread gets its first_mail (and is `held` when the stored mail is
+    held, whatever the reason), a "would-deny" gets its shadow record. The caller commits."""
+    if verdict == "new":
+        conn.execute("UPDATE threads SET first_mail=?, status=CASE WHEN (SELECT status FROM inbox WHERE id=?)='held' "
+                     "THEN 'held' ELSE status END WHERE session_id=? AND thread=?",
+                     (mail_id, mail_id, session_id, thread))
+    elif verdict == "would-deny":
+        record(conn, mail_id=mail_id, session_id=session_id, stage="t0", check_name="thread", mode="shadow",
+               decided_by="t0:thread", label="would-deny", detail=f"thread={thread}"[:500])
+
+
 def _name(conn, who):
     row = conn.execute("SELECT name FROM identities WHERE agent_id=?", (who,)).fetchone()
     return row["name"] if row else who

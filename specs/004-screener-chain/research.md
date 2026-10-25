@@ -275,6 +275,7 @@ The user chose this on 2026-10-25.
     thread gets a T1 record with the label `skipped` and no model call (FR-021). A `decline`, a duplicate ask, and
     a loop hold still get a full review. In shadow mode a thread does not become `approved`, so every mail gets a
     T1 answer for the comparison.
+    Only the two agents of the first mail can use the review of a thread. Other agents, and a recruit, get a full T1 check.
   - A thread closes in four cases. The first is a veto from a live check (a quarantine by the screener). The
     second is `rookery thread close SESSION THREAD`. The third is the same command with `--as AGENT` where that
     agent has the role `boss`. The fourth is a `handoff` with `status: done` from the agent that opened the thread. Nothing closes a thread because of time. The row

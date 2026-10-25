@@ -228,6 +228,27 @@ MAX_ATTEMPTS = 3   # a claim that expired after this many tries ends as failed (
 PER_SESSION = 5    # mails for one session in one pass, so one busy session does not starve the others
 
 
+def _skip_approved(conn, mail_id, cfg, mode):
+    """True, after a `skipped` T1 record (no call), when the mail is later mail on an approved thread (D16, FR-021).
+    A decline, a recruit, a mail with a `duplicate` record, a loop hold and mail from or to an agent outside the
+    pair of the first mail still get a full T1."""
+    m = rookery.get_message(conn, mail_id)
+    if not m["thread"] or m["reason"] == "loop" or (_block(m["body"]) or {}).get("kind") in ("decline", "recruit"):
+        return False
+    t = conn.execute("SELECT opened_by, first_mail FROM threads WHERE session_id=? AND thread=? "
+                     "AND status='approved' AND first_mail<>?", (m["session_id"], m["thread"], mail_id)).fetchone()
+    if t is None:
+        return False
+    first = rookery.get_message(conn, t[1])
+    if first is None or {m["sender"], m["recipient"]} != {t[0], first["recipient"]}:
+        return False
+    if conn.execute("SELECT 1 FROM screen_decisions WHERE mail_id=? AND check_name='duplicate' AND label='duplicate'",
+                    (mail_id,)).fetchone():
+        return False
+    _write(conn, m, stage="t1", check_name="t1", mode=mode, decided_by="t0:thread", label="skipped")
+    return True
+
+
 def _claim(conn, mail_id, sid, owner, cutoff, cfg=None):
     """Take the mail, an expired claim on it, or an escalated mail that is due for a retry. True when this owner
     now holds it. An expired claim with MAX_ATTEMPTS tries is not taken again: a mail that the screener holds is
@@ -361,7 +382,10 @@ def _act_pre(conn, mail_id, owner, cfg, envelope):
     rec = _last(conn, mail_id, "t1")
     if rec is None:
         return False
-    if rec["label"] and rec["band"] != "accept":   # T018 adds the hunch for the review band here
+    skipped = rec["label"] == "skipped"   # an approved thread (D16): no band, released as it is
+    if skipped:
+        by = "t0:thread"
+    if rec["label"] and rec["band"] != "accept" and not skipped:   # T018 adds the hunch for the review band here
         return _escalate_pre(conn, mail_id, owner, cfg, envelope, f"low-confidence {rec['label']}", rec["id"], retry=False,
                                label=rec["label"]) or _already_decided(conn, mail_id, owner, cfg, envelope)
     if not rec["label"]:
@@ -372,9 +396,14 @@ def _act_pre(conn, mail_id, owner, cfg, envelope):
         if rookery.get_message(conn, mail_id)["status"] not in ("held", "escalated"):
             conn.rollback()
             return _already_decided(conn, mail_id, owner, cfg, envelope)
-        if rec["label"] == "deliver":
+        if rec["label"] in ("deliver", "skipped"):
             rookery._decide_from_open(conn, mail_id, "pending", "release", None, by, commit=False)
             action = "release"
+            if rec["label"] == "deliver":   # the first mail of a thread was delivered: the thread is approved (D16)
+                m = rookery.get_message(conn, mail_id)
+                if m["thread"]:
+                    conn.execute("UPDATE threads SET status='approved' WHERE session_id=? AND thread=? AND first_mail=? "
+                                 "AND status IN ('held','open')", (m["session_id"], m["thread"], mail_id))
         else:
             sug = _last(conn, mail_id, "suggest", rec["attempt"])
             peer = sug["label"] if sug and sug["label"] not in (None, "none") else None
@@ -406,7 +435,7 @@ def _post_notice(conn, mail_id):
     """A mail that is delivered when the screener decides (post mode, or a person released it first) cannot be taken
     back: a failure or a reject label gets the notice (D13, D14)."""
     rec = _last(conn, mail_id, "t1")
-    reason = rec and (f"no answer ({rec['failure']})" if rec["failure"] else rec["label"] if rec["label"] != "deliver" else None)
+    reason = rec and (f"no answer ({rec['failure']})" if rec["failure"] else rec["label"] if rec["label"] not in ("deliver", "skipped") else None)
     mail = rookery.get_message(conn, mail_id)
     if reason and mail["status"] not in ("held", "escalated", "quarantined"):
         try:
@@ -462,7 +491,10 @@ def _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop):
         except Exception:
             pass   # screen_one writes the bad-envelope record
         try:
-            label = screen_one(conn, mail_id, scfg, backend)
+            if live and _skip_approved(conn, mail_id, cfg, scfg["checks"]["t1"]):
+                label = "skipped"
+            else:
+                label = screen_one(conn, mail_id, scfg, backend)
             screened = True
             if kind == "pre" and _act_pre(conn, mail_id, owner, cfg, env):
                 continue

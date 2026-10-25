@@ -282,7 +282,7 @@ refuses and names 1 missing.
 **Independent Test**: open a thread, close it with `rookery thread close`, send again. With B3 live the gate
 refuses the mail and bounces it. With B3 in shadow mode the gate delivers it with a `would-deny` record.
 
-- [ ] T015 [US3] Files: `screener_t0.py`, `mail_gate.py`, `rookery.py`, `screener.py`, `test_threads.py`. Add
+- [x] T015 [US3] Files: `screener_t0.py`, `mail_gate.py`, `rookery.py`, `screener.py`, `test_threads.py`. Add
   `screener_t0.thread_check(conn, session_id, thread, sender, held, cfg)`. It makes the
   `threads` row for a new thread (`held` or `open`), and returns `would-deny` or `denied` for a closed thread. Call
   it from `mail_gate._submit`. With `thread` live, a mail on a closed thread is not stored. The gate returns the
