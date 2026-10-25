@@ -24,6 +24,7 @@ import cli_rookery_session
 import cli_hook
 import cli_init
 import cli_workspace
+import cli_screen
 
 # ---------------------------------------------------------------------------
 # Argument parser
@@ -114,6 +115,9 @@ def build_parser():
 
     # --- up ---
     cli_workspace.add_parser(sub)
+
+    # --- screen ---
+    cli_screen.add_parser(sub)
 
     # --- known-hosts ---
     p_kh = sub.add_parser(

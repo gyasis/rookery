@@ -24,6 +24,7 @@ _LOG_FILES = {
     "turn-block": os.path.join("logs", "turn-block.jsonl"),
     "postmaster": os.path.join("postmaster", "postmaster.jsonl"),
     "gate": os.path.join("logs", "gate.jsonl"),
+    "screener": os.path.join("logs", "screener.jsonl"),
 }
 _LOGGERS: dict = {}   # log path -> Logger, one handler per file
 

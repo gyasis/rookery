@@ -30,6 +30,7 @@ DEFAULTS = {
     "duplicate_window_s": 3600,
     "review_mode": {"default": "pre", "agents": {}},
     "lease_s": 600,
+    "max_age_s": 86400,
 }
 
 
@@ -105,8 +106,13 @@ def check(cfg) -> None:
                      ("ask_budget", cfg.get("ask_budget")),
                      ("duplicate_window_s", cfg.get("duplicate_window_s")),
                      ("lease_s", cfg.get("lease_s")),
+                     ("max_age_s", cfg.get("max_age_s")),
                      ("t2.batch", cfg.get("t2", {}).get("batch"))):
         _pos_int(val, f"screener.{key}")
+
+    if cfg["lease_s"] < 2 * cfg["timeout_s"]:
+        raise ValueError(f"screener.lease_s: must be at least twice screener.timeout_s ({cfg['timeout_s']}), "
+                         f"got {cfg['lease_s']}")
 
     review = cfg.get("review_mode", {})
     _mode(review.get("default"), "screener.review_mode.default", REVIEW_MODES)

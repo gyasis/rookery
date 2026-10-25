@@ -200,7 +200,7 @@ agent mail has one T1 record, 0 statuses change, and the fake counts 0 calls dur
   its own roster and cards (FR-013). Timeout and bad answer give failures with no label (FR-012). The `suggest`
   labels leave out the sender and the first recipient (FR-008). Every record passes `check_decided_by` (FR-010).
   Verify: `python3 -m unittest test_screen_run test_screen_t0 test_screen_backend -v`
-- [ ] T011 [US1] Files: `screener.py`, `cli_screen.py`, `rookery_cli.py`, `test_screen_cli.py`.
+- [x] T011 [US1] Files: `screener.py`, `cli_screen.py`, `rookery_cli.py`, `test_screen_cli.py`.
   Edit `screener.py`. Add `run(sessions=None, once=False, poll=2.0)` with the claim of D12
   (`INSERT OR IGNORE INTO screen_mail` in `BEGIN IMMEDIATE`, an owner token, a lease of `lease_s` plus
   `timeout_s`). `run` also has the queue of FR-005 (real session, non-system sender, no `screen_mail` row, oldest

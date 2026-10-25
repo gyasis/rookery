@@ -197,9 +197,13 @@ because it can hold pasted work. At most `envelope_max_chars` characters (first 
   "ask_budget": 20,
   "duplicate_window_s": 3600,
   "review_mode": {"default": "pre", "agents": {}},
-  "lease_s": 600
+  "lease_s": 600,
+  "max_age_s": 86400
 }
 ```
+
+`max_age_s` is a positive whole number of seconds. The screener skips mail that is older than this.
+`lease_s` must be at least twice `timeout_s`.
 
 `bands.t1` is `{"accept": A, "review": R}` with `0 <= R <= A <= 1`, or null. Only `t1` has bands: hunch acts by
 agreement with T1 (D11). A bad value is an error at

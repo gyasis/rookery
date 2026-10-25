@@ -105,8 +105,19 @@ class CheckTests(unittest.TestCase):
         self.bad(lambda c: c["t2"].update(command="run it"), "screener.t2.command")
         self.bad(lambda c: c["t2"].update(command=["a", 3]), "screener.t2.command")
 
+    def test_max_age_s_default_and_check(self):
+        self.assertEqual(SC.DEFAULTS["max_age_s"], 86400)
+        self.bad(lambda c: c.update(max_age_s=0), "screener.max_age_s")
+        self.bad(lambda c: c.update(max_age_s=True), "screener.max_age_s")
+
+    def test_lease_must_be_twice_the_timeout(self):
+        self.bad(lambda c: c.update(timeout_s=300, lease_s=599), "screener.lease_s")
+        cfg = copy.deepcopy(SC.DEFAULTS)
+        cfg.update(timeout_s=300, lease_s=600)
+        SC.check(cfg)
+
     def test_non_positive_numbers(self):
-        for key in ("timeout_s", "envelope_max_chars", "ask_budget", "duplicate_window_s", "lease_s"):
+        for key in ("timeout_s", "envelope_max_chars", "ask_budget", "duplicate_window_s", "lease_s", "max_age_s"):
             self.bad(lambda c, k=key: c.update({k: 0}), f"screener.{key}")
         self.bad(lambda c: c["t2"].update(batch=-1), "screener.t2.batch")
         self.bad(lambda c: c.update(ask_budget=True), "screener.ask_budget")

@@ -210,9 +210,10 @@ The user chose this on 2026-10-25.
 - **Decision**: `rookery screen run [--session NAME] [--once] [--poll S]`. One process loops over the open
   sessions, or over the one session that `--session` names. Each session has its own `try`. The loop logs
   an error with the session and the mail, and goes on to the next session (FR-013a). The process claims a mail with
-  `INSERT OR IGNORE INTO screen_mail` inside `BEGIN IMMEDIATE`. A claim older than the lease (300 s plus the
-  call timeout) goes back to the queue. So two processes never decide the same mail. `--once` does one pass and
-  exits, for tests. Nothing starts the screener automatically (F12, constitution VI). The user starts it as they
+  `INSERT OR IGNORE INTO screen_mail` inside `BEGIN IMMEDIATE`. A claim older than the lease goes back to the queue.
+  The lease is `lease_s` (600 s by default, at least twice `timeout_s`). So two processes never decide the same
+  mail. The queue skips mail older than `max_age_s` (one day by default), so the first run does not screen old
+  history. `--once` does one pass and exits, for tests. Nothing starts the screener automatically (F12, constitution VI). The user starts it as they
   start the postmaster.
 - **What it screens**: inbox rows of a real session with no `screen_mail` row. The sender is not the system, and no
   T0 check put the mail in quarantine at store time. The oldest come first (FR-005).

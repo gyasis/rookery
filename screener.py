@@ -6,10 +6,19 @@ Nothing here changes the inbox: this task only records. Records are written thro
 committed at once. The backend is passed in, so a test uses screener_backend.fake(). Never imports promptchain.
 """
 import json
+import os
 import re
+import secrets
+import signal
+import socket
 import sqlite3
+import sys
+import time
 
+import mail_gate
+import rookery
 import screener_backend
+import screener_config
 import screener_t0
 import turn_block
 
@@ -181,3 +190,177 @@ def screen_one(conn, mail_id, cfg, backend):
         else:
             _decide(conn, mail, cfg, backend, sstate, peers + ["none"], SUGGEST_INSTRUCTIONS, "suggest", "suggest")
     return ans.label if ans is not None else None
+
+
+# --- the loop (D12, FR-005, FR-013a) ---
+
+def backend_path():
+    """Which backend decides: fake, promptchain or stdlib. The PromptChain import takes 6 s (F20)."""
+    if os.environ.get("ROOKERY_SCREENER_FAKE"):
+        return "fake"
+    return "promptchain" if screener_backend._promptchain() is not None else "stdlib"
+
+
+def _begin(conn):
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+
+
+def queue(conn, sid, cutoff, limit=None, oldest=None):
+    """Mail ids of one session to screen, oldest first (FR-005): no screen_mail row, or a claim older than
+    cutoff. A system sender is left out. A mail that a T0 check quarantined at store has a decided row.
+    A mail created before `oldest` (an epoch second) is left out: the first run skips old history."""
+    rows = conn.execute(
+        "SELECT i.id, i.sender, i.created_at FROM inbox i LEFT JOIN screen_mail m ON m.mail_id=i.id "
+        "WHERE i.session_id=? AND i.created_at>=? "
+        "AND (m.mail_id IS NULL OR (m.state='claimed' AND m.claimed_at<?)) "
+        "ORDER BY i.created_at, i.id", (sid, oldest or 0, cutoff)).fetchall()
+    out = [r for r in rows if not (mail_gate.is_system_name(r["sender"])
+                                   or mail_gate.is_system_name(_name(conn, r["sender"])))]
+    return out[:limit] if limit else out
+
+
+MAX_ATTEMPTS = 3   # a claim that expired after this many tries ends as failed (a mail that kills the process)
+PER_SESSION = 5    # mails for one session in one pass, so one busy session does not starve the others
+
+
+def _claim(conn, mail_id, sid, owner, cutoff):
+    """Take the mail, or an expired claim on it. True when this owner now holds it. An expired claim with
+    MAX_ATTEMPTS tries is set to failed, not taken again."""
+    now = rookery.now()
+    _begin(conn)
+    try:
+        cur = conn.execute("INSERT OR IGNORE INTO screen_mail(mail_id, session_id, state, owner, claimed_at, attempts) "
+                           "VALUES(?,?,'claimed',?,?,1)", (mail_id, sid, owner, now))
+        if cur.rowcount == 0:
+            dead = conn.execute("UPDATE screen_mail SET state='failed', decided_at=? "
+                                "WHERE mail_id=? AND state='claimed' AND claimed_at<? AND attempts>=?",
+                                (now, mail_id, cutoff, MAX_ATTEMPTS)).rowcount
+            if dead:
+                _log(sid, mail_id, f"claim expired after {MAX_ATTEMPTS} tries: set to failed")
+            else:
+                cur = conn.execute("UPDATE screen_mail SET owner=?, claimed_at=?, attempts=attempts+1 "
+                                   "WHERE mail_id=? AND state='claimed' AND claimed_at<?", (owner, now, mail_id, cutoff))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return cur.rowcount == 1
+
+
+def _finish(conn, mail_id, owner, cfg, label, envelope):
+    """End a claim: decided with the T1 label, or failed (a shadow failure is final). Only the owner may."""
+    state = "decided" if label else "failed"
+    conn.execute("UPDATE screen_mail SET state=?, envelope=?, final_label=?, final_by=?, decided_at=? "
+                 "WHERE mail_id=? AND owner=? AND state='claimed'",
+                 (state, envelope, label, "screener:" + cfg["model"] if label else None, rookery.now(), mail_id, owner))
+    conn.commit()
+
+
+def _log(session, mail_id, cause):
+    turn_block.log_event(os.path.expanduser("~/.rookery"), stream="screener", session=session, msg_id=mail_id,
+                         outcome="error", reason=cause)
+
+
+def open_sessions(conn, names=None):
+    """(session_id, name) rows: the open sessions, or the ones named (a name or an ID). Raises ValueError for an unknown one."""
+    if not names:
+        return [(r["session_id"], r["name"]) for r in conn.execute(
+            "SELECT session_id, name FROM rookery_sessions WHERE state='open' ORDER BY created_at, name")]
+    out = []
+    for n in names:
+        r = conn.execute("SELECT session_id, name FROM rookery_sessions WHERE name=? OR session_id=?", (n, n)).fetchone()
+        if r is None:
+            raise ValueError(f"session {n!r} does not exist")
+        out.append((r["session_id"], r["name"]))
+    return out
+
+
+def _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop):
+    """Screen up to PER_SESSION mails of one session. A mail that raises is logged and ends as failed; the next
+    mail goes on. Returns the number of mails taken. The lease (lease_s, at least twice timeout_s by
+    screener_config.check) is longer than one decision, so the owner is not rechecked before a write."""
+    taken = 0
+    oldest = rookery.now() - cfg["max_age_s"]
+    for row in queue(conn, sid, cutoff, limit=PER_SESSION, oldest=oldest):
+        if stop:
+            break
+        mail_id = row["id"]
+        if not _claim(conn, mail_id, sid, owner, cutoff):
+            continue
+        taken += 1
+        env = label = None
+        try:
+            env = build_envelope(conn, conn.execute("SELECT * FROM inbox WHERE id=?", (mail_id,)).fetchone(), cfg)
+        except Exception:
+            pass   # screen_one writes the bad-envelope record
+        try:
+            label = screen_one(conn, mail_id, cfg, backend)
+        except Exception as e:   # a poison mail: log it, end the claim as failed, go on
+            conn.rollback()
+            _log(name, mail_id, f"{type(e).__name__}: {e}")
+        _finish(conn, mail_id, owner, cfg, label, env)
+    return taken
+
+
+def run(sessions=None, once=False, poll=2.0):
+    """Screen the queue of each session, PER_SESSION mails at a time, until a pass screens nothing. An error is
+    logged and the loop goes on. SIGTERM ends it after the current mail. The configuration is read on each
+    pass; t1 off claims nothing. Returns 0, or 2 when `once` met a configuration or session error."""
+    stop = []
+    old = None
+    try:
+        old = signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    except ValueError:   # not the main thread: no handler
+        pass
+    owner = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
+    conn = rookery.connect(turn_block.db_path())
+    code = 0
+    try:
+        while not stop:
+            taken = 0
+            try:
+                cfg = screener_config.load()
+                screener_config.check(cfg)
+            except (ValueError, OSError) as e:
+                _log(None, None, str(e))
+                print(f"rookery: {e}", file=sys.stderr)
+                cfg = None
+                code = 2
+            if cfg is not None and cfg["checks"]["t1"] != "off":
+                try:
+                    backend = screener_backend.system_one(cfg)
+                except Exception as e:
+                    _log(None, None, f"{type(e).__name__}: {e}")
+                    backend = None
+                    code = 2
+                cutoff = rookery.now() - cfg["lease_s"]
+                for n in (sessions or [None]) if backend is not None else ():
+                    try:
+                        found = open_sessions(conn, [n] if n else None)
+                    except Exception as e:   # a session that vanished
+                        conn.rollback()
+                        _log(n, None, f"{type(e).__name__}: {e}")
+                        code = 2
+                        continue
+                    for sid, name in found:
+                        try:
+                            taken += _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop)
+                        except Exception as e:
+                            conn.rollback()
+                            _log(name, None, f"{type(e).__name__}: {e}")
+                            code = 2
+            if taken:
+                continue   # work was done: look again at once, until every queue is empty
+            if once or stop:
+                break
+            for _ in range(max(1, int(poll * 10))):   # sleep in short steps so SIGTERM ends it soon
+                if stop:
+                    break
+                time.sleep(0.1)
+    finally:
+        conn.close()
+        if old is not None:
+            signal.signal(signal.SIGTERM, old)
+    return code if once else 0
