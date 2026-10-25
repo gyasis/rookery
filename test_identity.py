@@ -127,9 +127,9 @@ class Names(IdentityBase):
         a = RI.new_session(self.conn, name="alpha")
         RI.new_identity(self.conn, a["session_id"], "x" * 64)
 
-    def test_session_without_name_gets_its_id(self):
-        s = RI.new_session(self.conn)
-        self.assertEqual(s["name"], s["session_id"])
+    def test_session_without_name_gets_three_word_name(self):
+        s = RI.new_session(self.conn)  # FR-037: the name is no longer the session ID
+        self.assertRegex(s["name"], r"^[a-z]+-[a-z]+-[a-z]+$")
         self.assertEqual(RI.get_session(self.conn, s["name"])["session_id"], s["session_id"])
 
     def test_ended_session_name_not_reusable(self):

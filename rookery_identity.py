@@ -14,6 +14,8 @@ import secrets
 import sqlite3
 from datetime import datetime, timezone
 
+import rookery_names
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_CONFIG_PATH = os.path.join(_HERE, "rookery_config.default.json")
 
@@ -139,7 +141,7 @@ def new_session(conn, name=None, binds=()) -> dict:
     """Create an open session; return its row dict
     {session_id, name, state, created_at, ended_at}.
 
-    name=None -> the name is the session ID. A name is unique forever, including
+    name=None -> the name is three words from rookery_names (FR-037). A name is unique forever, including
     names of ended sessions (ValueError). binds: iterable of (kind, value) or
     'kind:value' strings; each is stored as a session binding."""
     try:
@@ -163,13 +165,17 @@ def _new_session(conn, name=None, binds=()) -> dict:
     pairs = [_parse_bind(b) for b in binds]
     created = _now_iso()
     for _ in range(_ID_TRIES):
+        if name is None:
+            auto = rookery_names.make_name()  # D22: a new name on every try
+            if _one(conn, "SELECT 1 FROM rookery_sessions WHERE name=?", (auto,)):
+                continue
         sid = "rs-" + secrets.token_hex(4)
         if _one(conn, "SELECT 1 FROM rookery_sessions WHERE session_id=?", (sid,)):
             continue
         try:
             conn.execute(
                 "INSERT INTO rookery_sessions(session_id, name, state, created_at) "
-                "VALUES(?,?,?,?)", (sid, name or sid, "open", created))
+                "VALUES(?,?,?,?)", (sid, name or auto, "open", created))
         except sqlite3.IntegrityError:
             if name is not None and _one(
                     conn, "SELECT 1 FROM rookery_sessions WHERE name=?", (name,)):

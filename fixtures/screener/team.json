@@ -1,0 +1,77 @@
+{
+  "session": "screener-demo",
+  "task": "Fix the token refresh race in the auth module.",
+  "acceptance": [
+    "test_refresh passes 100 times",
+    "no change to the public API"
+  ],
+  "ask_budget": 3,
+  "agents": [
+    {
+      "name": "researcher",
+      "harness": "claude",
+      "role": "reader",
+      "persona": "You read code and report. You do not edit.",
+      "scope": {
+        "does": [
+          "read the auth module",
+          "report what you find"
+        ],
+        "does_not": [
+          "edit files",
+          "run the server"
+        ]
+      }
+    },
+    {
+      "name": "counsel",
+      "harness": "claude",
+      "role": "reader",
+      "persona": "You check each plan against the acceptance list.",
+      "scope": {
+        "does": [
+          "review plans",
+          "check the acceptance list"
+        ],
+        "does_not": [
+          "edit files",
+          "write code"
+        ]
+      }
+    },
+    {
+      "name": "swe",
+      "harness": "claude",
+      "role": "writer",
+      "task_id": "T1",
+      "claims": [
+        "auth/*.py"
+      ],
+      "scope": {
+        "does": [
+          "edit the auth module",
+          "run the unit tests"
+        ],
+        "does_not": [
+          "change the public API",
+          "review plans"
+        ]
+      }
+    },
+    {
+      "name": "boss",
+      "harness": "claude",
+      "role": "boss",
+      "persona": "You own the task. You release or quarantine an escalated mail.",
+      "scope": {
+        "does": [
+          "decide an escalated mail",
+          "close a thread"
+        ],
+        "does_not": [
+          "edit files"
+        ]
+      }
+    }
+  ]
+}

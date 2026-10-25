@@ -1,0 +1,10 @@
+{
+  "t1": [
+    {"match": "CASE-DELIVER", "label": "deliver", "confidence": 0.95},
+    {"match": "CASE-DONE", "label": "task-already-done", "confidence": 0.93},
+    {"match": "CASE-WRONG", "label": "wrong-recipient", "confidence": 0.91},
+    {"match": "CASE-UNNEEDED", "label": "unneeded", "confidence": 0.9},
+    {"match": "CASE-TIMEOUT", "fail": "timeout"},
+    {"match": "CASE-BADANSWER", "fail": "bad-answer"}
+  ]
+}

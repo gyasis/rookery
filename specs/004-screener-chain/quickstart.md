@@ -46,7 +46,8 @@ Expected:
 - The status shows backlog 0 and every check in `shadow`.
 - The review lists one `t1` decision with `screener:tev1:4b`.
 - The inbox status of the mail is still `pending` (FR-014).
-- The session has a name of three words when the team file has no `session` key.
+- `python3 rookery_cli.py session new` with no name prints a name of three words (FR-037). `rookery up` still
+  needs the `session` key of the team file.
 
 ## 4. The live switch rule (SC-005)
 

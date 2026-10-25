@@ -62,18 +62,18 @@ writes the code. No task leaves a failing test.
 
 **Purpose**: the fixtures and the one change that no story needs.
 
-- [ ] T001 [P] Files: `fixtures/bin/hunch`, `fixtures/screener/team.json`, `fixtures/screener/fake_t1.json`,
+- [x] T001 [P] Files: `fixtures/bin/hunch`, `fixtures/screener/team.json`, `fixtures/screener/fake_t1.json`,
   `fixtures/screener/injection.txt`. Create `fixtures/bin/hunch` (executable, `#!/usr/bin/env python3`, standard library). It reads the
   state from stdin and `-q <json>`, and takes `--raw` and `--timeout`. It answers from the JSON file in
   `$ROOKERY_FAKE_HUNCH`, with the same rule format as the fake backend of the contract (`match`, `label`,
   `confidence`, `fail`). `fail: "error"` prints exit 0 with `answers[q] = {"error": "..."}`. `fail: "exit1"` exits
   1 with a stderr line. `fail: "sleep"` sleeps 5 s. Each call appends one JSON line with its arguments and
-  `HUNCH_MODEL`, `HUNCH_VOTE` to `$ROOKERY_FIXTURE_LOG`. Create `fixtures/screener/team.json` (a session with no
-  `session` key, agents `researcher`, `counsel`, `swe`, and a `boss`; scope cards; acceptance; `ask_budget` 3).
+  `HUNCH_MODEL`, `HUNCH_VOTE` to `$ROOKERY_FIXTURE_LOG`. Create `fixtures/screener/team.json` (session `screener-demo`, because `rookery up` keys its
+  idempotence on the name; agents `researcher`, `counsel`, `swe`, and a `boss`; scope cards; acceptance; `ask_budget` 3).
   Create `fixtures/screener/fake_t1.json` (one rule for each of the four labels, one `timeout` rule, one
   `bad-answer` rule). Create `fixtures/screener/injection.txt` (one line for each pattern family of D18).
   Verify: `L=$(mktemp) && echo '{"t1":[{"match":"x","label":"deliver","confidence":0.9}]}' > $L.json && echo x | ROOKERY_FAKE_HUNCH=$L.json ROOKERY_FIXTURE_LOG=$L fixtures/bin/hunch - -q '{"route":{"type":"choice","criteria":["deliver","unneeded"]}}' --raw && test -s $L`
-- [ ] T002 [P] Files: `rookery_names.py`, `rookery_identity.py`, `test_session_names.py`.
+- [x] T002 [P] Files: `rookery_names.py`, `rookery_identity.py`, `test_session_names.py`.
   Create `rookery_names.py` with three lists of 64 words (moods, colors, animals; lower-case ASCII, no
   hyphen, no duplicates) and `make_name(rng=secrets)`. Edit `rookery_identity._new_session`
   (`rookery_identity.py:154-180`): when `name is None`, choose a name with `make_name` and try again on a clash,
@@ -156,7 +156,8 @@ writes the code. No task leaves a failing test.
   Edit `cli_workspace.py` so that `rookery up` writes `session_context` and `agent_scope` from the
   team file. It does so in the transaction that makes the session. A second run replaces the rows of that session.
   Edit `rookery_team.py` to accept an optional `ask_budget` (a positive integer, else an error that names it) (D8,
-  D17). Needs T003 first. Write `test_session_context.py` first. Cases:
+  D17). Add `boss` to `ROLES`: a boss is not a writer and needs no claims (D14, FR-029). A team file with a `boss`
+  agent loads. Needs T003 first. Write `test_session_context.py` first. Cases:
   `rookery up --no-launch fixtures/screener/team.json` writes the task, the acceptance and `ask_budget` 3, and one
   `agent_scope` row for each agent with its `does` and `does_not`. A second run gives the same rows, not
   duplicates. `ask_budget: 0` and `ask_budget: "x"` are errors.
