@@ -2,7 +2,7 @@
 """Test double for hunch (T001). Reads the state (stdin when the first argument is -), `-q <json>`, `--raw`, `--timeout`.
 Answers from the JSON file in env ROOKERY_FAKE_HUNCH, rules `match`, `label`, `confidence`, `fail`, taken from the key
 "hunch", else "t1". The first rule whose `match` is in the state answers each question. Appends one JSON line with the
-arguments, HUNCH_MODEL and HUNCH_VOTE to the file in env ROOKERY_FIXTURE_LOG. Never opens a socket."""
+arguments, HUNCH_MODEL, HUNCH_VOTE and HUNCH_URL to the file in env ROOKERY_FIXTURE_LOG. Never opens a socket."""
 import argparse
 import json
 import os
@@ -22,7 +22,8 @@ log = os.environ.get("ROOKERY_FIXTURE_LOG")
 if log:
     with open(log, "a") as fh:
         fh.write(json.dumps({"argv": sys.argv[1:], "HUNCH_MODEL": os.environ.get("HUNCH_MODEL"),
-                             "HUNCH_VOTE": os.environ.get("HUNCH_VOTE")}) + "\n")
+                             "HUNCH_VOTE": os.environ.get("HUNCH_VOTE"),
+                             "HUNCH_URL": os.environ.get("HUNCH_URL")}) + "\n")
 
 with open(os.environ["ROOKERY_FAKE_HUNCH"]) as fh:
     book = json.load(fh)

@@ -89,7 +89,7 @@ writes the code. No task leaves a failing test.
 
 **Purpose**: the schema, the configuration, the backend, the record writer and the `escalated` status.
 
-- [ ] T003 Files: `rookery.py`, `turn_block.py`, `test_screen_schema.py`.
+- [x] T003 Files: `rookery.py`, `turn_block.py`, `test_screen_schema.py`.
   Edit `rookery.py`. Add `thread TEXT` with `_add_column` in `init_db`. Add the six tables of
   [data-model.md](data-model.md) (`session_context`, `agent_scope`, `threads`, `screen_mail`, `screen_decisions`,
   `screen_calls`) with their keys and indexes to `_SESSION_TABLES_SQL`. Edit `turn_block._schema_current`
@@ -101,7 +101,7 @@ writes the code. No task leaves a failing test.
   temporary folder. It migrates the copy, as `test_sessions_migration.SessionsMigrationLiveCopy` does (FR-035). After the migration,
   a hook on 10,000 rows stays under 1 s, as `test_hooks.HookTiming` measures (D25).
   Verify: `python3 -m unittest test_screen_schema test_sessions_migration test_up_schema test_turn_block test_hooks test_send -v`
-- [ ] T004 [P] Files: `screener_config.py`, `rookery_config.default.json`, `test_screen_config.py`.
+- [x] T004 [P] Files: `screener_config.py`, `rookery_config.default.json`, `test_screen_config.py`.
   Create `screener_config.py` with `load() -> dict` (defaults in code for each missing key of the
   data-model `screener` block). It also has `check(cfg)`, which raises `ValueError` that names the key. The causes
   are a mode not in `shadow|live|off`, bands not `0 <= review <= accept <= 1`, a T2 command that is not a list of
@@ -110,7 +110,7 @@ writes the code. No task leaves a failing test.
   configuration file with no `screener` key gives every default, and every mode is `shadow`. Each bad value gives
   an error that names its key. `set_mode` keeps an unrelated key and the other modes.
   Verify: `python3 -m unittest test_screen_config test_identity -v`
-- [ ] T005 [P] Files: `screener_backend.py`, `test_screen_backend.py`.
+- [x] T005 [P] Files: `screener_backend.py`, `test_screen_backend.py`.
   Create `screener_backend.py` (D6, D7, contract "The decision backend"). It has `Answer`,
   `BackendError(cause)`, `system_one(cfg)`, `hunch_vote(cfg)` and `fake(path)`. It tries the import of
   `promptchain.utils.decision_step` inside `system_one()` and `hunch_vote()`, never at module import (F20). With PromptChain, the backends wrap `SystemOneBackend` and

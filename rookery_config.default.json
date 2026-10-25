@@ -141,5 +141,39 @@
    "api",
    "web"
   ]
+ },
+ "screener": {
+  "checks": {
+   "injection": "shadow",
+   "duplicate": "shadow",
+   "budget": "shadow",
+   "thread": "shadow",
+   "gates": "shadow",
+   "t1": "shadow",
+   "hunch": "shadow",
+   "t2": "shadow"
+  },
+  "bands": {
+   "t1": null
+  },
+  "base_url": "http://192.168.0.159:8799/llm/ollama",
+  "model": "tev1:4b",
+  "timeout_s": 300,
+  "hunch": {
+   "model": "qwen2.5:3b",
+   "url": null
+  },
+  "t2": {
+   "command": null,
+   "batch": 20
+  },
+  "envelope_max_chars": 3000,
+  "ask_budget": 20,
+  "duplicate_window_s": 3600,
+  "review_mode": {
+   "default": "pre",
+   "agents": {}
+  },
+  "lease_s": 600
  }
 }

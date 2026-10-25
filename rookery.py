@@ -78,7 +78,8 @@ except Exception:                      # tolerate an odd import context
     _SCHEMA_SQL = None
 
 
-_INBOX_SCREENING_COLS = ("verdict TEXT", "reason TEXT", "decided_by TEXT", "decided_at INTEGER")
+_INBOX_SCREENING_COLS = ("verdict TEXT", "reason TEXT", "decided_by TEXT", "decided_at INTEGER",
+                         "thread TEXT")      # 004: the block's thread, NULL when there is none
 
 
 # D18: Rookery sessions, session-scoped identities and bindings (additive only).
@@ -151,7 +152,88 @@ CREATE TABLE IF NOT EXISTS ports (
   port     INTEGER NOT NULL UNIQUE,
   PRIMARY KEY(agent_id, name)
 );
+
+-- 004 screener chain (data-model.md). Times are integers from now(), except session_context.updated_at.
+CREATE TABLE IF NOT EXISTS session_context (
+  session_id TEXT PRIMARY KEY,
+  task       TEXT,
+  acceptance TEXT NOT NULL,
+  ask_budget INTEGER,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_scope (
+  agent_id   TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  does       TEXT NOT NULL,
+  does_not   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS threads (
+  session_id   TEXT NOT NULL,
+  thread       TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  opened_by    TEXT NOT NULL,
+  first_mail   INTEGER NOT NULL,
+  opened_at    INTEGER NOT NULL,
+  closed_by    TEXT,
+  closed_at    INTEGER,
+  close_reason TEXT,
+  PRIMARY KEY(session_id, thread)
+);
+CREATE TABLE IF NOT EXISTS screen_mail (
+  mail_id     INTEGER PRIMARY KEY,
+  session_id  TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  owner       TEXT,
+  claimed_at  INTEGER,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  retry_at    INTEGER,
+  envelope    TEXT,
+  ask_hash    TEXT,
+  final_label TEXT,
+  final_by    TEXT,
+  decided_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_screen_mail_state ON screen_mail(session_id, state);
+CREATE INDEX IF NOT EXISTS idx_screen_mail_ask ON screen_mail(ask_hash);
+CREATE TABLE IF NOT EXISTS screen_decisions (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  mail_id          INTEGER,
+  session_id       TEXT NOT NULL,
+  stage            TEXT NOT NULL,
+  check_name       TEXT NOT NULL,
+  attempt          INTEGER NOT NULL DEFAULT 1,
+  label            TEXT,
+  confidence       REAL,
+  band             TEXT,
+  mode             TEXT NOT NULL,
+  action           TEXT,
+  decided_by       TEXT NOT NULL,
+  backend_impl     TEXT,
+  failure          TEXT,
+  detail           TEXT,
+  prompt_tokens    INTEGER,
+  reasoning_tokens INTEGER,
+  created_at       INTEGER NOT NULL,
+  UNIQUE(mail_id, check_name, attempt)
+);
+CREATE INDEX IF NOT EXISTS idx_screen_decisions_mail ON screen_decisions(mail_id, stage);
+CREATE TABLE IF NOT EXISTS screen_calls (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id INTEGER NOT NULL,
+  mail_id     INTEGER NOT NULL,
+  call_label  TEXT NOT NULL,
+  verdict     TEXT NOT NULL,
+  source      TEXT NOT NULL,
+  "by"        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_screen_calls_decision ON screen_calls(decision_id, id);
 """
+
+_SCREEN_INDEXES = ("idx_screen_mail_state", "idx_screen_mail_ask", "idx_screen_decisions_mail",
+                   "idx_screen_calls_decision")
+_SCREEN_TABLES = ("session_context", "agent_scope", "threads", "screen_mail",
+                  "screen_decisions", "screen_calls")
 
 
 def _add_column(conn: sqlite3.Connection, alter_sql: str) -> None:

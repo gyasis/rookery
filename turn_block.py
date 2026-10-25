@@ -126,6 +126,11 @@ def _schema_current(conn: sqlite3.Connection) -> bool:
     have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {"rookery_sessions", "identities", "bindings", "inbox", "loop_counts"} <= have:
         return False
+    if not set(rookery._SCREEN_TABLES) <= have:     # 004: hooks write the gate records (D25)
+        return False
+    idx = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    if not set(rookery._SCREEN_INDEXES) <= idx:     # an interrupted migration re-runs
+        return False
     cols = {r[1] for r in conn.execute("PRAGMA table_info(inbox)")}
     if "session_id" not in cols or not {c.split()[0] for c in rookery._INBOX_SCREENING_COLS} <= cols:
         return False
