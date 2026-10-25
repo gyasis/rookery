@@ -63,7 +63,8 @@ rookery screen export [--check CHECK] [--out FILE]
                     "live_ready": true, "missing": 0}}}
 ```
 
-  `live_ready` is true for a model check when `compared >= 150` and the config holds the bands. `missing` is
+  `live_ready` is true for a model check (`t1`, `hunch`, `t2`) when `compared >= 150`, and for `t1` also when the
+  configuration holds its bands. `missing` is
   `max(0, 150 - compared)`.
 - `export` writes one JSON line for each compared decision (FR-018, D20):
 
@@ -80,8 +81,8 @@ rookery screen mode CHECK (shadow | live | off)
 ```
 
 - Writes `screener.checks.CHECK` in `~/.rookery/config.json`, and keeps every other key.
-- For `t1` and `hunch` with `live`: refuses (exit 2) when the person compared fewer than 150 decisions, or when the
-  config holds no bands. The refusal text gives the number that is missing (FR-017, SC-005). For example: "Rookery cannot
+- For `t1`, `hunch` and `t2` with `live`: refuses (exit 2) when the person compared fewer than 150 decisions. For
+  `t1` it also refuses when the configuration holds no bands. The refusal text gives the number that is missing (FR-017, SC-005). For example: "Rookery cannot
   switch t1 to live mode. It has 149 compared decisions and needs 150. Compare 1 more decision with `rookery
   screen mark`."
 - A change takes effect at the next pass of a running screener, which reads the configuration again each pass.
@@ -95,6 +96,7 @@ rookery screen escalate MAIL_ID [--reason TEXT] [--by NAME]
 ```
 
 - `release` and `quarantine` work from `held` or `escalated` (D14). They write the user calls (D20).
+- `cli_screen.py` imports `screener` only inside these handlers, never at the top of the module (D6, F20).
 - `escalate` moves a `held` mail to `escalated` (TAKEOVER, hold for a human, FR-028) and sends the notices.
 - `mail_screen.py --release`, `--quarantine` and `--unquarantine` also write the user calls. Their `--by` default
   changes from `human` to `human:<user>`.

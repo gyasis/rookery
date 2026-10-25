@@ -187,7 +187,7 @@ because it can hold pasted work. At most `envelope_max_chars` characters (first 
 "screener": {
   "checks": {"injection": "shadow", "duplicate": "shadow", "budget": "shadow", "thread": "shadow",
              "gates": "shadow", "t1": "shadow", "hunch": "shadow", "t2": "shadow"},
-  "bands": {"t1": null, "hunch": null},
+  "bands": {"t1": null},
   "base_url": "http://192.168.0.159:8799/llm/ollama",
   "model": "tev1:4b",
   "timeout_s": 300,
@@ -201,7 +201,8 @@ because it can hold pasted work. At most `envelope_max_chars` characters (first 
 }
 ```
 
-`bands.<check>` is `{"accept": A, "review": R}` with `0 <= R <= A <= 1`, or null. A bad value is an error at
+`bands.t1` is `{"accept": A, "review": R}` with `0 <= R <= A <= 1`, or null. Only `t1` has bands: hunch acts by
+agreement with T1 (D11). A bad value is an error at
 screener start, and the error names the key.
 
 ## Session names (D22)

@@ -75,6 +75,10 @@ Gates from `.specify/memory/constitution.md` (v1.2.1):
 - [x] **Security**: mail is data. The envelope leaves out `evidence`, and review lists never print a body. The
       injection pattern set is code. Notices carry no body. The change adds no destructive action.
 
+**Analysis fixes (2026-10-25)**: `t2` is under the 150 rule (constitution IV). The PromptChain import is lazy,
+because it takes 6 s (F20) and `rookery_cli` imports every command module. The notice and call code lives in
+`screener_t0.py`. The hook path migrates the schema once (D25).
+
 **Post-design re-check (after Phase 1)**: all gates pass. Two items stay open by design. First, the bands have
 no measured values. They stay unset, and the live switch refuses until the user sets them from the report (D11).
 Second, R15 is proven only after a shadow run of 150 real decisions after the merge.
@@ -87,7 +91,7 @@ Second, R15 is proven only after a shadow run of 150 real decisions after the me
 specs/004-screener-chain/
 ├── spec.md
 ├── plan.md              # this file
-├── research.md          # Phase 0: facts F1 to F19, decisions D6 to D24
+├── research.md          # Phase 0: facts F1 to F20, decisions D6 to D25
 ├── data-model.md        # Phase 1: tables, statuses, transitions, mapping, envelope, configuration
 ├── quickstart.md        # Phase 1: copy check, tests, scratch run, live switch, live check, deploy
 ├── contracts/screener.md  # Phase 1: commands, backend interface, T2 contract, log line, texts
@@ -106,13 +110,14 @@ turn_block.py              EDIT _schema_current knows the new column and tables;
 mail_gate.py               EDIT submit(thread=, block=); call screener_t0.evaluate in the transaction; B3 refuse;
                                 pre_store hold for live t1 in pre mode (D9, D13)
 screener_t0.py             NEW  T0 checks: injection patterns, duplicate, budget, thread, anomalies; records;
-                                bounce texts (D16 to D19)
+                                bounce texts; notify_escalated; calls_for_action (D14, D16 to D20). No model import
 screener_config.py         NEW  read and check the screener key with defaults; write a check mode (D21)
-screener_backend.py        NEW  Answer, BackendError; PromptChain path; stdlib path; fake (D6, D7)
-screener.py                NEW  run loop, claims, envelope, T1, suggest, hunch, T2, live actions, escalation
-                                notices, calls, agreement, export (D8, D10 to D15, D20)
+screener_backend.py        NEW  Answer, BackendError; PromptChain path (imported inside the builders); stdlib
+                                path; fake (D6, D7, F20)
+screener.py                NEW  run loop, claims, envelope, T1, suggest, hunch, T2, live actions, agreement,
+                                export (D8, D10 to D15, D20)
 cli_screen.py              NEW  screen run, status, review, mark, report, export, mode, release, quarantine,
-                                escalate; thread close
+                                escalate; thread close. Imports screener inside handlers only (F20)
 rookery_cli.py             EDIT register cli_screen.add_parser
 cli_workspace.py           EDIT rookery up writes session_context and agent_scope (D8)
 rookery_team.py            EDIT optional ask_budget key (positive integer)
@@ -170,7 +175,7 @@ Phase requirements and the FRs that build them:
 | FR-014 | shadow `action = none` | `test_screen_run`: 50 mails of every kind, 0 status changes (SC-001) |
 | FR-015 | `mark`, manual actions (D20) | `test_screen_calls`: each row of the mapping table |
 | FR-016 | `report` | `test_screen_calls`: 150 decisions, 140 right gives 150 and 0.933, both forms |
-| FR-017 | `mode` refusal | `test_screen_calls.LiveSwitch`: 149 refuses with 1 missing, 150 with bands accepts (SC-005) |
+| FR-017 | `mode` refusal | `test_screen_calls.LiveSwitch`: 149 refuses with 1 missing, 150 with bands accepts (SC-005). The same rule holds for `hunch` and `t2` |
 | FR-018 | `export` | `test_screen_calls`: one line for each compared decision with the keys of the contract, no body |
 | FR-019 | `review_mode`, `pre_store` (D13) | `test_screen_run`: live t1 `pre` holds with `screening`, then releases. `post` delivers at once and sends a notice on a reject |
 | FR-020 | `inbox.thread`, `threads` (D16) | `test_threads`: the column holds the block value. The first mail makes the row with `held` or `open`. Same value in two sessions gives two threads |

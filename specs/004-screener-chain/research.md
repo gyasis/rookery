@@ -2,7 +2,7 @@
 
 **Feature**: `specs/004-screener-chain/spec.md` | **Date**: 2026-10-25
 
-This file holds the facts that the design uses, and the decisions D6 to D24. D1 to D5 are in the spec. Each
+This file holds the facts that the design uses, and the decisions D6 to D25. D1 to D5 are in the spec. Each
 fact names its source. "Observed" means a command ran in this session and gave that output.
 
 ## Facts
@@ -90,6 +90,13 @@ fact names its source. "Observed" means a command ran in this session and gave t
     `questions/open.md` Q4 are out of scope. The screener fills `suggest`, and a fail-closed mail waits for a
     person.
 
+### Measured during the analysis (2026-10-25)
+
+- **F20. The PromptChain import takes 6 s.** Observed: `import promptchain.utils.decision_step` took 5.95 s twice
+  under miniconda 3.13. `python3 -X importtime` shows that the package `__init__` loads
+  `promptchain.utils.promptchaining` (4.6 s). `rookery_cli.py:23-26` imports every `cli_*` module at start. A
+  top-level import chain from `cli_screen` to PromptChain would add 6 s to every `rookery` call, hooks included.
+
 ## Decisions
 
 ### D6. The screener uses PromptChain when it imports, else a standard-library copy
@@ -107,8 +114,12 @@ The user chose this on 2026-10-25.
     raises.
   - `Fake` reads scripted answers from a JSON file named by `ROOKERY_SCREENER_FAKE`. Tests and the scratch run
     use it (FR-036).
-- **Where the import happens**: only in the screener process. The gate, the hooks and the T0 checks never import
-  `screener_backend`. A scan test proves this. So a missing PromptChain can never stop a send.
+- **Where the import happens**: only in the screener process, and only when it builds a model backend.
+  `screener_backend` tries the PromptChain import inside `system_one()` and `hunch_vote()`, never at module
+  import (F20). `cli_screen` imports `screener` inside its command handlers, because `rookery_cli` imports every
+  `cli_*` module at start (`rookery_cli.py:23-26`). The gate, the hooks, `mail_screen.py` and `screener_t0.py`
+  never import `screener` or `screener_backend`. A scan test and a timing test prove this. So a missing or slow
+  PromptChain can never stop or slow a send.
 - **Which path decided**: each T1 and hunch record stores `backend_impl` (`promptchain` or `stdlib`). `rookery
   screen status` shows the path and the Python that runs the screener.
 - **No drift**: one contract test runs both paths against the same local fake lane (`http.server` on
@@ -187,6 +198,9 @@ The user chose this on 2026-10-25.
   lower answer escalates (the `band()` rule of F7). The agreement report groups the compared decisions by
   confidence in steps of 0.1, so the user can choose the bands from data. `rookery screen mode t1 live` refuses
   while the bands are unset.
+- **The second opinion has no bands**: hunch acts by agreement with T1, not by its own confidence. So the
+  configuration has bands for `t1` only. When `t1` is live and `hunch` is not live, a review-band answer
+  escalates, the same as a disagreement. The hunch record is still written in shadow mode.
 - **Rationale**: the OKF says thresholds come from the eval of each task, never a global 0.9 (F18). Six hunch
   calls on every mail would also load the shared lane.
 - **Alternatives**: first values such as 0.9 and 0.6. These values have no source.
@@ -229,6 +243,12 @@ The user chose this on 2026-10-25.
   - On each escalation, Rookery sends a notice with no body to the boss of the session (the agent with role
     `boss` in `up_agents`, if any). It also sends the notice to the user through the plugin `sink` event `escalated`
     (FR-029).
+- **Only held mail escalates**: `escalate` works from `held`. In live mode only a mail that the screener held
+  with the reason `screening` escalates on a failure. A live failure on any other mail (a `post` mode mail, a mail
+  that `ROOKERY_HOLD` held) gives `screen_mail.state = failed` and an escalation notice, and the mail keeps its
+  status.
+- **Where the notice code lives**: `notify_escalated` and `calls_for_action` only use the database. They live in
+  `screener_t0.py`, so that the gate and `mail_screen.py` can call them without the model backend (D6).
 - **Who moves mail there**: a failed or too-large T1 call in live mode (FR-012a). Also a disagreement of the second
   opinion with no T2 command, and a live anomaly. The command `rookery screen escalate ID` also does it (TAKEOVER
   and hold for a human, FR-028).
@@ -307,8 +327,10 @@ The user chose this on 2026-10-25.
 - **Agreement**: for each check, a compared decision is one with a call. Agreement is the share of compared
   decisions where the call label equals the decision label. The report gives the count, the rate, the
   disagreements by label pair, and the rate for each 0.1 confidence step. It has `--json`.
-- **Live switch**: `rookery screen mode CHECK live` refuses for a model check (`t1`, `hunch`) with fewer than 150
-  compared decisions. It gives the number that is missing (FR-017, SC-005).
+- **Live switch**: `rookery screen mode CHECK live` refuses for a model check (`t1`, `hunch`, `t2`) with fewer than
+  150 compared decisions. It gives the number that is missing (FR-017, SC-005). `t1` also needs its bands. T2 is a
+  model behind a configured command, so constitution IV applies to it too: it must not block mail before a shadow
+  run.
 - **Export (Q7)**: `rookery screen export` writes one JSON line for each compared decision. The line holds the envelope, the
   decision label, the confidence, `decided_by`, the call label and the call `by`. It is a file format only. No
   feed and no training.
@@ -338,7 +360,11 @@ The user chose this on 2026-10-25.
 - **Decision**: `screener.py` and `cli_screen.py` join the allow list for `rookery.quarantine`. A new watched
   call `rookery.escalate` gets allowed in `rookery.py`, `screener.py` and `cli_screen.py`. A new scan rule fails
   when any screener module passes the literal reason `loop` to `quarantine` (FR-002).
-  `quarantine(reason="loop")` stays legal in `rookery.py` for a person (conflict 1 of the input).
+  `quarantine(reason="loop")` stays legal in `rookery.py` for a person (conflict 1 of the input). More scan rules:
+  no module imports `promptchain` at the top level. `mail_gate.py`, `turn_block.py`, `cli_hook.py`,
+  `mail_screen.py` and `screener_t0.py` never import `screener` or `screener_backend`. `cli_screen.py` imports
+  `screener` only inside a function. A timing test runs `rookery hook` and `rookery send` and checks that
+  `promptchain` is not in `sys.modules` (F20).
 - **No plugin point**: the screener is core. The model and T2 come in through the configuration (conflict 8 of
   the input).
 
@@ -349,3 +375,15 @@ The user chose this on 2026-10-25.
   row says "held, bounce" instead of "`loop` quarantine". The task also adds a short "changed 2026-10-25,
   Rookery 004" note to `design/screener-chain.md`. The note covers D8 (the 3,000-character limit), D11 (bands unset by
   default), D13 (where the user sets the review mode) and D17 (the first values).
+
+### D25. The hook path migrates the new schema once
+
+- **Decision**: `turn_block._schema_current` knows the new inbox column and the six new tables. On the first send
+  or hook after the upgrade, `open_db` runs `init_db` once and takes the write lock. Later calls find the schema
+  current and take no lock.
+- **Why this differs from 003**: in 003 (wave 2 audit finding 10) `_schema_current` stayed as it was, and
+  `ensure_up_tables` added the tables, because only `rookery up` used them. Here the gate writes `inbox.thread`
+  and the T0 records on the send path, which the hooks use. The tables must exist before the first such write.
+  002 added its inbox columns the same way.
+- **Proof**: T003 adds a timing case. After the migration, a hook on 10,000 rows stays under 1 s (the spec 001
+  target, `test_hooks.HookTiming`).

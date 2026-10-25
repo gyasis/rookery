@@ -357,8 +357,8 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
   quarantine or unquarantine by a person MUST also count as that person's call for the mail.
 - **FR-016**: Rookery MUST report the agreement for each check: the number of compared decisions,
   the agreement rate and the disagreements by label. The report MUST have a JSON form and a text form.
-- **FR-017**: Rookery MUST refuse to switch a model check to live mode with fewer than 150 compared decisions for
-  that check. The refusal MUST give the number that is missing (constitution IV, R15). The count and the
+- **FR-017**: Rookery MUST refuse to switch a model check (`t1`, `hunch` or `t2`) to live mode with fewer than 150
+  compared decisions for that check. The refusal MUST give the number that is missing (constitution IV, R15). The count and the
   confidence bands MUST apply to one check, not to one work task (Q6).
 - **FR-018**: The label export MUST write one JSON line for each compared decision: the envelope pointers, the
   screener decision, the user's call and `decided_by` (RQ-3.11).
@@ -437,11 +437,11 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
 
 - **Decision record**: one answer for one mail from one tier or check. It holds the mail, the tier or check, and the
   label or anomaly. It also holds the confidence, the mode (shadow or live), `decided_by`, the time, and a failure cause when
-  there is no label. The link between the records of one mail is open (Q1).
+  there is no label. The records of one mail link by the mail ID (plan data-model).
 - **User call**: the user's judgment of a decision: right, wrong, or the correct label. It holds who and when.
   A release, quarantine or unquarantine by a person also makes one.
 - **Thread**: a conversation between agents in one session. It holds its key, its session, its status (`held`,
-  `open`, `approved`, `closed`) and who closed it. Its exact shape is open (Q2).
+  `open`, `approved`, `closed`) and who closed it. Its shape is in the plan data-model.
 - **Envelope**: the short input of one decision: pointers, scope cards, acceptance criteria, `self_check` and the
   ask. It is never stored as a payload copy of agent work.
 - **Check mode**: `shadow`, `live` or `off` for each check, from the configuration.
