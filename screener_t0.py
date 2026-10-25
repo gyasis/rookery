@@ -77,6 +77,45 @@ def record(conn, *, mail_id, session_id, stage, check_name, mode, decided_by, la
     return cur.lastrowid
 
 
+# --- the injection pattern set (004 T020, D18, FR-006) ---
+# Fixed, case-insensitive, compiled once. Every quantifier is bounded and none is nested, so a scan is linear in the
+# body. Phrases that need a verb of command ("send me the password") keep a normal ask about a "password policy"
+# document or a "system design" out of the set.
+_NOT_A_DOC = r"(?!\s+(?:polic|doc|rule|rotation|reset|manager|requirement|field|hash|length|storage))"
+INJECTION_PATTERNS = tuple((name, re.compile(rx, re.IGNORECASE)) for name, rx in (
+    ("ignore-instructions",
+     r"\b(?:ignore|disregard|forget)\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|your)\s+"
+     r"(?:instructions?|rules|prompts?)"),
+    ("show-system-prompt",
+     r"\b(?:show|reveal|print|repeat|display|tell|output)\b[^.\n]{0,40}\b(?:your|its|the)\s+"
+     r"(?:system|initial|hidden)\s+prompt"),
+    ("role-change",
+     r"\byou\s+are\s+now\s+(?:an?|the)\s+(?:\w+\s+){0,2}(?:assistant|ai|bot|model|persona|dan)\b"),
+    ("ask-secret",
+     r"\b(?:send|give|tell|share|post|paste|print|reveal|show|email)\b[^.\n]{0,30}\b"
+     r"(?:api[ _-]?keys?|passwords?|passwd|secret keys?|access tokens?|private keys?|credentials)\b" + _NOT_A_DOC),
+    ("pipe-to-shell", r"\b(?:curl|wget)\b[^|\n]{0,200}\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b"),
+    # 100 characters is 75 decoded bytes: past any key id or short token. A hex run (a SHA-512 is 128) is no payload.
+    ("base64-run", r"(?<![A-Za-z0-9+/])(?![0-9a-f]{100,}(?![A-Za-z0-9+/]))[A-Za-z0-9+/]{100,}={0,2}"),
+))
+
+
+def injection_scan(body):
+    """The name of the first injection pattern that the whole mail body matches, else None. The whole stored body is
+    scanned, not only `say`: the evidence of a block mail reaches the reader too."""
+    for name, rx in INJECTION_PATTERNS:
+        if rx.search(body):
+            return name
+    return None
+
+
+def injection_record(conn, session_id, mail_id, name, mode):
+    """The `injection-suspect` record of a match (live: the gate quarantined the mail). The caller commits."""
+    record(conn, mail_id=mail_id, session_id=session_id, stage="t0", check_name="injection", mode=mode,
+           decided_by="t0:injection", label="injection-suspect", action="quarantine" if mode == "live" else "none",
+           detail=name)
+
+
 # T0 records that stop a mail. A person who releases such a mail says the record was wrong (D20).
 T0_BLOCKING = ("injection-suspect", "duplicate", "over-budget", "would-deny", "denied",
                "g1-task-complete", "g2-no-gap", "g3-gap-in-scope", "g5-ask-not-allowed")

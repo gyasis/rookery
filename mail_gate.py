@@ -231,6 +231,14 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
             out = quarantine(to, "injection-suspect", _INJECTION_NOTE)
             conn.commit()
             return out
+        cfg = get_cfg()
+        imode = cfg["checks"].get("injection", "off") if cfg else "off"
+        hit = screener_t0.injection_scan(body) if imode != "off" else None
+        if hit and imode == "live":                        # 6b: T0 injection set (D18)
+            out = quarantine(to, "injection-suspect", _INJECTION_NOTE)
+            screener_t0.injection_record(conn, sid, out["msg_id"], hit, "live")
+            conn.commit()
+            return out
         if pre_store is None:
             pre_store = _screen_pre_store(conn, get_cfg)
         held = None
@@ -248,6 +256,8 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
                                           hold_reason=held[1] if held else None)
         if tcheck:
             screener_t0.thread_stored(conn, sid, thread, msg_id, tcheck, get_cfg())
+        if hit:                                            # shadow: record and deliver
+            screener_t0.injection_record(conn, sid, msg_id, hit, "shadow")
         conn.commit()
         if loop_held:
             return _result("loop-held", "loop", warning, msg_id)

@@ -359,7 +359,7 @@ no T2 command leaves the mail `escalated`, and the boss gets a notice with no bo
 **Independent Test**: in shadow mode each fixture gives its record and the gate delivers the mail. In live mode the
 injection fixture goes to quarantine, and the recipient is not woken.
 
-- [ ] T020 [US5] Files: `screener_t0.py`, `mail_gate.py`, `test_screen_injection.py`.
+- [x] T020 [US5] Files: `screener_t0.py`, `mail_gate.py`, `test_screen_injection.py`.
   Add the injection pattern set to `screener_t0.py` (D18): fixed case-insensitive patterns, one for
   each family of `fixtures/screener/injection.txt`. Call it from `mail_gate._submit` after `inspect_inbound`. A
   match writes `injection-suspect` with the pattern name in `detail`. With `injection` live, the gate puts the mail
