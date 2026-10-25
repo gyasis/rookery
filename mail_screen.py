@@ -9,14 +9,17 @@ No args                         -> list held messages awaiting a decision.
 --quarantined [--reason R]      -> list the quarantine folder.
 --export                        -> JSONL of every screened message (training/eval labels).
 
---by NAME records who decided (default: human). A classifier or the comms
-monitor passes its own id so its decisions can be scored later.
+--by NAME records who decided (default: human:<your user name>). A classifier or the comms
+monitor passes its own id so its decisions can be scored later. A person's release, quarantine
+and unquarantine also write the user calls of the screening report (screen_calls, D20).
 """
 import argparse
+import getpass
 import json
 import sys
 
 import rookery as R
+import screener_t0
 
 
 def _line(r):
@@ -38,8 +41,10 @@ def main():
     ap.add_argument("--note", default=None)
     ap.add_argument("--suggest", default=None, help="recipient the sender should use instead")
     ap.add_argument("--no-bounce", action="store_true")
-    ap.add_argument("--by", default="human", dest="decided_by")
+    ap.add_argument("--by", default=f"human:{getpass.getuser()}", dest="decided_by")
     a = ap.parse_args()
+    if a.decided_by.startswith("human:") and not screener_t0.check_decided_by(a.decided_by):
+        ap.error(f"--by {a.decided_by!r}: use letters, digits and . _ : @ / - only, with no space")
     conn = R.connect()
 
     if a.export:
@@ -60,22 +65,31 @@ def main():
             print(_line(r))
         return
 
+    def calls(action, reason=None):
+        # The calls and the status change share one transaction: the status change commits both.
+        if a.decided_by.startswith("human:"):
+            screener_t0.calls_for_action(conn, a.msg_id, action, reason, a.decided_by)
+
     try:
         if a.release:
+            calls("release")
             R.release(conn, a.msg_id, a.decided_by)
             print(f"released #{a.msg_id}")
         elif a.quarantine:
+            calls("quarantine", a.quarantine)
             bid = R.quarantine(conn, a.msg_id, a.quarantine, a.decided_by,
                                note=a.note, suggest=a.suggest, bounce=not a.no_bounce)
             print(f"quarantined #{a.msg_id} ({a.quarantine})"
                   + (f"; bounced to sender as #{bid}" if bid else ""))
         elif a.unquarantine:
+            calls("unquarantine")
             R.unquarantine(conn, a.msg_id, a.decided_by)
             print(f"unquarantined #{a.msg_id} -> pending")
         else:
             print(_line(R.get_message(conn, a.msg_id)) if R.get_message(conn, a.msg_id)
                   else f"no such message #{a.msg_id}")
     except ValueError as e:
+        conn.rollback()
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 

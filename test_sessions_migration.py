@@ -120,7 +120,7 @@ class SessionsMigration(unittest.TestCase):
         after = [tuple(r) for r in R.fetch_undelivered(self.conn, self.node)]
         self.assertTrue(self.before_pending)
         # same rows in the same order; compare the columns the old database had
-        idx = [i for i, c in enumerate(inbox_cols(self.conn)) if c != "session_id"]
+        idx = [i for i, c in enumerate(inbox_cols(self.conn)) if c not in ("session_id", "thread")]
         self.assertEqual([tuple(r[i] for i in idx) for r in after], self.before_pending)
 
 

@@ -59,6 +59,13 @@ _PY_MODULES = [
     "cli_rookery_session.py",
     # spec 002: every send path goes through the mail gate
     "mail_gate.py",
+    # spec 004: the screener chain and the broker gates
+    "rookery_names.py",
+    "screener_config.py",
+    "screener_backend.py",
+    "screener_t0.py",
+    "screener.py",
+    "cli_screen.py",
 ]
 
 

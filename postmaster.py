@@ -141,7 +141,7 @@ def _answers_open_ask(conn, row, agent_id) -> bool:
     task came after the ask and before this mail."""
     open_ask = False
     for r in conn.execute(
-            "SELECT sender, body FROM inbox WHERE id<? AND topic=? AND status<>'quarantined' "
+            "SELECT sender, body FROM inbox WHERE id<? AND topic=? AND status NOT IN ('quarantined','escalated') "
             "AND ((sender=? AND recipient=?) OR (sender=? AND recipient=?)) ORDER BY id",
             (row["id"], row["topic"], agent_id, row["sender"], row["sender"], agent_id)):
         kind = _kind_of(r["body"])
@@ -468,11 +468,11 @@ def _mention_mail(conn, mentioned, cause_row):
 
 
 def _mention_pass(conn, last_id, nodes):
-    """Scan delivered mail (every status but held and quarantined) newer than `last_id` once; notify each @name that is an identity in the
-    row's own session (FR-017). Held and quarantined mail is not scanned. `nodes` (raw node names)
+    """Scan delivered mail (every status but held, quarantined and escalated) newer than `last_id` once; notify each @name that is an identity in the
+    row's own session (FR-017). Held, quarantined and escalated mail is not scanned. `nodes` (raw node names)
     only resolves names for `legacy` rows, which have no identities. Returns the new last id."""
     for r in conn.execute(
-        "SELECT * FROM inbox WHERE id > ? AND status NOT IN ('held','quarantined') ORDER BY id", (last_id,)
+        "SELECT * FROM inbox WHERE id > ? AND status NOT IN ('held','quarantined','escalated') ORDER BY id", (last_id,)
     ).fetchall():
         last_id = max(last_id, r["id"])
         body = r["body"] or ""

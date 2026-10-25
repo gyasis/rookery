@@ -78,7 +78,8 @@ except Exception:                      # tolerate an odd import context
     _SCHEMA_SQL = None
 
 
-_INBOX_SCREENING_COLS = ("verdict TEXT", "reason TEXT", "decided_by TEXT", "decided_at INTEGER")
+_INBOX_SCREENING_COLS = ("verdict TEXT", "reason TEXT", "decided_by TEXT", "decided_at INTEGER",
+                         "thread TEXT")      # 004: the block's thread, NULL when there is none
 
 
 # D18: Rookery sessions, session-scoped identities and bindings (additive only).
@@ -151,7 +152,88 @@ CREATE TABLE IF NOT EXISTS ports (
   port     INTEGER NOT NULL UNIQUE,
   PRIMARY KEY(agent_id, name)
 );
+
+-- 004 screener chain (data-model.md). Times are integers from now(), except session_context.updated_at.
+CREATE TABLE IF NOT EXISTS session_context (
+  session_id TEXT PRIMARY KEY,
+  task       TEXT,
+  acceptance TEXT NOT NULL,
+  ask_budget INTEGER,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_scope (
+  agent_id   TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  does       TEXT NOT NULL,
+  does_not   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS threads (
+  session_id   TEXT NOT NULL,
+  thread       TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  opened_by    TEXT NOT NULL,
+  first_mail   INTEGER NOT NULL,
+  opened_at    INTEGER NOT NULL,
+  closed_by    TEXT,
+  closed_at    INTEGER,
+  close_reason TEXT,
+  PRIMARY KEY(session_id, thread)
+);
+CREATE TABLE IF NOT EXISTS screen_mail (
+  mail_id     INTEGER PRIMARY KEY,
+  session_id  TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  owner       TEXT,
+  claimed_at  INTEGER,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  retry_at    INTEGER,
+  envelope    TEXT,
+  ask_hash    TEXT,
+  final_label TEXT,
+  final_by    TEXT,
+  decided_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_screen_mail_state ON screen_mail(session_id, state);
+CREATE INDEX IF NOT EXISTS idx_screen_mail_ask ON screen_mail(ask_hash);
+CREATE TABLE IF NOT EXISTS screen_decisions (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  mail_id          INTEGER,
+  session_id       TEXT NOT NULL,
+  stage            TEXT NOT NULL,
+  check_name       TEXT NOT NULL,
+  attempt          INTEGER NOT NULL DEFAULT 1,
+  label            TEXT,
+  confidence       REAL,
+  band             TEXT,
+  mode             TEXT NOT NULL,
+  action           TEXT,
+  decided_by       TEXT NOT NULL,
+  backend_impl     TEXT,
+  failure          TEXT,
+  detail           TEXT,
+  prompt_tokens    INTEGER,
+  reasoning_tokens INTEGER,
+  created_at       INTEGER NOT NULL,
+  UNIQUE(mail_id, check_name, attempt)
+);
+CREATE INDEX IF NOT EXISTS idx_screen_decisions_mail ON screen_decisions(mail_id, stage);
+CREATE TABLE IF NOT EXISTS screen_calls (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id INTEGER NOT NULL,
+  mail_id     INTEGER NOT NULL,
+  call_label  TEXT NOT NULL,
+  verdict     TEXT NOT NULL,
+  source      TEXT NOT NULL,
+  "by"        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_screen_calls_decision ON screen_calls(decision_id, id);
 """
+
+_SCREEN_INDEXES = ("idx_screen_mail_state", "idx_screen_mail_ask", "idx_screen_decisions_mail",
+                   "idx_screen_calls_decision")
+_SCREEN_TABLES = ("session_context", "agent_scope", "threads", "screen_mail",
+                  "screen_decisions", "screen_calls")
 
 
 def _add_column(conn: sqlite3.Connection, alter_sql: str) -> None:
@@ -255,7 +337,7 @@ def hold_enabled() -> bool:
 
 
 def send(conn, sender, recipient, body, topic=None, hold=None, *, session_id,
-         commit=True):
+         commit=True, thread=None):
     """The one low-level insert. `session_id` is required and never defaults to `legacy`
     (FR-005): only mail_gate and rookery itself call this."""
     if not session_id:
@@ -263,10 +345,10 @@ def send(conn, sender, recipient, body, topic=None, hold=None, *, session_id,
     if hold is None:
         hold = hold_enabled() and sender not in SYSTEM_SENDERS
     cur = conn.execute(
-        "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at, session_id) "
-        "VALUES(?,?,?,?,?,0,?,?)",
+        "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at, session_id, thread) "
+        "VALUES(?,?,?,?,?,0,?,?,?)",
         (sender, recipient, body, topic, "held" if hold else "pending", now(),
-         session_id),
+         session_id, thread),
     )
     if commit:
         conn.commit()
@@ -304,7 +386,8 @@ def fetch_thread(conn, node):
     A persistent node's rehydrated memory — context lives in the DB, not the
     process, so a killed-and-re-upped partner resumes with full history."""
     return conn.execute(
-        "SELECT * FROM inbox WHERE sender=? OR recipient=? ORDER BY created_at, id",
+        "SELECT * FROM inbox WHERE (sender=? OR (recipient=? "
+        "AND status NOT IN ('held','quarantined','escalated'))) ORDER BY created_at, id",
         (node, node),
     ).fetchall()
 
@@ -406,9 +489,24 @@ def _decide(conn, msg_id, from_status, to_status, verdict, reason, decided_by,
         raise ValueError(f"message #{msg_id} is {state}, expected {from_status}")
 
 
+def escalate(conn, msg_id, decided_by, reason):
+    """Park a held message for a person (D14): 'held' to 'escalated'. Nothing delivers, wakes or
+    mentions it until a release or a quarantine."""
+    _decide(conn, msg_id, "held", "escalated", "escalate", reason, decided_by)
+
+
+def _decide_from_open(conn, msg_id, to_status, verdict, reason, decided_by, commit=True):
+    """_decide from 'held', else from 'escalated' (a held mail that a failed screen parked)."""
+    row = get_message(conn, msg_id)
+    start = "escalated" if row and row["status"] == "escalated" else "held"
+    _decide(conn, msg_id, start, to_status, verdict, reason, decided_by, commit=commit)
+
+
 def release(conn, msg_id, decided_by):
-    """Approve a held message: it becomes 'pending', so the postmaster wakes the recipient."""
-    _decide(conn, msg_id, "held", "pending", "release", None, decided_by)
+    """Approve a held or escalated message: it becomes 'pending', so the postmaster wakes the recipient."""
+    _decide_from_open(conn, msg_id, "pending", "release", None, decided_by, commit=False)
+    conn.execute("UPDATE threads SET status='open' WHERE first_mail=? AND status='held'", (msg_id,))   # D16
+    conn.commit()
 
 
 def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce=True,
@@ -418,8 +516,7 @@ def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce
     bounce message id, or None."""
     if reason not in QUARANTINE_REASONS:
         raise ValueError(f"reason must be one of {QUARANTINE_REASONS}, got {reason!r}")
-    _decide(conn, msg_id, "held", "quarantined", "quarantine", reason, decided_by,
-            commit=commit)
+    _decide_from_open(conn, msg_id, "quarantined", "quarantine", reason, decided_by, commit=commit)
     if note:
         conn.execute("UPDATE inbox SET note=? WHERE id=?", (note, msg_id))
         if commit:

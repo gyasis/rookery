@@ -329,12 +329,12 @@ class DbViews(tb.UpBuild):
     def ids(self):
         return dict(self.q("SELECT name, agent_id FROM identities"))
 
-    def add_mail(self, sender, recipient, body, topic, status="pending", reason=None):
+    def add_mail(self, sender, recipient, body, topic, status="pending", reason=None, thread=None):
         sid = self.q("SELECT session_id FROM rookery_sessions WHERE name='auth-fix'")[0][0]
         c = sqlite3.connect(self.db)
         c.execute("INSERT INTO inbox(sender,recipient,body,topic,status,delivered,created_at,session_id,reason,"
-                  "decided_by) VALUES(?,?,?,?,?,0,1790000000,?,?,?)",
-                  (sender, recipient, body, topic, status, sid, reason, "human" if reason else None))
+                  "decided_by,thread) VALUES(?,?,?,?,?,0,1790000000,?,?,?,?)",
+                  (sender, recipient, body, topic, status, sid, reason, "human" if reason else None, thread))
         c.commit()
         c.close()
 
@@ -409,10 +409,7 @@ class DbViews(tb.UpBuild):
         self.cli("regen")
         self.assertEqual(self.q(snap), before)  # every status, delivered and delivered_at value
         self.assertEqual(self.q("SELECT COUNT(*) FROM inbox WHERE status='pending'"), unread)
-        line = [ln for ln in self.rd("_threads/INDEX.md").splitlines() if "plan-review" in ln][0]
-        self.assertIn("scout", line)
-        self.assertIn("mapper", line)
-        self.assertIn("pending", line)
+        self.assertNotIn("plan-review", self.rd("_threads/INDEX.md"))   # no thread, so no row (FR-023)
         q = self.rd("_mail/quarantine/injection/2.md")
         self.assertIn("bad-one", q)
         self.assertIn("human", q)
@@ -434,6 +431,32 @@ class DbViews(tb.UpBuild):
         self.cli("regen")
         self.assertFalse(os.path.exists(os.path.join(self.root, "_mail/quarantine/injection/2.md")))
         self.assertTrue(os.path.exists(mine))   # regen removes only stale views that Rookery wrote
+
+    def test_view_threads_rows_status_count_escape(self):
+        self.up(self.team, "--no-launch")
+        ids = self.ids()
+        sid = self.q("SELECT session_id FROM rookery_sessions WHERE name='auth-fix'")[0][0]
+        evil = "a|b\n# x"
+        for name, st in (("alpha", "open"), (evil, "closed")):
+            c = sqlite3.connect(self.db)
+            c.execute("INSERT INTO threads(session_id,thread,status,opened_by,first_mail,opened_at) "
+                      "VALUES(?,?,?,?,?,?)", (sid, name, st, ids["scout"], 1, 1790000000))
+            c.commit()
+            c.close()
+        self.add_mail(ids["scout"], ids["mapper"], "SECRET-BODY-7", "t", thread="alpha")
+        self.add_mail(ids["mapper"], ids["scout"], "SECRET-BODY-7", "t", thread="alpha")
+        for i in range(3):
+            self.add_mail(ids["scout"], ids["mapper"], "SECRET-BODY-7", f"loose-{i}")
+        before = self.q("SELECT * FROM inbox ORDER BY id")
+        self.cli("regen")
+        self.assertEqual(self.q("SELECT * FROM inbox ORDER BY id"), before)   # no read_at or status moves
+        text = self.rd("_threads/INDEX.md")
+        rows = [ln for ln in text.splitlines() if ln.startswith("| auth-fix |")]
+        self.assertEqual(len(rows), 2, text)
+        self.assertIn("| alpha | open | 2 |", text)
+        self.assertIn("| a/b # x | closed | 0 |", text)   # pipe and newline cannot break the row
+        self.assertNotIn("loose", text)
+        self.assertNotIn("SECRET-BODY-7", text)
 
     @unittest.skipUnless(shutil.which("ste-lint"), "ste-lint missing")
     def test_view_ste_lint_passes(self):

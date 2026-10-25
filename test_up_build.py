@@ -135,7 +135,7 @@ class UpBuild(unittest.TestCase):
 
     def test_bad_team_changes_nothing(self):
         bad = json.loads(json.dumps(TEAM))
-        bad["agents"][1]["role"] = "boss"
+        bad["agents"][1]["role"] = "cook"
         self.write_team(bad)
         r = self.up(self.team, "--no-launch", code=2)
         self.assertIn("entry 1 (mapper)", r.stderr)

@@ -310,6 +310,11 @@ def _build_rows(conn, team, host, root, config):
                                             ROOT_BINDING, root, ri._now_iso()))
                 if not new_session:
                     notes.append(f"adopted session {session['name']}")
+        conn.execute("DELETE FROM session_context WHERE session_id=?", (session["session_id"],))
+        conn.execute("INSERT INTO session_context(session_id, task, acceptance, ask_budget, updated_at) "
+                     "VALUES(?,?,?,?,?)", (session["session_id"], team.get("task"),
+                                           json.dumps(team.get("acceptance") or []),
+                                           team.get("ask_budget"), ri._now_iso()))
         rows = []
         for a in team["agents"]:
             ident = ri.get_identity(conn, a["name"], session["session_id"])
@@ -335,6 +340,11 @@ def _build_rows(conn, team, host, root, config):
                  repo, a.get("task_id") if writer else None,
                  a.get("binding") or default, ri._now_iso()))
             _store_claims(conn, session["session_id"], ident["agent_id"], a.get("claims") or [])
+            sc = a.get("scope") or {}
+            conn.execute("DELETE FROM agent_scope WHERE agent_id=?", (ident["agent_id"],))
+            conn.execute("INSERT INTO agent_scope(agent_id, session_id, does, does_not) VALUES(?,?,?,?)",
+                         (ident["agent_id"], session["session_id"],
+                          json.dumps(sc.get("does") or []), json.dumps(sc.get("does_not") or [])))
             row = dict(a, agent_id=ident["agent_id"])
             if writer:
                 import rookery_worktree
@@ -343,6 +353,9 @@ def _build_rows(conn, team, host, root, config):
                     repo, a["task_id"], ri._now_iso())
             rows.append((row, state, changed))
         names = [a["name"] for a in team["agents"]]
+        conn.execute("DELETE FROM agent_scope WHERE session_id=? AND agent_id NOT IN (%s)"
+                     % ",".join("?" * len(rows)),
+                     (session["session_id"], *[r[0]["agent_id"] for r in rows]))
         for (aid,) in conn.execute(
                 "SELECT u.agent_id FROM up_agents u JOIN identities i ON i.agent_id=u.agent_id "
                 "WHERE u.session_id=? AND i.name NOT IN (%s)" % ",".join("?" * len(names)),

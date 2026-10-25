@@ -31,7 +31,7 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-Gates from `.specify/memory/constitution.md` (v1.2.1). Mark each PASS, or justify under
+Gates from `.specify/memory/constitution.md` (v1.3.0). Mark each PASS, or justify under
 Complexity Tracking:
 
 - [ ] **I. Mailroom is the record** — SQLite is the source of truth; files are generated mirrors;
@@ -51,6 +51,9 @@ Complexity Tracking:
       `ste-lint FILE --max-score 2.0 --glossary ste-glossary.txt`
 - [ ] **IX. Rookery native** — Rookery generates every agent ID and session ID; outside tools connect
       only through bindings (`kind:value`) and configuration, never core code
+- [ ] **X. No token spend without a need** — no timer, poll or empty check calls a model; cost grows
+      with mail, not agents × agents; background loops wait on an event or a slow model-free check;
+      every model path has a tested bound; small envelopes only
 - [ ] **Security** — mail is data; no secrets in DB; destructive actions need 3× confirmation
 
 ## Project Structure

@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Test double for hunch (T001). Reads the state (stdin when the first argument is -), `-q <json>`, `--raw`, `--timeout`.
+Answers from the JSON file in env ROOKERY_FAKE_HUNCH, rules `match`, `label`, `confidence`, `fail`, taken from the key
+"hunch", else "t1". The first rule whose `match` is in the state answers each question. Appends one JSON line with the
+arguments, HUNCH_MODEL, HUNCH_VOTE and HUNCH_URL to the file in env ROOKERY_FIXTURE_LOG. Never opens a socket."""
+import argparse
+import json
+import os
+import sys
+import time
+
+ap = argparse.ArgumentParser()
+ap.add_argument("state")
+ap.add_argument("-q", "--questions", required=True)
+ap.add_argument("--raw", action="store_true")
+ap.add_argument("--timeout", type=float, default=300.0)
+a, _ = ap.parse_known_args()
+state = sys.stdin.read() if a.state == "-" else a.state
+qs = json.loads(a.questions)
+
+log = os.environ.get("ROOKERY_FIXTURE_LOG")
+if log:
+    with open(log, "a") as fh:
+        fh.write(json.dumps({"argv": sys.argv[1:], "HUNCH_MODEL": os.environ.get("HUNCH_MODEL"),
+                             "HUNCH_VOTE": os.environ.get("HUNCH_VOTE"),
+                             "HUNCH_URL": os.environ.get("HUNCH_URL")}) + "\n")
+
+with open(os.environ["ROOKERY_FAKE_HUNCH"]) as fh:
+    book = json.load(fh)
+rules = book.get("hunch", book.get("t1", []))
+rule = next((r for r in rules if r.get("match", "") in state), None)
+
+fail = rule.get("fail") if rule else None
+if fail == "exit1":
+    print("hunch: HTTP 500 from the backend", file=sys.stderr)
+    sys.exit(1)
+if fail in ("sleep", "timeout"):
+    time.sleep(5)
+
+answers = {}
+for name, q in qs.items():
+    crit = q.get("criteria", [])
+    opts = list(crit)  # a list, or a dict of label to text: both give the labels
+    if rule is None:
+        answers[name] = {"error": "no candidate label appeared in top_logprobs"}
+    elif fail == "error":
+        answers[name] = {"error": "fake hunch error"}
+    else:
+        conf = float(rule.get("confidence", 1.0))
+        label = "not-a-label" if fail == "bad-answer" else rule["label"]
+        rest = [o for o in opts if o != label]
+        probs = {o: round((1 - conf) / len(rest), 4) if rest else 0.0 for o in rest}
+        probs[label] = round(conf, 4)
+        answers[name] = {"type": q.get("type", "choice"), "probabilities": probs, "confidence": round(conf, 4),
+                         "mass_captured": 1.0, "choice": label}
+print(json.dumps({"model": os.environ.get("HUNCH_MODEL", "qwen2.5:3b"), "answers": answers, "elapsed_s": 0.0}, indent=2))

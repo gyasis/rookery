@@ -11,6 +11,8 @@ import re
 import sqlite3
 
 import rookery
+import screener_config
+import screener_t0
 import security
 import turn_block as _tb
 from turn_block import _is_busy, _show, loop_limit, loop_limits
@@ -24,6 +26,15 @@ _INJECTION_NOTE = ("Rookery held this mail. The security policy found content th
 def is_system_name(name) -> bool:
     """A system sender name in any case, alone or before `@<peer>` (`Rookery`, `postmaster@x`)."""
     return isinstance(name, str) and name.split("@", 1)[0].lower() in rookery.SYSTEM_SENDERS
+
+
+def _screen_pre_store(conn, get_cfg):
+    """The default `pre_store` hook: a live T1 check in review mode `pre` holds the mail as `screening` (D13).
+    A configuration that cannot be read holds nothing: the mail must still be stored."""
+    def hook(recipient):
+        cfg = get_cfg()
+        return None if cfg is None else screener_t0.pre_hold(conn, recipient, cfg)
+    return hook
 
 
 def _begin(conn):
@@ -46,17 +57,21 @@ def _quarantine_recipient(conn, to):
     return ("rookery", True) if hit is not None else (to, False)
 
 
-def _hold_quarantine(conn, sender, sid, recipient, body, topic, reason, note, suggest, decided_by):
-    """hold + quarantine (+ note) + bounce, inside the caller's transaction. Returns
-    (msg_id, bounce_id)."""
+def _hold_quarantine(conn, sender, sid, recipient, body, topic, reason, note, suggest, decided_by,
+                     thread=None):
+    """hold + quarantine (+ note) + bounce, inside the caller's transaction. Also writes the
+    `screen_mail` row `decided` (a T0 quarantine at store: the screener skips it, FR-005, D9).
+    Returns (msg_id, bounce_id)."""
     raw_to = recipient
     recipient, masked = _quarantine_recipient(conn, raw_to)
     if masked:
         note += f' (You addressed the block to "{_show(raw_to)}".)'
     msg_id = rookery.send(conn, sender, recipient, body, topic=topic, hold=True,
-                          session_id=sid, commit=False)
+                          session_id=sid, commit=False, thread=thread)
     bounce_id = rookery.quarantine(conn, msg_id, reason, decided_by=decided_by, note=note,
                                    suggest=suggest, commit=False, bounce_limit=loop_limit())
+    conn.execute("INSERT INTO screen_mail(mail_id, session_id, state, final_label, final_by, decided_at) "
+                 "VALUES(?,?,?,?,?,?)", (msg_id, sid, "decided", reason, decided_by, rookery.now()))
     return msg_id, bounce_id
 
 
@@ -78,20 +93,35 @@ def quarantine_malformed(conn, ctx, recipient, body, topic, reason, note, sugges
     return msg_id
 
 
-def _send_counted(conn, sender_id, recipient_id, body, task, sid, topic=None):
+def _bounce(conn, sid, sender, topic, text):
+    """A plain-text bounce from `rookery` to the sender, in the caller's transaction. A bounce loop is held (FR-039).
+    Returns the bounce ID."""
+    held = rookery.count_loop(conn, sid, [("~bounce", "rookery", sender, loop_limit())])
+    bid = rookery.send(conn, "rookery", sender, text, topic=topic, session_id=sid, hold=True if held else None,
+                       commit=False)
+    if held:
+        conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
+                     ("Held: too many bounces to this agent with no human prompt in between.", bid))
+    return bid
+
+
+def _send_counted(conn, sender_id, recipient_id, body, task, sid, topic=None, thread=None, hold_reason=None):
     """Send one agent mail. Counts it against two counters in the same transaction: one for the
     (task, pair) and one task-less for the pair (so a new task name does not evade, limit
     loop_pair_limit). At either limit the mail is stored `held` with reason `loop` instead, and no
-    counter moves. Runs inside the caller's transaction. Returns (msg_id, held)."""
+    counter moves. `hold_reason` (a pre-store hold, such as `screening`) holds the mail and is counted too;
+    the reason `loop` takes precedence. Runs inside the caller's transaction. Returns (msg_id, loop_held)."""
     limit, pair_limit = loop_limits()
     held = rookery.count_loop(conn, sid, [(task, sender_id, recipient_id, limit),
                                           ("~pair", sender_id, recipient_id, pair_limit)])
     msg_id = rookery.send(conn, sender_id, recipient_id, body, topic=topic, session_id=sid,
-                          hold=True if held else None, commit=False)
+                          hold=True if held or hold_reason else None, commit=False, thread=thread)
     if held:
         conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
                      (f"Held: too many mails on task {task} (or between these agents) with "
                       "no human prompt in between.", msg_id))
+    elif hold_reason:
+        conn.execute("UPDATE inbox SET reason=? WHERE id=?", (hold_reason, msg_id))
     return msg_id, held
 
 
@@ -137,7 +167,7 @@ def _result(outcome, reason=None, warning=None, msg_id=None, bounce_id=None):
 
 
 def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
-           asked_sender=None, root=None, decided_by="gate", pre_store=None):
+           asked_sender=None, root=None, decided_by="gate", pre_store=None, thread=None, block=None):
     """The one door for mail from a local sender. Returns {"outcome", "reason", "warning",
     "msg_id", "bounce_id"}. Never raises for a mail problem. Order of checks: data-model.md."""
     if asked_sender:
@@ -151,7 +181,7 @@ def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
     result = _result("send-failed")
     try:
         result = _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store,
-                         decided_by)
+                         decided_by, thread, block)
     except Exception as exc:        # nothing is stored: _submit rolled back
         result = (_result("db-busy", warning=warning) if _is_busy(exc)
                   else _result("send-failed", f"{type(exc).__name__}: {exc}", warning))
@@ -159,7 +189,8 @@ def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
     return result
 
 
-def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store, decided_by):
+def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store, decided_by,
+            thread=None, block=None):
     if not isinstance(sender, str):
         return _result("refused", "bad-input")
     if is_system_name(sender):                             # 1
@@ -169,13 +200,33 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
     if not isinstance(to, str) or not to or not isinstance(body, str) or not body:
         return _result("refused", "bad-input")
     topic = topic or None
+    cfg_box = []
+
+    def get_cfg():   # one read for this send, shared by pre_hold and the thread check; None when unreadable or invalid
+        if not cfg_box:
+            try:
+                cfg_box.append(screener_config.load())
+            except (ValueError, OSError) as err:
+                cfg_box.append(None)
+                _tb.log_event(None, "gate", event="config-unreadable", error=str(err))
+                return None
+            try:
+                screener_config.check(cfg_box[0])   # a value that the screener refuses must not drive the gate
+            except ValueError as err:
+                cfg_box[0] = None
+                _tb.log_event(None, "gate", event="config-invalid", error=str(err))
+        return cfg_box[0]
     # Screening reads no database row, so it runs before the write lock (a slow policy must not hold it).
     verdict = security.get_policy().inspect_inbound(sender, to, body)
 
     def quarantine(recipient, reason, note, suggest=None):
         msg_id, bounce_id = _hold_quarantine(conn, sender, sid, recipient, body, topic, reason,
-                                             note, suggest, decided_by)
+                                             note, suggest, decided_by, thread)
         return _result("quarantined", reason, warning, msg_id, bounce_id)
+
+    cfg = get_cfg()    # the T0 injection scan reads no row, so it also runs before the write lock
+    imode = cfg["checks"].get("injection", "off") if cfg else "off"
+    hit = screener_t0.injection_scan(body) if imode != "off" else None
 
     _begin(conn)
     try:
@@ -184,27 +235,78 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
             recipient, problem = _find_recipient(conn, sid, sender, to)
             if problem:
                 out = quarantine(to, *problem)
+                gmode = cfg["checks"].get("gates", "off") if cfg else "off"
+                if gmode != "off":                         # G5: a B1 failure, the mail is already quarantined
+                    screener_t0.gates_record(conn, sid, out["msg_id"], screener_t0.gate_anomalies(block, False, True),
+                                             gmode)
                 conn.commit()
                 return out
         if not verdict:                                    # 6
             out = quarantine(to, "injection-suspect", _INJECTION_NOTE)
             conn.commit()
             return out
+        if hit and imode == "live":                        # 6b: T0 injection set (D18)
+            out = quarantine(to, "injection-suspect", _INJECTION_NOTE)
+            screener_t0.injection_record(conn, sid, out["msg_id"], hit, "live")
+            conn.commit()
+            return out
+        if pre_store is None:
+            pre_store = _screen_pre_store(conn, get_cfg)
+        held = None
         if pre_store is not None:
             held = pre_store(conn.execute("SELECT * FROM identities WHERE agent_id=?",
                                           (recipient,)).fetchone())
-            if held:
-                msg_id = rookery.send(conn, sender, recipient, body, topic=topic, hold=True,
-                                      session_id=sid, commit=False)
-                conn.execute("UPDATE inbox SET reason=? WHERE id=?", (held[1], msg_id))
-                conn.commit()
-                return _result("sent", held[1], warning, msg_id)
+        tcheck = screener_t0.thread_check(conn, sid, thread, sender, held is not None, get_cfg()) if thread else None
+        if tcheck == "denied":                             # B3 live (D16): not stored, a bounce, no wake
+            out = _result("refused", "thread-closed", warning,
+                          bounce_id=_bounce(conn, sid, sender, topic, screener_t0.THREAD_BOUNCE.format(thread=_show(thread))))
+            conn.commit()
+            return out
         key = task or topic or "-"                         # 7, 8
-        msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic)
+        digest = budget = dup = None
+        reason = held[1] if held else None
+        if block and block.get("kind") == "ask" and isinstance(block.get("say"), str):   # B2 (D17)
+            digest = screener_t0.ask_hash(block["say"])
+            budget, dup = screener_t0.ask_check(conn, sid, sender, recipient, key, digest, get_cfg())
+            if budget and cfg["checks"]["budget"] == "live":     # loop > budget > duplicate > screening
+                reason = "budget"
+            elif dup and cfg["checks"]["duplicate"] == "live":
+                reason = "duplicate"
+        gmode = cfg["checks"].get("gates", "off") if cfg else "off"
+        anomalies = screener_t0.gate_anomalies(block, budget is not None, False) if gmode != "off" else []
+        if anomalies and gmode == "live" and reason not in ("budget", "duplicate"):
+            reason = "gates"                               # loop > budget > duplicate > gates > screening
+        msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic, thread, hold_reason=reason)
+        bounce_id = None
+        if digest:
+            screener_t0.ask_stored(conn, sid, msg_id, digest, budget, dup, cfg, loop_held)
+            if not loop_held and reason == "budget":
+                bounce_id = _bounce(conn, sid, sender, topic, screener_t0.BUDGET_BOUNCE.format(
+                    task=_show(key), limit=budget[1]))
+            elif not loop_held and reason == "duplicate":
+                bounce_id = _bounce(conn, sid, sender, topic, screener_t0.DUPLICATE_BOUNCE.format(
+                    recipient=_show(to), time=screener_t0.duplicate_time(dup)))
+        if tcheck:
+            screener_t0.thread_stored(conn, sid, thread, msg_id, tcheck, get_cfg())
+        gated = bool(anomalies) and not loop_held          # a loop hold drops the gate records, as for B2
+        if gated:
+            parked = reason == "gates"
+            screener_t0.gates_record(conn, sid, msg_id, anomalies, gmode, "escalate" if parked else "none")
+            if parked:                                     # same transaction as the store; the notice follows the commit
+                why = "gates found " + ", ".join(a[0] for a in anomalies)
+                rookery._decide(conn, msg_id, "held", "escalated", "escalate", why, "t0:gates", commit=False)
+        if hit:                                            # shadow: record and deliver
+            screener_t0.injection_record(conn, sid, msg_id, hit, "shadow")
         conn.commit()
+        if gated and parked:
+            try:
+                screener_t0.notify_escalated(conn, msg_id, why)
+            except Exception as err:                       # the escalation stands; a failed notice is logged
+                conn.rollback()
+                _tb.log_event(None, "gate", event="notice-failed", msg_id=msg_id, error=str(err))
         if loop_held:
             return _result("loop-held", "loop", warning, msg_id)
-        return _result("sent", None, warning, msg_id)
+        return _result("sent", reason, warning, msg_id, bounce_id)
     except BaseException:
         conn.rollback()
         raise

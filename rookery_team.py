@@ -6,7 +6,7 @@ import subprocess
 import rookery_identity
 
 HARNESSES = ("claude", "pi", "omp")
-ROLES = ("reader", "writer")
+ROLES = ("reader", "writer", "boss")  # a boss reads: no claims, no repo (D14, FR-029)
 
 
 class TeamError(Exception):
@@ -98,6 +98,10 @@ def load(path, config=None) -> dict:
         err(None, None, "The task must be text.")
     if "acceptance" in team and not _is_text_list(team["acceptance"]):
         err(None, None, "The acceptance must be a list of text.")
+    if "ask_budget" in team:
+        b = team["ask_budget"]
+        if not isinstance(b, int) or isinstance(b, bool) or b < 1:
+            err(None, None, "The ask_budget must be a positive whole number.")
     agents = team.get("agents")
     if agents is None:
         err(None, None, "The team file has no agents list.")
@@ -136,8 +140,10 @@ def load(path, config=None) -> dict:
             problems.append("The harness must be claude, pi or omp.")
         role = a.get("role")
         if role not in ROLES:
-            problems.append("The role must be reader or writer.")
+            problems.append("The role must be reader, writer or boss.")
         repo = None
+        if role == "boss" and (a.get("claims") or a.get("repo") is not None or a.get("task_id") is not None):
+            problems.append("A boss reads files and holds no claims. Remove claims, repo and task_id.")
         if role == "writer":
             task_id = a.get("task_id")
             if not isinstance(task_id, str) or not task_id:

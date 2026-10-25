@@ -24,6 +24,7 @@ _LOG_FILES = {
     "turn-block": os.path.join("logs", "turn-block.jsonl"),
     "postmaster": os.path.join("postmaster", "postmaster.jsonl"),
     "gate": os.path.join("logs", "gate.jsonl"),
+    "screener": os.path.join("logs", "screener.jsonl"),
 }
 _LOGGERS: dict = {}   # log path -> Logger, one handler per file
 
@@ -125,6 +126,11 @@ def _schema_current(conn: sqlite3.Connection) -> bool:
     (checked with reads only, so it works while another connection writes)."""
     have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {"rookery_sessions", "identities", "bindings", "inbox", "loop_counts"} <= have:
+        return False
+    if not set(rookery._SCREEN_TABLES) <= have:     # 004: hooks write the gate records (D25)
+        return False
+    idx = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    if not set(rookery._SCREEN_INDEXES) <= idx:     # an interrupted migration re-runs
         return False
     cols = {r[1] for r in conn.execute("PRAGMA table_info(inbox)")}
     if "session_id" not in cols or not {c.split()[0] for c in rookery._INBOX_SCREENING_COLS} <= cols:
@@ -626,7 +632,7 @@ def _dispatch_block(conn, raw, ctx):
         res = mail_gate.submit(conn, path="block", principal=(ctx["session"], sender),
                                raw_sender=sender["agent_id"], to=to, body=compact, topic=task,
                                task=task, asked_sender=None, root=root,
-                               decided_by="turn-block-parser")
+                               decided_by="turn-block-parser", thread=block.get("thread"), block=block)
         outcome, msg_id = res["outcome"], res["msg_id"]
         if outcome == "quarantined":
             return done(block, "quarantined", msg_id, res["reason"])
@@ -638,6 +644,12 @@ def _dispatch_block(conn, raw, ctx):
                     return done(block, "loop-held", msg_id, f"loop (could not keep the block: {werr})")
             return done(block, "loop-held", msg_id, "loop")
         if outcome == "sent":
+            if block["kind"] == "handoff" and block.get("status") == "done" and block.get("thread"):
+                # Only the agent that opened the thread can end it this way (D16, FR-022a).
+                conn.execute("UPDATE threads SET status='closed', closed_by=?, closed_at=?, close_reason='done' "
+                             "WHERE session_id=? AND thread=? AND opened_by=? AND status!='closed'",
+                             (f"handoff:{sender['name']}", rookery.now(), sid, block["thread"], sender["agent_id"]))
+                conn.commit()
             return done(block, "sent", msg_id)
         # db-busy, send-failed, refused: nothing stored; keep the block
         reason = res["reason"] or "database is busy"
