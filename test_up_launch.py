@@ -42,7 +42,7 @@ class UpLaunch(unittest.TestCase):
         tb.git(self.repo, "add", ".")
         tb.git(self.repo, "commit", "-q", "-m", "init")
         self.team = os.path.join(t, "team.json")
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith("ROOKERY_")}
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("ROOKERY_") and k != "HERDR_WORKSPACE_ID"}
         self.env.update(HOME=self.home, ROOKERY_DB=self.db, ROOKERY_ROOT=self.root)
         self.log = os.path.join(self.home, "tmux.log")
         self.rec = os.path.join(self.home, "herdr.log")
@@ -128,6 +128,34 @@ class UpLaunch(unittest.TestCase):
         self.assertTrue(rows[1][3].startswith("claude --settings "))
         self.assertIn("--settings", rows[1][3])
         self.assertIn(self.repo, rows[1][3])
+
+    def test_launch_herdr_opens_the_tab_in_the_callers_workspace(self):
+        r, out = self.go(team(agent("scout", binding="herdr-pane")), env=dict(self.env, HERDR_WORKSPACE_ID="w5"))
+        self.assertEqual(out["agents"][0]["launch"], "started")
+        row = self.calls(self.rec)[0]
+        i = row.index("--workspace")
+        self.assertEqual(row[i + 1], "w5")
+
+    def test_launch_herdr_outside_herdr_has_no_workspace_flag(self):
+        r, out = self.go(team(agent("scout", binding="herdr-pane")))
+        self.assertEqual(out["agents"][0]["launch"], "started")
+        self.assertNotIn("--workspace", self.calls(self.rec)[0])
+
+    def test_launch_env_token_outside_a_group_must_be_set(self):
+        self.config({"launch": {"herdr-pane": {"env_flag": "--env", "steps": [
+            {"argv": ["herdr", "tab", "create", "--workspace", "{$ROOKERY_TEST_NOPE}"],
+             "capture": "\"pane_id\"\\s*:\\s*\"([^\"]+)\""}]}}})
+        r, out = self.go(team(agent("scout", binding="herdr-pane")))
+        a = out["agents"][0]
+        self.assertTrue(a["launch"].startswith("not started"), a["launch"])
+        self.assertIn("{$ROOKERY_TEST_NOPE} is not set", a["launch"])
+        self.assertEqual(self.calls(self.rec), [])
+
+    def test_launch_env_value_is_not_reexpanded(self):
+        env = dict(self.env, HERDR_WORKSPACE_ID="{pane}")
+        r, out = self.go(team(agent("scout", binding="herdr-pane")), env=env)
+        row = self.calls(self.rec)[0]
+        self.assertEqual(row[row.index("--workspace") + 1], "{pane}")
 
     def test_launch_writer_and_pi(self):
         spec = team(agent("w", role="writer", task_id="T1"),

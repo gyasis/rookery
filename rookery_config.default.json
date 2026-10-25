@@ -55,6 +55,7 @@
       "--label",
       "{label}",
       "--no-focus",
+      ["--workspace", "{$HERDR_WORKSPACE_ID}"],
       "{env}"
      ],
      "capture": "\"pane_id\"\\s*:\\s*\"([^\"]+)\""

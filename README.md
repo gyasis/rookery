@@ -366,6 +366,8 @@ What it builds:
 
 Rookery starts each pane with the steps in the configuration (`launch` and `alive`). Rookery has no code for one terminal tool. To use another tool, add a binding kind to the configuration. The defaults cover `herdr-pane` and `tmux-pane`.
 
+A step can use `{$NAME}`: Rookery fills it from the environment of the shell that runs `rookery up`. Put such a token in a list to make it optional. Rookery drops the whole list when the variable is not set. The `herdr-pane` default uses `["--workspace", "{$HERDR_WORKSPACE_ID}"]`, so herdr opens the tabs in the workspace where you ran `rookery up`. Outside herdr, Rookery drops the flag. If your `~/.rookery/config.json` has its own `launch` block, add this list to it yourself.
+
 First start: Claude Code shows a trust dialog in each new folder. A reader also shows an import dialog. You answer both one time in each new pane. Rookery does not edit `~/.claude.json`. The postmaster does not wake an agent until its first turn has started.
 
 Mail: agents that `rookery up` starts use the CLI only: `rookery send`, `rookery inbox` and `rookery ack`.

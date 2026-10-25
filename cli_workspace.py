@@ -93,7 +93,7 @@ def _agent_cwd(a, ws):
     return a.get("_worktree") or ws
 
 
-_PLACEHOLDER = re.compile(r"\{(cwd|label|pane|value)\}")
+_PLACEHOLDER = re.compile(r"\{(cwd|label|pane|value)\}|\{\$([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class _LaunchFail(Exception):
@@ -101,14 +101,25 @@ class _LaunchFail(Exception):
 
 
 def _fill(token, values):
-    """Fill {cwd} {label} {pane} {value} in ONE pass, so a filled value that holds '{pane}' stays text.
-    A whole-element {env} or {cmd} is not handled here: _launch_agent expands it in place to many elements."""
+    """Fill {cwd} {label} {pane} {value} and {$NAME} (the caller's environment) in ONE pass, so a filled value
+    that holds '{pane}' stays text. A whole-element {env} or {cmd} is not handled here: _launch_agent expands it
+    in place to many elements."""
     def one(m):
+        if m.group(2):
+            v = os.environ.get(m.group(2))
+            if not v:
+                raise _LaunchFail(f"{{${m.group(2)}}} is not set. Put the token in a list to make it optional.")
+            return v
         v = values.get(m.group(1))
         if v is None:
             raise _LaunchFail("{" + m.group(1) + "}")
         return v
     return _PLACEHOLDER.sub(one, token)
+
+
+def _env_unset(group):
+    """True when a token of this optional group names a {$NAME} that the caller's environment does not set."""
+    return any(not os.environ.get(m.group(2)) for t in group for m in _PLACEHOLDER.finditer(t) if m.group(2))
 
 
 def _harness_cmd(a, ws, root, host, hcfg):
@@ -161,11 +172,15 @@ def _alive(conn, config, session, a, kind):
 
 def _expand_step(n, kind, step, values, env, cmd):
     if not isinstance(step, dict) or not isinstance(step.get("argv"), list) \
-            or not all(isinstance(t, str) for t in step["argv"]):
+            or not all(isinstance(t, str) or (isinstance(t, list) and all(isinstance(g, str) for g in t))
+                       for t in step["argv"]):
         raise _LaunchFail(f"invalid launch config for {kind}: step {n} needs an argv list of text")
     argv = []
     for tok in step["argv"]:
-        if tok == "{env}":
+        if isinstance(tok, list):  # an optional group: dropped whole when a {$NAME} in it is not set
+            if not _env_unset(tok):
+                argv += [_fill(t, values) for t in tok]
+        elif tok == "{env}":
             if env is None:
                 raise _LaunchFail(f"launch config for {kind} has no env_flag")
             argv += env
