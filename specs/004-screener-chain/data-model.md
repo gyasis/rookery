@@ -77,7 +77,7 @@ One row for each screened mail. The claim and the restart point.
 |---|---|---|
 | `mail_id` | INTEGER PK | inbox ID |
 | `session_id` | TEXT NOT NULL | |
-| `state` | TEXT NOT NULL | `claimed`, `decided`, `failed`, `escalated` |
+| `state` | TEXT NOT NULL | `queued`, `claimed`, `decided`, `failed`, `escalated` |
 | `owner` | TEXT NULL | `<host>:<pid>:<random>` of the claiming process |
 | `claimed_at` | INTEGER NULL | |
 | `attempts` | INTEGER NOT NULL DEFAULT 0 | model tries |
@@ -87,6 +87,8 @@ One row for each screened mail. The claim and the restart point.
 | `final_label` | TEXT NULL | the label that acted, or the last label in shadow mode |
 | `final_by` | TEXT NULL | `decided_by` of that label |
 | `decided_at` | INTEGER NULL | |
+
+`queued`: the gate stored the ask hash; the screener has not claimed the mail yet. The queue treats it as unclaimed.
 
 The gate writes the row with state `decided` for a mail that only T0 decides (a T0 quarantine at store). The
 screener does not screen that mail. The screener claims the other mails with `INSERT OR IGNORE`. A claim older

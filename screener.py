@@ -236,7 +236,7 @@ def queue(conn, sid, cutoff, limit=None, oldest=None):
     rows = conn.execute(
         "SELECT i.id, i.sender, i.created_at FROM inbox i LEFT JOIN screen_mail m ON m.mail_id=i.id "
         "WHERE i.session_id=? AND i.created_at>=? "
-        "AND (m.mail_id IS NULL OR (m.state='claimed' AND m.claimed_at<?) "
+        "AND (m.mail_id IS NULL OR m.state='queued' OR (m.state='claimed' AND m.claimed_at<?) "
         "OR (m.state='escalated' AND m.retry_at<=? AND i.status='escalated')) "
         "ORDER BY i.created_at, i.id", (sid, oldest or 0, cutoff, rookery.now())).fetchall()
     out = [r for r in rows if not (mail_gate.is_system_name(r["sender"])
@@ -280,6 +280,9 @@ def _claim(conn, mail_id, sid, owner, cutoff, cfg=None):
     try:
         cur = conn.execute("INSERT OR IGNORE INTO screen_mail(mail_id, session_id, state, owner, claimed_at, attempts) "
                            "VALUES(?,?,'claimed',?,?,1)", (mail_id, sid, owner, now))
+        if cur.rowcount == 0:   # a `queued` row (the gate stored an ask hash, T021): this claim takes it
+            cur = conn.execute("UPDATE screen_mail SET state='claimed', owner=?, claimed_at=?, attempts=1 "
+                               "WHERE mail_id=? AND state='queued'", (owner, now, mail_id))
         if cur.rowcount == 0:
             dead = conn.execute("SELECT 1 FROM screen_mail WHERE mail_id=? AND state='claimed' AND claimed_at<? "
                                 "AND attempts>=?", (mail_id, cutoff, MAX_ATTEMPTS)).fetchone()

@@ -4,8 +4,12 @@ record() inserts one screen_decisions row and writes one gate-log line with path
 check_decided_by() matches the five forms of FR-010. Standard library plus turn_block only: the hook path
 imports this module, so it never imports screener, screener_backend or promptchain.
 """
+import hashlib
 import math
+import os
 import re
+import time
+import unicodedata
 
 import rookery
 import turn_block
@@ -81,7 +85,8 @@ def record(conn, *, mail_id, session_id, stage, check_name, mode, decided_by, la
 # Fixed, case-insensitive, compiled once. Every quantifier is bounded and none is nested, so a scan is linear in the
 # body. Phrases that need a verb of command ("send me the password") keep a normal ask about a "password policy"
 # document or a "system design" out of the set.
-_NOT_A_DOC = r"(?!\s+(?:polic|doc|rule|rotation|reset|manager|requirement|field|hash|length|storage))"
+_NOT_A_DOC = (r"(?!\s+(?:polic|doc|rule|rotation|reset|manager|requirement|field|hash|length|storage|page|expir|screen|form|"
+              r"login|dialog|button|section|tab\b|list|table|column|file))")
 INJECTION_PATTERNS = tuple((name, re.compile(rx, re.IGNORECASE)) for name, rx in (
     ("ignore-instructions",
      r"\b(?:ignore|disregard|forget)\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|your)\s+"
@@ -92,17 +97,32 @@ INJECTION_PATTERNS = tuple((name, re.compile(rx, re.IGNORECASE)) for name, rx in
     ("role-change",
      r"\byou\s+are\s+now\s+(?:an?|the)\s+(?:\w+\s+){0,2}(?:assistant|ai|bot|model|persona|dan)\b"),
     ("ask-secret",
-     r"\b(?:send|give|tell|share|post|paste|print|reveal|show|email)\b[^.\n]{0,30}\b"
+     r"\b(?:send|give|tell|share|post|paste|print|reveal|show|email)\b"
+     r"(?:(?!\b(?:whether|if|how|why|what|which|when|where)\b)[^.\n]){0,30}\b"
      r"(?:api[ _-]?keys?|passwords?|passwd|secret keys?|access tokens?|private keys?|credentials)\b" + _NOT_A_DOC),
     ("pipe-to-shell", r"\b(?:curl|wget)\b[^|\n]{0,200}\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b"),
     # 100 characters is 75 decoded bytes: past any key id or short token. A hex run (a SHA-512 is 128) is no payload.
-    ("base64-run", r"(?<![A-Za-z0-9+/])(?![0-9a-f]{100,}(?![A-Za-z0-9+/]))[A-Za-z0-9+/]{100,}={0,2}"),
+    # A real payload has a digit, an upper and a lower letter, and under 3 "/" (a long path, URL or identifier does not).
+    ("base64-run", r"(?<![A-Za-z0-9+/])(?![0-9a-f]{100,}(?![A-Za-z0-9+/]))(?=[A-Za-z0-9+/]*\d)(?=[A-Za-z0-9+/]*[A-Z])"
+                   r"(?=[A-Za-z0-9+/]*[a-z])(?![A-Za-z0-9+]*/[A-Za-z0-9+]*/[A-Za-z0-9+]*/)[A-Za-z0-9+/]{100,}={0,2}"),
 ))
+
+
+# NFKC does not fold a Cyrillic or Greek letter into its Latin look-alike, so the most common ones are mapped here.
+# Small on purpose: only the look-alikes of Latin letters that a pattern uses.
+_LOOKALIKES = str.maketrans("аеорсухіАЕОРСУХІοαε", "aeopcyxiAEOPCYXIoae")
+
+
+def _fold(body):
+    """NFKC, no format characters (category Cf, such as a zero-width space), common look-alike letters as Latin."""
+    text = unicodedata.normalize("NFKC", body)
+    return "".join(c for c in text if unicodedata.category(c) != "Cf").translate(_LOOKALIKES)
 
 
 def injection_scan(body):
     """The name of the first injection pattern that the whole mail body matches, else None. The whole stored body is
     scanned, not only `say`: the evidence of a block mail reaches the reader too."""
+    body = _fold(body)
     for name, rx in INJECTION_PATTERNS:
         if rx.search(body):
             return name
@@ -240,6 +260,78 @@ def thread_stored(conn, session_id, thread, mail_id, verdict, cfg):
     elif verdict == "would-deny":
         record(conn, mail_id=mail_id, session_id=session_id, stage="t0", check_name="thread", mode="shadow",
                decided_by="t0:thread", label="would-deny", detail=f"thread={thread}"[:500])
+
+
+# --- B2: the ask budget and duplicates (004 T021, D17, FR-025, FR-026) ---
+# Only block mail of kind `ask` counts. A plain mail has no kind and no `say`, and the 002 loop breaker already
+# limits it. The hash of an ask lives in screen_mail.ask_hash, so the gate writes a screen_mail row for each ask. That
+# row has the state `queued`: the screener queue and _claim take a `queued` row like a mail with no row, so T1 still
+# screens the ask. Precedence when holds meet: loop (002) > budget > duplicate > screening. The loop hold comes from
+# _send_counted; the gate gives the budget or duplicate reason as the hold reason, and drops both B2 records and
+# the bounce when the loop breaker holds the mail.
+BUDGET_BOUNCE = ("Rookery held this ask. The task {task} has used its budget of {limit} asks. "
+                 "Ask the boss for more budget, or finish the task.")
+DUPLICATE_BOUNCE = ("Rookery held this ask. You sent the same question to {recipient} at {time}. "
+                    "Wait for that answer.")
+
+
+def normalize_say(say):
+    """Lower case, letters and digits only, single spaces (D17)."""
+    return " ".join("".join(c if c.isalnum() else " " for c in say.lower()).split())
+
+
+def ask_hash(say):
+    """The hash of an ask. A say with no letter or digit (`???`, an emoji) has no text to compare, so it gets a random
+    hash: it counts for the budget and is never a duplicate."""
+    text = normalize_say(say)
+    return hashlib.sha256(text.encode("utf-8") if text else b"\0" + os.urandom(16)).hexdigest()
+
+
+# An ask that B2 itself held does not count: a retry of it must not use budget or refresh the duplicate window.
+_NOT_B2_HELD = "NOT (i.status='held' AND i.reason IN ('duplicate','budget'))"
+
+
+def ask_check(conn, sid, sender, recipient, task, digest, cfg):
+    """The B2 look-up for one ask that is not stored yet: (budget, duplicate). budget is (count, limit) when this ask
+    is over the limit, else None. duplicate is the created_at of the earliest earlier mail in the window, else None. A check that is `off`
+    (or a cfg of None) is not run. One indexed query for each check."""
+    if cfg is None:
+        return None, None
+    budget = dup = None
+    if cfg["checks"].get("budget", "off") != "off":
+        row = conn.execute("SELECT ask_budget FROM session_context WHERE session_id=?", (sid,)).fetchone()
+        limit = row[0] if row and row[0] is not None else cfg["ask_budget"]
+        n = conn.execute("SELECT COUNT(*) FROM screen_mail m JOIN inbox i ON i.id=m.mail_id "
+                         "WHERE m.session_id=? AND m.ask_hash IS NOT NULL AND i.topic=? AND " + _NOT_B2_HELD,
+                         (sid, task)).fetchone()[0]
+        if n >= limit:
+            budget = (n + 1, limit)
+    if cfg["checks"].get("duplicate", "off") != "off":
+        row = conn.execute("SELECT MIN(i.created_at) FROM screen_mail m JOIN inbox i ON i.id=m.mail_id "
+                           "WHERE m.ask_hash=? AND i.session_id=? AND i.sender=? AND i.recipient=? AND i.topic=? "
+                           "AND i.created_at>=? AND " + _NOT_B2_HELD,
+                           (digest, sid, sender, recipient, task, rookery.now() - cfg["duplicate_window_s"])).fetchone()
+        dup = row[0]
+    return budget, dup
+
+
+def ask_stored(conn, sid, mail_id, digest, budget, dup, cfg, loop_held=False):
+    """After the gate stores an ask: its screen_mail row (`queued`, with the hash), and the B2 records unless the loop
+    breaker held the mail. The mode of a check is its own. The caller commits."""
+    conn.execute("INSERT INTO screen_mail(mail_id, session_id, state, ask_hash) VALUES(?,?,'queued',?)",
+                 (mail_id, sid, digest))
+    if loop_held:
+        return
+    for hit, check, label, detail in ((budget, "budget", "over-budget", budget and f"{budget[0]} of {budget[1]}"),
+                                      (dup, "duplicate", "duplicate", digest[:12])):
+        if hit:
+            mode = cfg["checks"][check]
+            record(conn, mail_id=mail_id, session_id=sid, stage="t0", check_name=check, mode=mode,
+                   decided_by=f"t0:{check}", label=label, action="hold" if mode == "live" else "none", detail=detail)
+
+
+def duplicate_time(created_at):
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(created_at))
 
 
 def _name(conn, who):

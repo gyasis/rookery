@@ -368,7 +368,7 @@ injection fixture goes to quarantine, and the recipient is not woken.
   delivers the mail (SC-006). Live: quarantined, and a postmaster wake pass does not wake the recipient (R17).
   `inspect_inbound` still acts as before.
   Verify: `python3 -m unittest test_screen_injection test_gate test_wake test_screen_t0 -v`
-- [ ] T021 [US5] Files: `screener_t0.py`, `mail_gate.py`, `test_screen_b2.py`.
+- [x] T021 [US5] Files: `screener_t0.py`, `mail_gate.py`, `test_screen_b2.py`.
   Add the ask budget and duplicates to `screener_t0.py` (D17, FR-025, FR-026). Budget: count the
   asks of the session and task. The limit is `session_context.ask_budget`, else `screener.ask_budget`. Over the
   limit writes `over-budget`. Duplicate: normalize the `say` text (lower case, letters, digits and single spaces).

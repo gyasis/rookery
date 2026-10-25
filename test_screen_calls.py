@@ -580,6 +580,8 @@ class Text(unittest.TestCase):
              "'ghost' is not a check. Use one of injection, duplicate.", "'fast' is not a mode. Use one of shadow, live, off.",
              "Rookery delivered mail 5 from swe to researcher. The screener says unneeded. "
              "Use rookery screen review to check it.",
+             S.BUDGET_BOUNCE.format(task="T-7", limit=20),
+             S.DUPLICATE_BOUNCE.format(recipient="researcher", time="2026-10-25 10:30 UTC"),
              "Close a thread.", "Close a thread. It stays closed.", "Close it as the boss of the session.",
              "Closed thread th-1.", "Thread th-1 is already closed.",
              "'swe' is not the boss of session 'alpha'.", "Thread 'x' does not exist in session 'alpha'."]

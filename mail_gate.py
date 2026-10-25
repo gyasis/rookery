@@ -218,6 +218,10 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
                                              note, suggest, decided_by, thread)
         return _result("quarantined", reason, warning, msg_id, bounce_id)
 
+    cfg = get_cfg()    # the T0 injection scan reads no row, so it also runs before the write lock
+    imode = cfg["checks"].get("injection", "off") if cfg else "off"
+    hit = screener_t0.injection_scan(body) if imode != "off" else None
+
     _begin(conn)
     try:
         recipient = to
@@ -231,9 +235,6 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
             out = quarantine(to, "injection-suspect", _INJECTION_NOTE)
             conn.commit()
             return out
-        cfg = get_cfg()
-        imode = cfg["checks"].get("injection", "off") if cfg else "off"
-        hit = screener_t0.injection_scan(body) if imode != "off" else None
         if hit and imode == "live":                        # 6b: T0 injection set (D18)
             out = quarantine(to, "injection-suspect", _INJECTION_NOTE)
             screener_t0.injection_record(conn, sid, out["msg_id"], hit, "live")
@@ -252,8 +253,25 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
             conn.commit()
             return out
         key = task or topic or "-"                         # 7, 8
-        msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic, thread,
-                                          hold_reason=held[1] if held else None)
+        digest = budget = dup = None
+        reason = held[1] if held else None
+        if block and block.get("kind") == "ask" and isinstance(block.get("say"), str):   # B2 (D17)
+            digest = screener_t0.ask_hash(block["say"])
+            budget, dup = screener_t0.ask_check(conn, sid, sender, recipient, key, digest, get_cfg())
+            if budget and cfg["checks"]["budget"] == "live":     # loop > budget > duplicate > screening
+                reason = "budget"
+            elif dup and cfg["checks"]["duplicate"] == "live":
+                reason = "duplicate"
+        msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic, thread, hold_reason=reason)
+        bounce_id = None
+        if digest:
+            screener_t0.ask_stored(conn, sid, msg_id, digest, budget, dup, cfg, loop_held)
+            if not loop_held and reason == "budget":
+                bounce_id = _bounce(conn, sid, sender, topic, screener_t0.BUDGET_BOUNCE.format(
+                    task=_show(key), limit=budget[1]))
+            elif not loop_held and reason == "duplicate":
+                bounce_id = _bounce(conn, sid, sender, topic, screener_t0.DUPLICATE_BOUNCE.format(
+                    recipient=_show(to), time=screener_t0.duplicate_time(dup)))
         if tcheck:
             screener_t0.thread_stored(conn, sid, thread, msg_id, tcheck, get_cfg())
         if hit:                                            # shadow: record and deliver
@@ -261,9 +279,7 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
         conn.commit()
         if loop_held:
             return _result("loop-held", "loop", warning, msg_id)
-        if held:
-            return _result("sent", held[1], warning, msg_id)
-        return _result("sent", None, warning, msg_id)
+        return _result("sent", reason, warning, msg_id, bounce_id)
     except BaseException:
         conn.rollback()
         raise
