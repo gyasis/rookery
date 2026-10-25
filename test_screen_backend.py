@@ -354,6 +354,13 @@ class Answers(unittest.TestCase):
         got = self.parse({"choice": "a", "probabilities": {"a": 1.0, "b": 0.0}})
         self.assertTrue(0 <= got.confidence <= 1 and math.isfinite(got.confidence))
 
+    def test_zero_output_tokens_records_zero_reasoning(self):
+        def usage(u):
+            return SB._answer({"answers": {"route": {"choice": "a", "confidence": 0.5}}, "usage": u}, "route", ["a"], "x").usage
+        self.assertEqual(usage({"input_tokens": 157, "output_tokens": 0}), {"prompt_tokens": 157, "reasoning_tokens": 0})
+        self.assertIsNone(usage({"input_tokens": 157, "output_tokens": 5})["reasoning_tokens"])  # unknown, not 0
+        self.assertEqual(usage({"output_tokens": 0, "reasoning_tokens": 3})["reasoning_tokens"], 3)
+
     def test_reply_shapes(self):
         for reply in ([], None, {"answers": []}, {"answers": {"route": []}}):
             self.bad(lambda r=reply: SB._answer(r, "route", ["a"], "x"))

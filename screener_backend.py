@@ -81,7 +81,10 @@ def _answer(reply, question, labels, impl):
     if not isinstance(ans, dict) or "error" in ans or ans.get("choice") not in labels:
         raise BackendError("bad-answer")
     u = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
-    usage = {"prompt_tokens": u.get("prompt_tokens", u.get("input_tokens")), "reasoning_tokens": u.get("reasoning_tokens")}
+    reasoning = u.get("reasoning_tokens")
+    if reasoning is None and u.get("output_tokens") == 0:
+        reasoning = 0  # /v1/systemone reports output_tokens only; 0 emitted tokens is 0 reasoning (SC-013)
+    usage = {"prompt_tokens": u.get("prompt_tokens", u.get("input_tokens")), "reasoning_tokens": reasoning}
     return Answer(ans["choice"], _confidence(ans), usage, impl)
 
 

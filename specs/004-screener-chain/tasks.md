@@ -448,7 +448,7 @@ These steps have no checkbox, so dev-kid does not schedule them.
 - The final audit: one adversarial audit of the whole branch, with Fable.
 - Quickstart 5, the live check on the model host (SC-002, SC-013). Run it in an isolated herdr workspace with a
   scratch database. Run it once under miniconda and once under `/usr/bin/python3`. Record both outputs in
-  quickstart.md. Each stays UNTESTED until it runs.
+  quickstart.md. Each stays UNTESTED until it runs. Done 2026-10-25: both runs pass (quickstart.md section 5).
 - Update the OKF bundle (D24): R16, R17 and R18 become proven with their test names, and R15 becomes built. The
   R18 row text becomes "held, bounce". Add the design notes to `design/screener-chain.md`. This is outside the
   repo.
