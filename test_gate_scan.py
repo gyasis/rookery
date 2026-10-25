@@ -13,8 +13,8 @@ SCAN_DIRS = (ROOT, ROOT / "plugin_herdr")
 SKIP_FILES = {"gate_matrix.py", Path(__file__).name}
 
 SEND_OK = {"mail_gate.py", "rookery.py"}
-QUARANTINE_OK = {"mail_gate.py", "rookery.py", "mail_screen.py", "cli_screen.py"}
-SYSTEM_SEND_OK = {"postmaster.py", "relay.py", "rookery.py", "mail_gate.py"}
+QUARANTINE_OK = {"mail_gate.py", "rookery.py", "mail_screen.py", "cli_screen.py", "screener.py"}
+SYSTEM_SEND_OK = {"postmaster.py", "relay.py", "rookery.py", "mail_gate.py", "screener_t0.py"}
 RECIPIENT_UPDATE_OK = {"relay.py"}
 INSERT_OK = {"rookery.py"}
 

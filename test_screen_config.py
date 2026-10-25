@@ -91,6 +91,18 @@ class CheckTests(unittest.TestCase):
     def test_unknown_check(self):
         self.bad(lambda c: c["checks"].update(bogus="live"), "screener.checks.bogus")
 
+    def test_t1_live_needs_bands(self):   # D20: the 150 rule is in `screen mode`; check() still wants bands
+        cfg = copy.deepcopy(SC.DEFAULTS)
+        cfg["checks"]["t1"] = "live"
+        with self.assertRaises(ValueError) as cm:
+            SC.check(cfg)
+        self.assertIn("screener.bands.t1", str(cm.exception))
+        cfg["bands"]["t1"] = {"accept": 0.9, "review": 0.6}
+        SC.check(cfg)
+        cfg["bands"]["t1"] = None
+        cfg["checks"]["t1"] = "shadow"
+        SC.check(cfg)
+
     def test_bad_bands(self):
         def swap(c): c["bands"]["t1"] = {"accept": 0.5, "review": 0.8}
         self.bad(swap, "screener.bands.t1.review")

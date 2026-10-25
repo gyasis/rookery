@@ -299,6 +299,19 @@ class Actions(Calls):
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.screen("escalate", str(mid), check=False).returncode, 2)
 
+    def test_escalate_sends_the_notice_to_the_boss(self):
+        self.conn.execute("INSERT INTO up_agents(agent_id, session_id, harness, role, repo, task_id, binding_kind, "
+                          "updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                          (self.researcher["agent_id"], self.sid, "claude", "boss", None, None, "none", "now"))
+        self.conn.commit()
+        mid = self.mail()
+        self.screen("escalate", str(mid), "--reason", "needs a person", "--by", "ann")
+        notes = self.conn.execute("SELECT body FROM inbox WHERE sender='rookery' AND recipient=?",
+                                  (self.researcher["agent_id"],)).fetchall()
+        self.assertEqual(len(notes), 1)
+        self.assertIn(f"Mail {mid} ", notes[0][0])
+        self.assertNotIn(BODY, notes[0][0])     # FR-029: no body
+
 
 class MailScreen(Calls):
     def run_ms(self, *args):
@@ -480,6 +493,77 @@ class Audit(Calls):
         self.assertIn("ghost", q.stderr)
 
 
+class LiveSwitch(Calls):
+    def fill(self, check, n):
+        mid = self.mail()
+        for i in range(n):
+            d = S.record(self.conn, mail_id=mid, session_id=self.sid, stage=check, check_name=check, mode="shadow",
+                         decided_by="screener:tev1:4b", label="deliver", attempt=i + 1)
+            S.add_call(self.conn, d, mid, "deliver", "right", "mark", "human:ann")
+        self.conn.commit()
+
+    def bands(self):
+        d = os.path.join(self.tmp.name, ".rookery")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "config.json"), "w") as fh:
+            json.dump({"screener": {"bands": {"t1": {"accept": 0.9, "review": 0.5}}}}, fh)
+
+    def mode(self, check):
+        with open(os.path.join(self.tmp.name, ".rookery", "config.json")) as fh:
+            return json.load(fh)["screener"].get("checks", {}).get(check)
+
+    def test_149_refuses_and_says_1(self):
+        self.fill("t1", 149)
+        self.bands()
+        p = self.screen("mode", "t1", "live", check=False)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("It has 149 compared decisions and needs 150. Compare 1 more decision with "
+                      "`rookery screen mark`.", p.stderr)
+        self.assertIsNone(self.mode("t1"))
+
+    def test_150_with_bands_accepts_and_writes(self):
+        self.fill("t1", 150)
+        self.bands()
+        self.screen("mode", "t1", "live")
+        self.assertEqual(self.mode("t1"), "live")
+        with open(os.path.join(self.tmp.name, ".rookery", "config.json")) as fh:
+            self.assertIn("bands", json.load(fh)["screener"])    # other keys stay
+
+    def test_150_without_bands_names_bands(self):
+        self.fill("t1", 150)
+        p = self.screen("mode", "t1", "live", check=False)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("screener.bands.t1", p.stderr)
+
+    def test_t0_check_goes_live_with_no_count(self):
+        self.screen("mode", "duplicate", "live")
+        self.assertEqual(self.mode("duplicate"), "live")
+
+    def test_hunch_and_t2_need_150_and_no_bands(self):
+        for check in ("hunch", "t2"):
+            self.fill(check, 149)
+            p = self.screen("mode", check, "live", check=False)
+            self.assertEqual(p.returncode, 2)
+            self.assertIn("needs 150", p.stderr)
+            self.fill(check, 1)
+            self.screen("mode", check, "live")
+            self.assertEqual(self.mode(check), "live")
+
+    def test_shadow_and_off_always_allowed(self):
+        self.screen("mode", "t1", "off")
+        self.assertEqual(self.mode("t1"), "off")
+        self.screen("mode", "t1", "shadow")
+        self.assertEqual(self.mode("t1"), "shadow")
+
+    def test_unknown_check_or_mode_names_it(self):
+        p = self.screen("mode", "ghost", "live", check=False)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("ghost", p.stderr)
+        p = self.screen("mode", "t1", "fast", check=False)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("fast", p.stderr)
+
+
 class Text(unittest.TestCase):
     TEXTS = ["No decision waits for a call.", "No decision has a call yet.", "Released mail 5.",
              "Quarantined mail 5 (unneeded).", "Escalated mail 5.", "Wrote 3 lines to out.jsonl.",
@@ -488,7 +572,14 @@ class Text(unittest.TestCase):
              "Write one JSON line for each compared decision.", "Deliver a held or escalated mail.",
              "Reject a held or escalated mail.", "Hold a mail for a person.", "Why the mail waits.",
              "Your name (default: your user name).", "The agent that the sender should use.",
-             "This decision has no mail. Rookery cannot record a call for it."]
+             "This decision has no mail. Rookery cannot record a call for it.",
+             "Set t1 to live mode.", "Set a check to shadow, live or off.",
+             "Rookery cannot switch t1 to live mode. It has 149 compared decisions and needs 150. "
+             "Compare 1 more decision with `rookery screen mark`.",
+             "Rookery cannot switch t1 to live mode. It has no bands. Set screener.bands.t1 in the configuration first.",
+             "'ghost' is not a check. Use one of injection, duplicate.", "'fast' is not a mode. Use one of shadow, live, off.",
+             "Rookery delivered mail 5 from swe to researcher. The screener says unneeded. "
+             "Use rookery screen review to check it."]
 
     def test_ste_lint(self):
         exe = shutil.which("ste-lint")

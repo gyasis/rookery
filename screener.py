@@ -2,8 +2,9 @@
 """The T1 screener (004 T010; research D8, D10, D11). build_envelope() makes the state text of one mail.
 screen_one() asks the decision model about it and writes the records.
 
-Nothing here changes the inbox: this task only records. Records are written through screener_t0.record and
-committed at once. The backend is passed in, so a test uses screener_backend.fake(). Never imports promptchain.
+screen_one() only records. The loop (run) acts in live mode (D13, D14, FR-012a, FR-027): see _act_pre. Records are
+written through screener_t0.record and committed at once. The backend is passed in, so a test uses
+screener_backend.fake(). Never imports promptchain.
 """
 import json
 import os
@@ -208,14 +209,16 @@ def _begin(conn):
 
 
 def queue(conn, sid, cutoff, limit=None, oldest=None):
-    """Mail ids of one session to screen, oldest first (FR-005): no screen_mail row, or a claim older than
-    cutoff. A system sender is left out. A mail that a T0 check quarantined at store has a decided row.
+    """Mail ids of one session to screen, oldest first (FR-005): no screen_mail row, a claim older than
+    cutoff, or an escalated mail whose retry_at has come while the mail is still escalated (FR-012a).
+    A system sender is left out. A mail that a T0 check quarantined at store has a decided row.
     A mail created before `oldest` (an epoch second) is left out: the first run skips old history."""
     rows = conn.execute(
         "SELECT i.id, i.sender, i.created_at FROM inbox i LEFT JOIN screen_mail m ON m.mail_id=i.id "
         "WHERE i.session_id=? AND i.created_at>=? "
-        "AND (m.mail_id IS NULL OR (m.state='claimed' AND m.claimed_at<?)) "
-        "ORDER BY i.created_at, i.id", (sid, oldest or 0, cutoff)).fetchall()
+        "AND (m.mail_id IS NULL OR (m.state='claimed' AND m.claimed_at<?) "
+        "OR (m.state='escalated' AND m.retry_at<=? AND i.status='escalated')) "
+        "ORDER BY i.created_at, i.id", (sid, oldest or 0, cutoff, rookery.now())).fetchall()
     out = [r for r in rows if not (mail_gate.is_system_name(r["sender"])
                                    or mail_gate.is_system_name(_name(conn, r["sender"])))]
     return out[:limit] if limit else out
@@ -225,37 +228,192 @@ MAX_ATTEMPTS = 3   # a claim that expired after this many tries ends as failed (
 PER_SESSION = 5    # mails for one session in one pass, so one busy session does not starve the others
 
 
-def _claim(conn, mail_id, sid, owner, cutoff):
-    """Take the mail, or an expired claim on it. True when this owner now holds it. An expired claim with
-    MAX_ATTEMPTS tries is set to failed, not taken again."""
+def _claim(conn, mail_id, sid, owner, cutoff, cfg=None):
+    """Take the mail, an expired claim on it, or an escalated mail that is due for a retry. True when this owner
+    now holds it. An expired claim with MAX_ATTEMPTS tries is not taken again: a mail that the screener holds is
+    escalated with the reason screening-failed (and the notice goes out after the commit), else it is set to failed."""
     now = rookery.now()
+    by = "screener:" + (cfg["model"] if cfg else "lease")
+    notify = False
     _begin(conn)
     try:
         cur = conn.execute("INSERT OR IGNORE INTO screen_mail(mail_id, session_id, state, owner, claimed_at, attempts) "
                            "VALUES(?,?,'claimed',?,?,1)", (mail_id, sid, owner, now))
         if cur.rowcount == 0:
-            dead = conn.execute("UPDATE screen_mail SET state='failed', decided_at=? "
-                                "WHERE mail_id=? AND state='claimed' AND claimed_at<? AND attempts>=?",
-                                (now, mail_id, cutoff, MAX_ATTEMPTS)).rowcount
+            dead = conn.execute("SELECT 1 FROM screen_mail WHERE mail_id=? AND state='claimed' AND claimed_at<? "
+                                "AND attempts>=?", (mail_id, cutoff, MAX_ATTEMPTS)).fetchone()
             if dead:
-                _log(sid, mail_id, f"claim expired after {MAX_ATTEMPTS} tries: set to failed")
+                m = rookery.get_message(conn, mail_id)
+                notify = m["status"] == "held" and m["reason"] == "screening"
+                if notify:
+                    rookery._decide(conn, mail_id, "held", "escalated", "escalate", "screening-failed", by, commit=False)
+                conn.execute("UPDATE screen_mail SET state=?, decided_at=? WHERE mail_id=?",
+                             ("escalated" if notify else "failed", now, mail_id))   # no retry_at: it failed MAX_ATTEMPTS times
+                _log(sid, mail_id, f"claim expired after {MAX_ATTEMPTS} tries: " + ("escalated" if notify else "set to failed"))
+                cur = None
             else:
                 cur = conn.execute("UPDATE screen_mail SET owner=?, claimed_at=?, attempts=attempts+1 "
                                    "WHERE mail_id=? AND state='claimed' AND claimed_at<?", (owner, now, mail_id, cutoff))
+                if cur.rowcount == 0:   # a due retry of an escalated mail: back to claimed, one more try
+                    cur = conn.execute("UPDATE screen_mail SET state='claimed', owner=?, claimed_at=?, attempts=attempts+1 "
+                                       "WHERE mail_id=? AND state='escalated' AND retry_at<=?", (owner, now, mail_id, now))
         conn.commit()
     except BaseException:
         conn.rollback()
         raise
-    return cur.rowcount == 1
+    if notify:
+        _notify(conn, mail_id, "screening-failed")
+    return cur is not None and cur.rowcount == 1
 
 
-def _finish(conn, mail_id, owner, cfg, label, envelope):
-    """End a claim: decided with the T1 label, or failed (a shadow failure is final). Only the owner may."""
-    state = "decided" if label else "failed"
-    conn.execute("UPDATE screen_mail SET state=?, envelope=?, final_label=?, final_by=?, decided_at=? "
+def _finish(conn, mail_id, owner, cfg, label, envelope, state=None, retry_at=None, commit=True):
+    """End a claim: decided with the T1 label, or failed (a shadow failure is final), or `escalated` with a
+    retry_at (a live failure on held mail). Only the owner may."""
+    state = state or ("decided" if label else "failed")
+    cur = conn.execute("UPDATE screen_mail SET state=?, envelope=?, final_label=?, final_by=?, decided_at=?, retry_at=? "
                  "WHERE mail_id=? AND owner=? AND state='claimed'",
-                 (state, envelope, label, "screener:" + cfg["model"] if label else None, rookery.now(), mail_id, owner))
-    conn.commit()
+                 (state, envelope, label, "screener:" + cfg["model"] if label else None, rookery.now(), retry_at,
+                  mail_id, owner))
+    if cur.rowcount == 0:   # the lease was lost: another owner holds the claim, or it ended
+        _log(None, mail_id, f"claim not finished: {owner} no longer holds it")
+    if commit:
+        conn.commit()
+
+
+def _last(conn, mail_id, stage, attempt=None):
+    """The newest record of one stage, or of one attempt of it."""
+    return conn.execute("SELECT id, label, failure, band, attempt FROM screen_decisions WHERE mail_id=? AND stage=? "
+                        "AND (? IS NULL OR attempt=?) ORDER BY id DESC LIMIT 1", (mail_id, stage, attempt, attempt)).fetchone()
+
+
+def _kind(conn, mail_id):
+    """How live mode treats a mail (D13, D14): `pre` is held with the reason screening (or escalated by a failed
+    screening, due for a retry): the screener acts. Other held or escalated mail is the user's (ROOKERY_HOLD): shadow
+    records only. Anything else was delivered at once (`post`): a record and a notice, no action."""
+    m = rookery.get_message(conn, mail_id)
+    if m["status"] == "held" and m["reason"] == "screening":
+        return "pre"
+    if m["status"] == "escalated" and conn.execute(
+            "SELECT 1 FROM screen_mail WHERE mail_id=? AND retry_at IS NOT NULL", (mail_id,)).fetchone():
+        return "pre"
+    return "shadow" if m["status"] in ("held", "escalated") else "post"
+
+
+def retry_delay(cfg, attempts):
+    """Seconds until the next try of a failed screening: 60 per try so far, at most timeout_s."""
+    return min(cfg["timeout_s"], 60 * max(1, attempts))
+
+
+def _escalate_pre(conn, mail_id, owner, cfg, envelope, reason, rec_id=None, retry=True, label=None):
+    """Escalate a mail that the screener holds, then send the notice (FR-012a, FR-029). The status change, the
+    `action` of the record and the end of the claim commit together. A mail that is already escalated (a failed retry)
+    stays so, and sends no second notice. A `retry` has a retry_at, so a later pass asks again. Raises when it
+    cannot: the caller leaves the claim to expire. Returns False when the mail is no longer held or escalated (a
+    person decided it first): nothing changes then."""
+    by = "screener:" + cfg["model"]
+    _begin(conn)
+    notify = False
+    try:
+        status = rookery.get_message(conn, mail_id)["status"]
+        if status not in ("held", "escalated"):
+            conn.rollback()
+            return False
+        attempts = conn.execute("SELECT attempts FROM screen_mail WHERE mail_id=?", (mail_id,)).fetchone()[0]
+        if status == "held":
+            rookery._decide(conn, mail_id, "held", "escalated", "escalate", reason, by, commit=False)
+            notify = True
+        if rec_id:
+            conn.execute("UPDATE screen_decisions SET action='escalate' WHERE id=?", (rec_id,))
+        _finish(conn, mail_id, owner, cfg, label, envelope, state="escalated",
+                retry_at=rookery.now() + retry_delay(cfg, attempts) if retry else None, commit=False)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    if notify:
+        _notify(conn, mail_id, reason)
+    return True
+
+
+def _already_decided(conn, mail_id, owner, cfg, envelope):
+    """A person decided the mail before the screener acted: change nothing (the record keeps action `none`) and
+    end the claim as decided. A delivered mail gets the post notice. Returns True."""
+    rec = _last(conn, mail_id, "t1")
+    _begin(conn)
+    try:
+        _finish(conn, mail_id, owner, cfg, rec["label"] if rec else None, envelope, state="decided", commit=False)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    _post_notice(conn, mail_id)
+    return True
+
+
+def _act_pre(conn, mail_id, owner, cfg, envelope):
+    """Act on one screened mail that the screener holds (FR-027, FR-012a, D11). The status change, the `action` of
+    the T1 record and the end of the claim commit together. In the band `accept`, deliver releases and a reject label
+    quarantines with that label (never a loop reason, FR-002) and `suggest`. Any other band escalates, with no retry
+    (the same answer would come back). A failure escalates, with a retry_at. Nothing else releases a held mail: no
+    lease, no time. A mail that a person decided first is left as it is: action `none`, the claim ends as decided.
+    Returns True when the claim is finished here, False when the mail changed under us (the caller ends the claim)."""
+    by = "screener:" + cfg["model"]
+    rec = _last(conn, mail_id, "t1")
+    if rec is None:
+        return False
+    if rec["label"] and rec["band"] != "accept":   # T018 adds the hunch for the review band here
+        return _escalate_pre(conn, mail_id, owner, cfg, envelope, f"low-confidence {rec['label']}", rec["id"], retry=False,
+                               label=rec["label"]) or _already_decided(conn, mail_id, owner, cfg, envelope)
+    if not rec["label"]:
+        return _escalate_pre(conn, mail_id, owner, cfg, envelope, rec["failure"], rec["id"]) \
+            or _already_decided(conn, mail_id, owner, cfg, envelope)
+    _begin(conn)
+    try:
+        if rookery.get_message(conn, mail_id)["status"] not in ("held", "escalated"):
+            conn.rollback()
+            return _already_decided(conn, mail_id, owner, cfg, envelope)
+        if rec["label"] == "deliver":
+            rookery._decide_from_open(conn, mail_id, "pending", "release", None, by, commit=False)
+            action = "release"
+        else:
+            sug = _last(conn, mail_id, "suggest", rec["attempt"])
+            peer = sug["label"] if sug and sug["label"] not in (None, "none") else None
+            rookery.quarantine(conn, mail_id, rec["label"], by, suggest=peer, commit=False,
+                               bounce_limit=mail_gate.loop_limit())
+            action = "quarantine"
+        conn.execute("UPDATE screen_decisions SET action=? WHERE id=?", (action, rec["id"]))
+        _finish(conn, mail_id, owner, cfg, rec["label"], envelope, commit=False)
+        conn.commit()
+    except ValueError as e:   # the mail is no longer held: a person decided it first
+        conn.rollback()
+        _log(None, mail_id, f"no action: {e}")
+        return False
+    except BaseException:
+        conn.rollback()
+        raise
+    return True
+
+
+def _notify(conn, mail_id, reason):
+    try:
+        screener_t0.notify_escalated(conn, mail_id, reason)
+    except Exception as e:   # the action stands; a failed notice is logged
+        conn.rollback()
+        _log(None, mail_id, f"notice failed: {type(e).__name__}: {e}")
+
+
+def _post_notice(conn, mail_id):
+    """A mail that is delivered when the screener decides (post mode, or a person released it first) cannot be taken
+    back: a failure or a reject label gets the notice (D13, D14)."""
+    rec = _last(conn, mail_id, "t1")
+    reason = rec and (f"no answer ({rec['failure']})" if rec["failure"] else rec["label"] if rec["label"] != "deliver" else None)
+    mail = rookery.get_message(conn, mail_id)
+    if reason and mail["status"] not in ("held", "escalated", "quarantined"):
+        try:
+            screener_t0.notify_delivered(conn, mail_id, reason)
+        except Exception as e:   # a failed notice is logged
+            conn.rollback()
+            _log(None, mail_id, f"notice failed: {type(e).__name__}: {e}")
 
 
 def _log(session, mail_id, cause):
@@ -287,20 +445,44 @@ def _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop):
         if stop:
             break
         mail_id = row["id"]
-        if not _claim(conn, mail_id, sid, owner, cutoff):
+        if not _claim(conn, mail_id, sid, owner, cutoff, cfg):
             continue
         taken += 1
         env = label = None
+        screened = False
+        live = cfg["checks"]["t1"] == "live"
+        kind = _kind(conn, mail_id) if live else None
+        m = rookery.get_message(conn, mail_id)
+        stranded = not live and m["status"] == "held" and m["reason"] == "screening"   # t1 left live by a hand edit
+        scfg = cfg
+        if kind == "shadow":   # ROOKERY_HOLD mail: the records say shadow, and nothing acts
+            scfg = {**cfg, "checks": {**cfg["checks"], "t1": "shadow"}}
         try:
             env = build_envelope(conn, conn.execute("SELECT * FROM inbox WHERE id=?", (mail_id,)).fetchone(), cfg)
         except Exception:
             pass   # screen_one writes the bad-envelope record
         try:
-            label = screen_one(conn, mail_id, cfg, backend)
+            label = screen_one(conn, mail_id, scfg, backend)
+            screened = True
+            if kind == "pre" and _act_pre(conn, mail_id, owner, cfg, env):
+                continue
+            if stranded and _escalate_pre(conn, mail_id, owner, cfg, env, "screening-stopped", retry=False):
+                continue   # fail closed: nothing acts on it any more, so a person decides
         except Exception as e:   # a poison mail: log it, end the claim as failed, go on
             conn.rollback()
+            label = None
             _log(name, mail_id, f"{type(e).__name__}: {e}")
+            if kind == "pre":   # fail closed: the held mail goes to a person, never to `failed` or silence
+                try:
+                    _escalate_pre(conn, mail_id, owner, cfg, env, "screening-failed") or \
+                        _already_decided(conn, mail_id, owner, cfg, env)
+                except Exception as e2:   # leave the claim to expire: _claim escalates it after MAX_ATTEMPTS
+                    conn.rollback()
+                    _log(name, mail_id, f"escalation failed: {type(e2).__name__}: {e2}")
+                continue
         _finish(conn, mail_id, owner, cfg, label, env)
+        if kind == "post" and screened:
+            _post_notice(conn, mail_id)
     return taken
 
 

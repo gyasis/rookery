@@ -139,3 +139,58 @@ def calls_for_action(conn, mail_id, action, reason, by) -> int:
             add_call(conn, r[0], mail_id, call, "right" if call == r[2] else "wrong", action, by)
         n += 1
     return n
+
+
+# --- live actions (004 T014, D13, D14) ---
+
+ESCALATION_NOTICE = ("Mail {id} from {sender} to {recipient} waits for a decision. Reason: {reason}. "
+                     "Use rookery screen release or rookery screen quarantine.")
+# The mail was delivered before the screener decided (post mode, or a person released it first): a notice only.
+POST_NOTICE = ("Rookery delivered mail {id} from {sender} to {recipient}. The screener says {label}. "
+               "Use rookery screen review to check it.")
+
+
+def pre_hold(conn, recipient, cfg):
+    """The `pre_store` answer of the gate (D13): ("held", "screening") when t1 is live and the review mode of the
+    recipient is `pre`, else None. `recipient` is the identities row, or None for a remote address. A mail that
+    ROOKERY_HOLD holds is not touched here: it keeps no reason, so the screener only records shadow decisions on it.
+    Cheap on purpose: no query, no import of the screener."""
+    if recipient is None or cfg["checks"].get("t1") != "live" or rookery.hold_enabled():
+        return None
+    review = cfg["review_mode"]
+    if review["agents"].get(recipient["name"], review["default"]) != "pre":
+        return None
+    return ("held", "screening")
+
+
+def _name(conn, who):
+    row = conn.execute("SELECT name FROM identities WHERE agent_id=?", (who,)).fetchone()
+    return row["name"] if row else who
+
+
+def _notify_boss(conn, mail_id, template, title, **fields):
+    import mail_gate    # local: mail_gate imports this module
+    import plugins
+    mail = rookery.get_message(conn, mail_id)
+    if mail is None:
+        raise ValueError(f"mail {mail_id} is not in the inbox")
+    sender, recipient = _name(conn, mail["sender"]), _name(conn, mail["recipient"])
+    text = template.format(id=mail_id, sender=sender, recipient=recipient, **fields)
+    boss = conn.execute("SELECT agent_id FROM up_agents WHERE session_id=? AND role='boss' ORDER BY agent_id LIMIT 1",
+                        (mail["session_id"],)).fetchone()
+    notice = (mail_gate.system_send(conn, "rookery", boss[0], text, session_id=mail["session_id"])
+              if boss else None)
+    plugins.notify("escalated", title, text, mail_id=mail_id, sender=sender, recipient=recipient, **fields)
+    return notice
+
+
+def notify_escalated(conn, mail_id, reason):
+    """The escalation notice (FR-029): a mail from `rookery` to the boss of the session (the up_agents row with
+    role `boss`, when there is one), and the plugin sink event `escalated`. No mail body in either. Commits.
+    Returns the ID of the notice mail, or None when the session has no boss."""
+    return _notify_boss(conn, mail_id, ESCALATION_NOTICE, f"mail {mail_id} waits for a decision", reason=reason)
+
+
+def notify_delivered(conn, mail_id, label):
+    """The notice for a mail that is already delivered (POST_NOTICE). Same boss mail and sink event."""
+    return _notify_boss(conn, mail_id, POST_NOTICE, f"mail {mail_id} was delivered", reason=label, label=label)

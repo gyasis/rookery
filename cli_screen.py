@@ -88,7 +88,9 @@ def cmd_status(args):
             rows.append({"session": name, "backlog": len(q),
                          "oldest_age_s": max(0, now - q[0]["created_at"]) if q else None,
                          "escalated": counts.get("escalated", 0), "failed": counts.get("failed", 0),
-                         "decided": counts.get("decided", 0)})
+                         "decided": counts.get("decided", 0),
+                         "held_screening": conn.execute("SELECT COUNT(*) FROM inbox WHERE session_id=? AND status='held' "
+                                                        "AND reason='screening'", (sid,)).fetchone()[0]})
     finally:
         conn.close()
     out = {"backend": screener.backend_path(), "python": sys.executable, "model": cfg["model"],
@@ -103,7 +105,8 @@ def cmd_status(args):
         print(f"check {k}: {v}")
     for r in rows:
         print(f"session {r['session']}: backlog={r['backlog']} oldest_age_s={r['oldest_age_s']} "
-              f"escalated={r['escalated']} failed={r['failed']} decided={r['decided']}")
+              f"escalated={r['escalated']} failed={r['failed']} decided={r['decided']} "
+              f"held_screening={r['held_screening']}")
 
 
 T1_LABELS = ("deliver", "wrong-recipient", "task-already-done", "unneeded")   # as screener.LABELS
@@ -278,6 +281,63 @@ def cmd_report(args):
             print(f"  confidence {step}: compared={s['compared']} rate={s['rate']}")
 
 
+def cmd_mode(args):
+    """Set one check to shadow, live or off. A model check goes live only after 150 compared decisions."""
+    import screener_config
+    if args.check not in screener_config.CHECKS:
+        _fail(f"{args.check!r} is not a check. Use one of {', '.join(screener_config.CHECKS)}")
+    if args.mode not in screener_config.MODES:
+        _fail(f"{args.mode!r} is not a mode. Use one of {', '.join(screener_config.MODES)}")
+    if args.mode == "live" and args.check in MODEL_CHECKS:
+        cfg = _config()
+        conn = _db()
+        try:
+            compared = len(_compared(conn, args.check))
+        finally:
+            conn.close()
+        refuse = f"Rookery cannot switch {args.check} to live mode."
+        if compared < LIVE_MIN:
+            n = LIVE_MIN - compared
+            _fail(f"{refuse} It has {compared} compared decisions and needs {LIVE_MIN}. "
+                  f"Compare {n} more {'decision' if n == 1 else 'decisions'} with `rookery screen mark`.")
+        if args.check == "t1" and cfg["bands"].get("t1") is None:
+            _fail(f"{refuse} It has no bands. Set screener.bands.t1 in the configuration first.")
+    was_live = args.check == "t1" and screener_config.load()["checks"]["t1"] == "live"
+    try:
+        screener_config.set_mode(args.check, args.mode)
+    except ValueError as e:
+        _fail(str(e))
+    print(f"Set {args.check} to {args.mode} mode.")
+    if was_live and args.mode != "live":
+        _stop_screening()
+
+
+def _stop_screening():
+    """T1 left live mode: nothing will screen the mail it holds. Escalate each one for a person (FR-012a)."""
+    conn = _db()
+    n = 0
+    try:
+        by = screener_t0.human_by(getpass.getuser())
+        ids = [r[0] for r in conn.execute("SELECT id FROM inbox WHERE status='held' AND reason='screening' "
+                                          "ORDER BY id")]
+        for mail_id in ids:
+            try:
+                rookery.escalate(conn, mail_id, by, "screening-stopped")
+            except ValueError:   # a person decided it first
+                continue
+            n += 1
+            try:
+                screener_t0.notify_escalated(conn, mail_id, "screening-stopped")
+            except Exception as e:   # the mail is escalated; the notice failed
+                conn.rollback()
+                print(f"rookery: warning: the notice for mail {mail_id} failed: {e}", file=sys.stderr)
+    except ValueError as e:
+        _fail(str(e))
+    finally:
+        conn.close()
+    print(f"Escalated {n} {'mail' if n == 1 else 'mails'} that the screener held.")
+
+
 def cmd_export(args):
     """One JSON line for each compared decision, with the envelope and no body (FR-018)."""
     _check_arg(args.check)
@@ -349,10 +409,16 @@ def cmd_quarantine(args):
 def cmd_escalate(args):
     conn = _db()
     try:
-        # T014 adds screener_t0.notify_escalated. Until then this only moves the status and sends no notice.
-        rookery.escalate(conn, args.mail_id, _by(args), args.reason or "held for a person")
-    except ValueError as e:
-        _fail(str(e))
+        reason = args.reason or "held for a person"
+        try:
+            rookery.escalate(conn, args.mail_id, _by(args), reason)
+        except ValueError as e:
+            _fail(str(e))
+        try:
+            screener_t0.notify_escalated(conn, args.mail_id, reason)   # FR-029: the boss and the sink, no body
+        except Exception as e:   # the mail is escalated; a notice that failed does not undo it
+            conn.rollback()
+            print(f"rookery: warning: the notice failed: {e}", file=sys.stderr)
     finally:
         conn.close()
     print(f"Escalated mail {args.mail_id}.")
@@ -386,6 +452,10 @@ def add_parser(subparsers):
     rp.add_argument("--check", help="Show only this check.")
     rp.add_argument("--json", action="store_true", help="Print one JSON object.")
     rp.set_defaults(func=cmd_report)
+    md = sub.add_parser("mode", help="Set a check to shadow, live or off.")
+    md.add_argument("check", metavar="CHECK")
+    md.add_argument("mode", metavar="shadow|live|off")
+    md.set_defaults(func=cmd_mode)
     e = sub.add_parser("export", help="Write one JSON line for each compared decision.")
     e.add_argument("--check", help="Export only this check.")
     e.add_argument("--out", help="Write to this file (default: standard output).")

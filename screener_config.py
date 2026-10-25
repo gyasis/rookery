@@ -91,6 +91,9 @@ def check(cfg) -> None:
         if band["review"] > band["accept"]:
             raise ValueError("screener.bands.t1.review: must not be above screener.bands.t1.accept")
 
+    if checks.get("t1") == "live" and band is None:
+        raise ValueError("screener.bands.t1: must be set when screener.checks.t1 is live")
+
     for key, prefix, val in (("model", "screener:", cfg.get("model")),
                              ("hunch.model", "hunch:vote6:", cfg.get("hunch", {}).get("model"))):
         if not screener_t0.check_decided_by(prefix + str(val)) or not isinstance(val, str):

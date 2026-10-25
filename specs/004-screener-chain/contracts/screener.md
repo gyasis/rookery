@@ -34,7 +34,7 @@ JSON form (FR-033):
  "checks": {"injection": "shadow", "duplicate": "shadow", "budget": "shadow", "thread": "shadow",
             "gates": "shadow", "t1": "shadow", "hunch": "shadow", "t2": "shadow"},
  "sessions": [{"session": "calm-amber-heron", "backlog": 3, "oldest_age_s": 41, "escalated": 1,
-               "failed": 0, "decided": 120}]}
+               "failed": 0, "decided": 120, "held_screening": 2}]}
 ```
 
 `host.answers` comes from `GET {base_url}/v1/models` with a 5 s timeout. That is a metadata call, not a model
@@ -166,3 +166,4 @@ Each text is a constant in `screener_t0.py` or `screener.py`, and `test_text_hin
 | Over budget | "Rookery held this ask. The task TASK has used its budget of N asks. Ask the boss for more budget, or finish the task." |
 | Duplicate | "Rookery held this ask. You sent the same question to RECIPIENT at TIME. Wait for that answer." |
 | Escalation notice | "Mail ID from SENDER to RECIPIENT waits for a decision. Reason: REASON. Use rookery screen release or rookery screen quarantine." |
+| Post-mode notice | "Rookery delivered mail ID from SENDER to RECIPIENT. The screener says LABEL. Use rookery screen review to check it." |

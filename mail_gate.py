@@ -11,6 +11,8 @@ import re
 import sqlite3
 
 import rookery
+import screener_config
+import screener_t0
 import security
 import turn_block as _tb
 from turn_block import _is_busy, _show, loop_limit, loop_limits
@@ -24,6 +26,18 @@ _INJECTION_NOTE = ("Rookery held this mail. The security policy found content th
 def is_system_name(name) -> bool:
     """A system sender name in any case, alone or before `@<peer>` (`Rookery`, `postmaster@x`)."""
     return isinstance(name, str) and name.split("@", 1)[0].lower() in rookery.SYSTEM_SENDERS
+
+
+def _screen_pre_store(conn):
+    """The default `pre_store` hook: a live T1 check in review mode `pre` holds the mail as `screening` (D13).
+    A configuration that cannot be read holds nothing: the mail must still be stored."""
+    def hook(recipient):
+        try:
+            cfg = screener_config.load()
+        except (ValueError, OSError):
+            return None
+        return screener_t0.pre_hold(conn, recipient, cfg)
+    return hook
 
 
 def _begin(conn):
@@ -82,20 +96,23 @@ def quarantine_malformed(conn, ctx, recipient, body, topic, reason, note, sugges
     return msg_id
 
 
-def _send_counted(conn, sender_id, recipient_id, body, task, sid, topic=None, thread=None):
+def _send_counted(conn, sender_id, recipient_id, body, task, sid, topic=None, thread=None, hold_reason=None):
     """Send one agent mail. Counts it against two counters in the same transaction: one for the
     (task, pair) and one task-less for the pair (so a new task name does not evade, limit
     loop_pair_limit). At either limit the mail is stored `held` with reason `loop` instead, and no
-    counter moves. Runs inside the caller's transaction. Returns (msg_id, held)."""
+    counter moves. `hold_reason` (a pre-store hold, such as `screening`) holds the mail and is counted too;
+    the reason `loop` takes precedence. Runs inside the caller's transaction. Returns (msg_id, loop_held)."""
     limit, pair_limit = loop_limits()
     held = rookery.count_loop(conn, sid, [(task, sender_id, recipient_id, limit),
                                           ("~pair", sender_id, recipient_id, pair_limit)])
     msg_id = rookery.send(conn, sender_id, recipient_id, body, topic=topic, session_id=sid,
-                          hold=True if held else None, commit=False, thread=thread)
+                          hold=True if held or hold_reason else None, commit=False, thread=thread)
     if held:
         conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
                      (f"Held: too many mails on task {task} (or between these agents) with "
                       "no human prompt in between.", msg_id))
+    elif hold_reason:
+        conn.execute("UPDATE inbox SET reason=? WHERE id=?", (hold_reason, msg_id))
     return msg_id, held
 
 
@@ -195,20 +212,20 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
             out = quarantine(to, "injection-suspect", _INJECTION_NOTE)
             conn.commit()
             return out
+        if pre_store is None:
+            pre_store = _screen_pre_store(conn)
+        held = None
         if pre_store is not None:
             held = pre_store(conn.execute("SELECT * FROM identities WHERE agent_id=?",
                                           (recipient,)).fetchone())
-            if held:
-                msg_id = rookery.send(conn, sender, recipient, body, topic=topic, hold=True,
-                                      session_id=sid, commit=False, thread=thread)
-                conn.execute("UPDATE inbox SET reason=? WHERE id=?", (held[1], msg_id))
-                conn.commit()
-                return _result("sent", held[1], warning, msg_id)
         key = task or topic or "-"                         # 7, 8
-        msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic, thread)
+        msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic, thread,
+                                          hold_reason=held[1] if held else None)
         conn.commit()
         if loop_held:
             return _result("loop-held", "loop", warning, msg_id)
+        if held:
+            return _result("sent", held[1], warning, msg_id)
         return _result("sent", None, warning, msg_id)
     except BaseException:
         conn.rollback()

@@ -243,7 +243,7 @@ refuses and names 1 missing.
   and in text (FR-016). The export has one line for each compared decision with the keys of the contract and no
   body (FR-018). `review` prints no body.
   Verify: `python3 -m unittest test_screen_calls test_held_quarantine test_screen_cli -v`
-- [ ] T013 [US2] Files: `cli_screen.py`, `test_screen_calls.py`.
+- [x] T013 [US2] Files: `cli_screen.py`, `test_screen_calls.py`.
   Edit `cli_screen.py`: add `screen mode CHECK MODE` with `screener_config.set_mode`. For `t1`,
   `hunch` and `t2` with `live`, it refuses (exit 2) with fewer than 150 compared decisions. For `t1` it also refuses
   with unset bands (constitution IV). The refusal
@@ -252,7 +252,7 @@ refuses and names 1 missing.
   and writes the file. 150 with no bands refuses and names the bands. A T0 check switches to `live` with no count
   (SC-005). `hunch` and `t2` at 149 refuse, and at 150 they accept with no bands.
   Verify: `python3 -m unittest test_screen_calls test_screen_config -v`
-- [ ] T014 [US2] Files: `mail_gate.py`, `screener.py`, `screener_t0.py`, `test_screen_live.py`. Add the live actions (D13, D14, FR-012a, FR-019, FR-027). Edit `mail_gate.py`: give the existing
+- [x] T014 [US2] Files: `mail_gate.py`, `screener.py`, `screener_t0.py`, `test_screen_live.py`. Add the live actions (D13, D14, FR-012a, FR-019, FR-027). Edit `mail_gate.py`: give the existing
   `pre_store` hook a function `screener_t0.pre_hold(conn, recipient, cfg)`. It holds the mail with the reason
   `screening` when `t1` is live and the recipient's review mode is `pre`. Edit `screener.py`: in live mode, act
   only on a mail held with the reason `screening`. Map each label with the verdict table of data-model: `deliver`

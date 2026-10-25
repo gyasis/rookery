@@ -331,7 +331,8 @@ The user chose this on 2026-10-25.
 - **Live switch**: `rookery screen mode CHECK live` refuses for a model check (`t1`, `hunch`, `t2`) with fewer than
   150 compared decisions. It gives the number that is missing (FR-017, SC-005). `t1` also needs its bands. T2 is a
   model behind a configured command, so constitution IV applies to it too: it must not block mail before a shadow
-  run.
+  run. The 150 rule lives in rookery screen mode. A person who edits config.json by hand takes that risk; check()
+  still refuses t1 live with no bands.
 - **Export (Q7)**: `rookery screen export` writes one JSON line for each compared decision. The line holds the envelope, the
   decision label, the confidence, `decided_by`, the call label and the call `by`. It is a file format only. No
   feed and no training.
