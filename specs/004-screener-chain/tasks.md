@@ -132,7 +132,7 @@ writes the code. No task leaves a failing test.
   - Each error gives a `BackendError`, never an `Answer` (FR-012).
   - `import screener_backend` alone does not put `promptchain` in `sys.modules` (F20).
   Verify: `python3 -m unittest test_screen_backend -v`
-- [ ] T006 Files: `rookery.py`, `postmaster.py`, `rookery_views.py`, `test_escalated.py`.
+- [x] T006 Files: `rookery.py`, `postmaster.py`, `rookery_views.py`, `test_escalated.py`.
   Edit `rookery.py`. Needs T003 first (same file). Add `escalate(conn, msg_id, decided_by, reason)`
   (`held` to `escalated` through `_decide`). `release` and `quarantine` accept `held` or `escalated` as the start
   status. `send` takes `thread=None` and writes it. Edit `postmaster.py:144` and `:475` so that both skip
@@ -142,7 +142,7 @@ writes the code. No task leaves a failing test.
   mentioned by the postmaster (`_mention_pass`, wake), and `_answers_open_ask` ignores it (SC-009). The mail
   mirror lists it with no body. `send(thread="t1")` stores the thread.
   Verify: `python3 -m unittest test_escalated test_held_quarantine test_views test_wake test_outbox test_send test_gate -v`
-- [ ] T007 Files: `screener_t0.py`, `test_screen_t0.py`.
+- [x] T007 Files: `screener_t0.py`, `test_screen_t0.py`.
   Create `screener_t0.py` with
   `record(conn, *, mail_id, session_id, stage, check_name, mode, decided_by, label=None, failure=None, attempt=1, confidence=None, band=None, action="none", detail=None, impl=None, usage=None)`
   and `check_decided_by(text)`. `record` refuses a row with both or neither of `label` and `failure`. It refuses an
@@ -152,7 +152,7 @@ writes the code. No task leaves a failing test.
   first. Write `test_screen_t0.py` first. Cases: each rule above, and one
   gate-log line for each row (FR-010, FR-012, FR-014, FR-033).
   Verify: `python3 -m unittest test_screen_t0 test_gate_log test_screen_schema -v`
-- [ ] T008 [P] Files: `cli_workspace.py`, `rookery_team.py`, `test_session_context.py`.
+- [x] T008 [P] Files: `cli_workspace.py`, `rookery_team.py`, `test_session_context.py`.
   Edit `cli_workspace.py` so that `rookery up` writes `session_context` and `agent_scope` from the
   team file. It does so in the transaction that makes the session. A second run replaces the rows of that session.
   Edit `rookery_team.py` to accept an optional `ask_budget` (a positive integer, else an error that names it) (D8,

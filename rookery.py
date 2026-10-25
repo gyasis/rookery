@@ -337,7 +337,7 @@ def hold_enabled() -> bool:
 
 
 def send(conn, sender, recipient, body, topic=None, hold=None, *, session_id,
-         commit=True):
+         commit=True, thread=None):
     """The one low-level insert. `session_id` is required and never defaults to `legacy`
     (FR-005): only mail_gate and rookery itself call this."""
     if not session_id:
@@ -345,10 +345,10 @@ def send(conn, sender, recipient, body, topic=None, hold=None, *, session_id,
     if hold is None:
         hold = hold_enabled() and sender not in SYSTEM_SENDERS
     cur = conn.execute(
-        "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at, session_id) "
-        "VALUES(?,?,?,?,?,0,?,?)",
+        "INSERT INTO inbox(sender, recipient, body, topic, status, delivered, created_at, session_id, thread) "
+        "VALUES(?,?,?,?,?,0,?,?,?)",
         (sender, recipient, body, topic, "held" if hold else "pending", now(),
-         session_id),
+         session_id, thread),
     )
     if commit:
         conn.commit()
@@ -386,7 +386,8 @@ def fetch_thread(conn, node):
     A persistent node's rehydrated memory — context lives in the DB, not the
     process, so a killed-and-re-upped partner resumes with full history."""
     return conn.execute(
-        "SELECT * FROM inbox WHERE sender=? OR recipient=? ORDER BY created_at, id",
+        "SELECT * FROM inbox WHERE (sender=? OR (recipient=? "
+        "AND status NOT IN ('held','quarantined','escalated'))) ORDER BY created_at, id",
         (node, node),
     ).fetchall()
 
@@ -488,9 +489,22 @@ def _decide(conn, msg_id, from_status, to_status, verdict, reason, decided_by,
         raise ValueError(f"message #{msg_id} is {state}, expected {from_status}")
 
 
+def escalate(conn, msg_id, decided_by, reason):
+    """Park a held message for a person (D14): 'held' to 'escalated'. Nothing delivers, wakes or
+    mentions it until a release or a quarantine."""
+    _decide(conn, msg_id, "held", "escalated", "escalate", reason, decided_by)
+
+
+def _decide_from_open(conn, msg_id, to_status, verdict, reason, decided_by, commit=True):
+    """_decide from 'held', else from 'escalated' (a held mail that a failed screen parked)."""
+    row = get_message(conn, msg_id)
+    start = "escalated" if row and row["status"] == "escalated" else "held"
+    _decide(conn, msg_id, start, to_status, verdict, reason, decided_by, commit=commit)
+
+
 def release(conn, msg_id, decided_by):
-    """Approve a held message: it becomes 'pending', so the postmaster wakes the recipient."""
-    _decide(conn, msg_id, "held", "pending", "release", None, decided_by)
+    """Approve a held or escalated message: it becomes 'pending', so the postmaster wakes the recipient."""
+    _decide_from_open(conn, msg_id, "pending", "release", None, decided_by)
 
 
 def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce=True,
@@ -500,8 +514,7 @@ def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce
     bounce message id, or None."""
     if reason not in QUARANTINE_REASONS:
         raise ValueError(f"reason must be one of {QUARANTINE_REASONS}, got {reason!r}")
-    _decide(conn, msg_id, "held", "quarantined", "quarantine", reason, decided_by,
-            commit=commit)
+    _decide_from_open(conn, msg_id, "quarantined", "quarantine", reason, decided_by, commit=commit)
     if note:
         conn.execute("UPDATE inbox SET note=? WHERE id=?", (note, msg_id))
         if commit:

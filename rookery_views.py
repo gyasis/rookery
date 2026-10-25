@@ -474,14 +474,14 @@ def _is_generated(path):
 
 
 def mail_mirror(conn, root, command="regen"):
-    """_mail/quarantine/<reason>/<id>.md and _mail/review/<id>.md: the metadata of each quarantined or
-    held row. No body. Files of rows that left these states are removed. Returns the paths written."""
+    """_mail/quarantine/<reason>/<id>.md and _mail/review/<id>.md: the metadata of each quarantined,
+    held or escalated row. No body. Files of rows that left these states are removed. Returns the paths written."""
     ids = _names(conn)
     want = {}
     q = conn.execute(
         "SELECT m.id, m.sender, m.recipient, m.topic, m.status, m.reason, m.decided_by, m.created_at, "
         "m.decided_at, s.name AS session FROM inbox m LEFT JOIN rookery_sessions s ON s.session_id=m.session_id "
-        "WHERE m.status IN ('quarantined','held') ORDER BY m.id").fetchall()
+        "WHERE m.status IN ('quarantined','held','escalated') ORDER BY m.id").fetchall()
     for r in q:
         rel = (f"_mail/quarantine/{_safe_file(r['reason'])}/{int(r['id'])}.md" if r["status"] == "quarantined"
                else f"_mail/review/{int(r['id'])}.md")

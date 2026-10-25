@@ -218,7 +218,7 @@ def _push_watch(sender, mid, tid, ctx, url, token, timeout=120):
     deadline = time.time() + timeout
     while time.time() < deadline:
         replies = conn.execute(
-            "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id", (sender, mid)
+            "SELECT * FROM inbox WHERE recipient=? AND id>? AND status IN ('pending','inflight','done') ORDER BY id", (sender, mid)
         ).fetchall()
         if replies:
             task = {
@@ -297,11 +297,11 @@ def a2a_rpc(conn, rpc, principal="a2a"):
             return err(-32602, "bad task id")
         mid = int(tail)
         row = conn.execute("SELECT * FROM inbox WHERE id=?", (mid,)).fetchone()
-        if not row:
+        if not row or not str(row["sender"]).startswith("a2a-"):
             return err(-32001, "task not found")
         # replies are mail addressed back to the original A2A sender
         replies = conn.execute(
-            "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id",
+            "SELECT * FROM inbox WHERE recipient=? AND id>? AND status IN ('pending','inflight','done') ORDER BY id",
             (row["sender"], mid),
         ).fetchall()
         state = "completed" if replies else _A2A_STATE.get(row["status"], "unknown")
@@ -485,7 +485,7 @@ class Handler(BaseHTTPRequestHandler):
             deadline, seen = time.time() + 60, set()
             while time.time() < deadline:
                 replies = conn.execute(
-                    "SELECT * FROM inbox WHERE recipient=? AND id>? ORDER BY id",
+                    "SELECT * FROM inbox WHERE recipient=? AND id>? AND status IN ('pending','inflight','done') ORDER BY id",
                     (sender, mid),
                 ).fetchall()
                 new = [r for r in replies if r["id"] not in seen]

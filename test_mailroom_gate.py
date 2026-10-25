@@ -181,6 +181,53 @@ class A2aMapping(GateHttpBase):
             self.assertEqual(self.rpc("BOOM-ME", method=method)["error"]["code"], -32603)
 
 
+class A2aTaskReads(GateHttpBase):
+    """tasks/get shows replies that were delivered, never held mail, and only A2A tasks."""
+
+    def rpc(self, method, params):
+        return self.raw("/a2a", {"jsonrpc": "2.0", "id": 1, "method": method, "params": params})[1]
+
+    def mail(self, sender, recipient, body, status):
+        import rookery as R
+        c = sqlite3.connect(self.db)
+        c.row_factory = sqlite3.Row
+        try:
+            sid = c.execute("SELECT session_id FROM inbox LIMIT 1").fetchone()
+            mid = R.send(c, sender, recipient, body, session_id=sid[0] if sid else "legacy", hold=False)
+            c.execute("UPDATE inbox SET status=? WHERE id=?", (status, mid))
+            c.commit()
+        finally:
+            c.close()
+        return mid
+
+    def start_task(self):
+        ans = self.rpc("message/send", {"message": {"parts": [{"kind": "text", "text": "hi"}],
+                                                     "metadata": {"recipient": "researcher", "from": "x"}}})
+        return ans["result"]["id"], int(ans["result"]["id"].rsplit("-", 1)[1])
+
+    def test_held_replies_are_not_returned(self):
+        tid, _ = self.start_task()
+        for st in ("held", "quarantined", "escalated"):
+            self.mail("researcher", "a2a-x", "SECRET-" + st, st)
+        self.mail("researcher", "a2a-x", "VISIBLE", "pending")
+        text = json.dumps(self.rpc("tasks/get", {"id": tid}))
+        self.assertIn("VISIBLE", text)
+        self.assertNotIn("SECRET-", text)
+
+    def test_only_held_replies_leaves_task_unfinished(self):
+        tid, _ = self.start_task()
+        self.mail("researcher", "a2a-x", "SECRET-held", "held")
+        ans = self.rpc("tasks/get", {"id": tid})
+        self.assertNotEqual(ans["result"]["status"]["state"], "completed", ans)
+
+    def test_non_a2a_row_is_refused(self):
+        first = self.mail("alice", "bob", "x", "done")
+        self.mail("bob", "alice", "SECRET-private", "pending")
+        ans = self.rpc("tasks/get", {"id": f"a2a-{first}"})
+        self.assertEqual(ans["error"]["code"], -32001, ans)
+        self.assertNotIn("SECRET-private", json.dumps(ans))
+
+
 class ReadsByName(GateHttpBase):
     """T033: /inbox, /claim, /ack by node name; SC-009 read paths change no status."""
 
@@ -276,7 +323,7 @@ class ReadsByName(GateHttpBase):
         self.assertIn("N", out.stdout)
         res = self.raw("/a2a", {"jsonrpc": "2.0", "id": 1, "method": "tasks/get",
                                 "params": {"id": f"task-{self.legacy}"}})[1]
-        self.assertIn("result", res)
+        self.assertEqual(res["error"]["code"], -32001)   # a mailbox row that is not an A2A task
         self.assertEqual(self.snap(), before)
 
 
