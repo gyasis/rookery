@@ -75,3 +75,67 @@ def record(conn, *, mail_id, session_id, stage, check_name, mode, decided_by, la
                          check=check_name, label=label, confidence=confidence, mode=mode, action=action,
                          decided_by=decided_by, failure=failure)
     return cur.lastrowid
+
+
+# T0 records that stop a mail. A person who releases such a mail says the record was wrong (D20).
+T0_BLOCKING = ("injection-suspect", "duplicate", "over-budget", "would-deny", "denied",
+               "g1-task-complete", "g2-no-gap", "g3-gap-in-scope", "g5-ask-not-allowed")
+CALL_SOURCES = ("mark", "release", "quarantine", "unquarantine")
+
+
+def human_by(name):
+    """The stored form of a person: human:<name>. A name that already has the prefix stays as it is."""
+    for other in ("screener:", "t0:", "hunch:", "t2:"):
+        if name.startswith(other):
+            raise ValueError(f"--by {name!r}: a person's name cannot start with {other}")
+    by = name if name.startswith("human:") else f"human:{name}"
+    if not check_decided_by(by):
+        raise ValueError(f"--by {name!r}: use letters, digits and . _ : @ / - only, with no space")
+    return by
+
+
+def add_call(conn, decision_id, mail_id, call_label, verdict, source, by):
+    """Insert one screen_calls row. The caller owns the transaction."""
+    if verdict not in ("right", "wrong"):
+        raise ValueError(f"verdict must be right or wrong, not {verdict!r}")
+    if source not in CALL_SOURCES:
+        raise ValueError(f"source {source!r} is not one of {', '.join(CALL_SOURCES)}")
+    if not call_label:
+        raise ValueError("call_label must be non-empty text")
+    conn.execute("INSERT INTO screen_calls(decision_id, mail_id, call_label, verdict, source, \"by\", created_at)"
+                 " VALUES(?,?,?,?,?,?,?)", (decision_id, mail_id, call_label, verdict, source, by, rookery.now()))
+
+
+def calls_for_action(conn, mail_id, action, reason, by) -> int:
+    """Write the user calls of one manual action (D20, data-model mapping table). Return how many.
+
+    One call for each t0, t1, hunch and t2 decision of the mail that has a label. A `suggest` decision gets a call
+    only from `mark`. A T0 record that blocks nothing gets none. `skipped` is no answer, so it gets none.
+    The caller owns the transaction: it commits the status change and these rows together.
+    """
+    if action not in ("release", "quarantine", "unquarantine"):
+        raise ValueError(f"action {action!r} is not release, quarantine or unquarantine")
+    if action == "quarantine" and not reason:
+        raise ValueError("a quarantine call needs the reason")
+    # rookery._decide commits before it finds a wrong status, so check here: no call may outlive a refused action.
+    if not conn.in_transaction:   # the lock keeps the status as checked until the status change commits
+        conn.execute("BEGIN IMMEDIATE")
+    row = rookery.get_message(conn, mail_id)
+    start = ("quarantined",) if action == "unquarantine" else ("held", "escalated")
+    if row is None or row["status"] not in start:
+        raise ValueError(f"message #{mail_id} is {row['status'] if row else 'missing'}, expected {' or '.join(start)}")
+    rows = conn.execute("SELECT id, stage, label FROM screen_decisions WHERE mail_id=? AND label IS NOT NULL"
+                        " AND label != 'skipped' AND stage IN ('t0','t1','hunch','t2') ORDER BY id",
+                        (mail_id,)).fetchall()
+    n = 0
+    for r in rows:
+        if r[1] == "t0":
+            if r[2] not in T0_BLOCKING:
+                continue
+            blocked = action == "quarantine"
+            add_call(conn, r[0], mail_id, r[2] if blocked else "deliver", "right" if blocked else "wrong", action, by)
+        else:
+            call = reason if action == "quarantine" else "deliver"
+            add_call(conn, r[0], mail_id, call, "right" if call == r[2] else "wrong", action, by)
+        n += 1
+    return n

@@ -231,7 +231,7 @@ agent mail has one T1 record, 0 statuses change, and the fake counts 0 calls dur
 **Independent Test**: 150 fake decisions, 140 marked right: the report shows 150 and 93%. At 149 the live switch
 refuses and names 1 missing.
 
-- [ ] T012 [US2] Files: `cli_screen.py`, `screener_t0.py`, `mail_screen.py`, `test_screen_calls.py`.
+- [x] T012 [US2] Files: `cli_screen.py`, `screener_t0.py`, `mail_screen.py`, `test_screen_calls.py`.
   Edit `cli_screen.py`: add `screen review`, `mark`, `report` and `export`, and `screen release`,
   `quarantine` and `escalate` (contract). Add `calls_for_action(conn, mail_id, action, reason, by)` to
   `screener_t0.py` (D14: no model import), which writes the calls of the data-model mapping table for each `t0`, `t1`, `hunch` and `t2`
