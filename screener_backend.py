@@ -21,7 +21,8 @@ import urllib.error
 import urllib.request
 from typing import NamedTuple
 
-DEFAULT_BASE_URL = "http://192.168.0.159:8799/llm/ollama"
+import screener_config
+
 DEFAULT_MODEL = "tev1:4b"
 DEFAULT_TIMEOUT_S = 300.0
 HUNCH_VOTES = 6
@@ -125,7 +126,7 @@ class _Backend:
 class _SystemOne(_Backend):
     def __init__(self, cfg):
         self.model = cfg.get("model") or DEFAULT_MODEL
-        self.base = (cfg.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+        self.base = (cfg.get("base_url") or screener_config.DEFAULTS["base_url"]).rstrip("/")   # one home for the host (D23)
         self.timeout = float(cfg.get("timeout_s") or DEFAULT_TIMEOUT_S)
 
     def _decide(self, state, labels, instructions, question):

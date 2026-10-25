@@ -408,7 +408,7 @@ injection fixture goes to quarantine, and the recipient is not woken.
 
 ## Phase 9: Polish and cross-cutting concerns
 
-- [ ] T023 [P] Files: `test_gate_scan.py`.
+- [x] T023 [P] Files: `test_gate_scan.py`.
   Edit `test_gate_scan.py` (D23). Add `screener.py` and `cli_screen.py` to `QUARANTINE_OK`. Watch
   `rookery.escalate` with the allow list `rookery.py`, `screener.py`, `cli_screen.py`, `mail_screen.py`. Add
   rules: no screener module passes the literal `"loop"` to `quarantine`. `mail_gate.py`, `turn_block.py`,
@@ -418,7 +418,7 @@ injection fixture goes to quarantine, and the recipient is not woken.
   `mail_screen.py` never imports `screener` or `screener_backend`. `cli_screen.py` imports `screener` only inside a
   function (D23). Needs T022 first.
   Verify: `python3 -m unittest test_gate_scan -v`
-- [ ] T024 [P] Files: `test_text_hints.py`.
+- [x] T024 [P] Files: `test_text_hints.py`.
   Add a case to `test_text_hints.py`. It collects every bounce, notice, refusal and error text of
   `screener.py`, `screener_t0.py`, `screener_config.py`, `cli_screen.py` and `rookery_names.py` into one temporary
   file. It runs `ste-lint --max-score 2.0 --glossary ste-glossary.txt` on that file (FR-032, SC-012). Fix each text

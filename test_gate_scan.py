@@ -17,6 +17,14 @@ QUARANTINE_OK = {"mail_gate.py", "rookery.py", "mail_screen.py", "cli_screen.py"
 SYSTEM_SEND_OK = {"postmaster.py", "relay.py", "rookery.py", "mail_gate.py", "screener_t0.py"}
 RECIPIENT_UPDATE_OK = {"relay.py"}
 INSERT_OK = {"rookery.py"}
+ESCALATE_OK = {"rookery.py", "screener.py", "cli_screen.py", "mail_screen.py"}
+# rookery._decide moves any held mail to any state. Real callers: the gate parks a mail whose worker gates fire
+# (mail_gate.py), the screener escalates a failed screening (screener.py).
+DECIDE_OK = {"rookery.py", "screener.py", "mail_gate.py"}
+IP_OK = {"screener_config.py"}
+NO_SCREENER_IMPORT = {"mail_gate.py", "turn_block.py", "cli_hook.py", "screener_t0.py", "mail_screen.py"}
+NO_PROMPTCHAIN_IMPORT = {"mail_gate.py", "turn_block.py", "cli_hook.py", "screener_t0.py"}
+FORBIDDEN_KEYS = {"max_tokens", "max_completion_tokens", "num_predict", "num_ctx", "think"}
 
 _SP = r"(?:\s|/\*.*?\*/|--[^\n]*\n)+"                        # whitespace and SQL comments
 _TBL = r"""(?:(?:\w+|"\w+"|`\w+`|\[\w+\])\s*\.\s*)?(?:inbox|"inbox"|`inbox`|\[inbox\])(?!\w)"""
@@ -30,6 +38,8 @@ _DYN_MODULES = ("rookery", "mail_gate")
 _WATCHED = {
     ("rookery", "send"): ("calls rookery.send; send through mail_gate.submit", SEND_OK),
     ("rookery", "quarantine"): ("calls rookery.quarantine; only the gate and mail_screen may", QUARANTINE_OK),
+    ("rookery", "escalate"): ("calls rookery.escalate; only rookery, the screener and its CLI may", ESCALATE_OK),
+    ("rookery", "_decide"): ("calls rookery._decide; only rookery, the screener and the gate may", DECIDE_OK),
     ("mail_gate", "system_send"): ("calls mail_gate.system_send; only postmaster and relay may", SYSTEM_SEND_OK),
 }
 
@@ -98,7 +108,78 @@ def scan_source(path_name, source):
                 bad(node, "inserts into the inbox directly; only rookery.py may")
             if _RECIPIENT_RE.search(node.value) and not allowed(RECIPIENT_UPDATE_OK):
                 bad(node, "re-addresses inbox rows; only relay.py may")
+    if not in_pkg:
+        out += _feature_rules(path_name, base, source, tree)
     return sorted(set(out))
+
+
+def _imported_roots(node):
+    if isinstance(node, ast.Import):
+        return [a.name.split(".")[0] for a in node.names]
+    if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+        return [node.module.split(".")[0]]
+    return []
+
+
+def _top_level_nodes(tree):
+    """Every node that runs at import time: the walk does not enter a function or lambda body."""
+    stack = [tree]
+    while stack:
+        n = stack.pop()
+        yield n
+        for c in ast.iter_child_nodes(n):
+            if not isinstance(c, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                stack.append(c)
+
+
+def _feature_rules(path_name, base, source, tree):
+    """Screener-chain rules (D23). `base` is a root-level file name."""
+    out = []
+
+    def bad(node, msg):
+        out.append(f"{path_name}:{getattr(node, 'lineno', 0)}: {msg}")
+
+    is_screener = base.startswith("screener") or base == "cli_screen.py"
+    for node in ast.walk(tree):
+        roots = _imported_roots(node)
+        if base in NO_SCREENER_IMPORT and ({"screener", "screener_backend"} & set(roots)):
+            bad(node, f"{base} imports screener or screener_backend")
+        if base in NO_PROMPTCHAIN_IMPORT and "promptchain" in roots:
+            bad(node, f"{base} imports promptchain")
+        if base == "mail_screen.py" and "promptchain" in roots:
+            bad(node, "mail_screen.py imports promptchain")
+        if is_screener and isinstance(node, ast.Call):
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else fn.id if isinstance(fn, ast.Name) else None
+            if name == "quarantine":
+                vals = [a for a in node.args] + [k.value for k in node.keywords]
+                if any(isinstance(v, ast.Constant) and v.value == "loop" for v in vals):
+                    bad(node, "a screener module passes the reason 'loop' to quarantine (FR-002)")
+        # a model-call knob: a keyword, a name, an attribute, or a string that is exactly the key
+        key = None
+        if isinstance(node, ast.keyword) and node.arg in FORBIDDEN_KEYS:
+            key = node.arg
+        elif isinstance(node, ast.Name) and node.id in FORBIDDEN_KEYS:
+            key = node.id
+        elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_KEYS:
+            key = node.attr
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in FORBIDDEN_KEYS:
+            key = node.value
+        if key:
+            bad(node, f"uses the model-call key {key!r}; the screener never sets one (FR-007, FR-034)")
+
+    for node in _top_level_nodes(tree):
+        roots = _imported_roots(node)
+        if "promptchain" in roots:
+            bad(node, "imports promptchain at the top level; import it inside the function that needs it")
+        if base == "cli_screen.py" and "screener" in roots:
+            bad(node, "cli_screen.py imports screener at the top level; import it inside a function (D23)")
+
+    if base not in IP_OK:
+        for m in re.finditer(r"192\.168\.0\.159", source):
+            bad(ast.Pass(lineno=source.count("\n", 0, m.start()) + 1),
+                "has the model host address; only screener_config.py and the default config may")
+    return out
 
 
 def repo_files():
@@ -177,6 +258,44 @@ class ScanSyntheticTests(unittest.TestCase):
 
     def test_package_file_is_not_root_file(self):
         self.assertCaught("plugin_herdr/relay.py", "import mail_gate\nmail_gate.system_send()\n", "system_send")
+
+    def test_escalate_and_decide_wrong_file(self):
+        self.assertCaught("x.py", "import rookery\nrookery.escalate(c, 1, 'me', 'r')\n", "rookery.escalate")
+        self.assertCaught("x.py", "import rookery\nrookery._decide(c, 1, 'held', 'escalated', 'v', 'r', 'me')\n", "rookery._decide")
+        self.assertCaught("x.py", "from rookery import escalate\n", "imports rookery.escalate")
+
+    def test_screener_loop_quarantine(self):
+        for call in ("rookery.quarantine(c, 1, 'loop', 'me')", "rookery.quarantine(c, 1, reason='loop')"):
+            self.assertCaught("screener.py", f"import rookery\n{call}\n", "'loop'")
+            self.assertCaught("cli_screen.py", f"import rookery\n{call}\n", "'loop'")
+        self.assertEqual(scan_source("rookery.py", "quarantine(c, 1, 'loop', 'me')\n"), [])
+
+    def test_gate_files_never_import_screener(self):
+        for f in ("mail_gate.py", "turn_block.py", "cli_hook.py", "screener_t0.py", "mail_screen.py"):
+            self.assertCaught(f, "import screener\n", "imports screener")
+            self.assertCaught(f, "import screener_backend\n", "imports screener")
+            self.assertCaught(f, "from screener import x\n", "imports screener")
+        for f in ("mail_gate.py", "turn_block.py", "cli_hook.py", "screener_t0.py"):
+            self.assertCaught(f, "def f():\n    import promptchain\n", "imports promptchain")
+
+    def test_promptchain_top_level_only(self):
+        self.assertCaught("x.py", "import promptchain\n", "top level")
+        self.assertCaught("x.py", "try:\n    from promptchain import X\nexcept ImportError:\n    X = None\n", "top level")
+        self.assertEqual(scan_source("x.py", "def f():\n    import promptchain\n"), [])
+
+    def test_cli_screen_imports_screener_in_function_only(self):
+        self.assertCaught("cli_screen.py", "import screener\n", "top level")
+        self.assertEqual(scan_source("cli_screen.py", "def f():\n    import screener\n"), [])
+
+    def test_model_call_keys(self):
+        for src in ("f(max_tokens=3)", "d = {'num_predict': 1}", "d = {'num_ctx': 1}", "d = {'think': False}",
+                    "x = o.max_completion_tokens"):
+            self.assertCaught("x.py", src + "\n", "model-call key")
+        self.assertEqual(scan_source("x.py", '"""No think or max_tokens here."""\n# num_ctx\nthinking = 1\n'), [])
+
+    def test_model_host_literal(self):
+        self.assertCaught("x.py", "u = 'http://192.168.0.159:8799'\n", "model host")
+        self.assertEqual(scan_source("screener_config.py", "u = 'http://192.168.0.159:8799'\n"), [])
 
     def test_clean_snippet_passes(self):
         src = ("import rookery\nimport mail_gate\nfrom rookery import connect\n"
