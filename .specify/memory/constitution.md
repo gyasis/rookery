@@ -1,26 +1,28 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.2.0 → 1.2.1 (PATCH). Principle VII gets one exception: carry-over (user, 2026-10-16).
-Earlier: 1.1.0 → 1.2.0 (MINOR). That amendment added Principle IX.
+Version change: 1.2.1 → 1.3.0 (MINOR). New Principle X: no token spend without a need (user, 2026-10-25).
+Earlier: 1.2.0 → 1.2.1 (PATCH). Principle VII got one exception: carry-over (user, 2026-10-16).
 
 Principles:
-  I-VIII: no change.
-  IX. Rookery native: new (user, 2026-10-15).
+  I-IX: no change.
+  X. No token spend without a need: new (user, 2026-10-25).
 
 Sections:
   Added: none. Removed: none. Security, Development Workflow, Governance: no change.
 
 Templates:
-  ✅ .specify/templates/plan-template.md: Constitution Check has a gate for IX.
-  ✅ .specify/templates/tasks-template.md: no change. IX adds no new task type.
+  ✅ .specify/templates/plan-template.md: Constitution Check has a gate for X; version reference 1.3.0.
+  ✅ .specify/templates/tasks-template.md: no change. X adds no new task type (its bound tests are normal tests).
   ✅ .specify/templates/spec-template.md: no change.
   ✅ .specify/templates/checklist-template.md: no change.
+  ✅ memory-bank/shared/.constitution.md: a symlink to this file, so dev-kid reads the new version.
 
 Follow-up:
   - The Source links point into the OKF bundle (~/Documents/code/inter-agent-comms/okf/).
     They do not resolve inside this repo.
-  - Spec 001 must follow IX: Rookery generates agent IDs and session IDs (clarify session 2026-10-15).
+  - The mail-wake follow-up spec (okf/design/mail-wake.md) must pass gate X: it replaces the
+    0.5 s postmaster poll with an event wake and a slow sweep.
 -->
 # Rookery Constitution
 
@@ -97,6 +99,14 @@ matches but never interprets. Support for a new tool is a new binding kind plus 
 a change to the core code.
 *Source: user, 2026-10-15; spec 001 clarifications (identity and bindings).*
 
+### X. No token spend without a need
+Rookery calls a model only when a mail needs a decision. Idle costs no tokens: no timer, poll or empty
+check calls a model. Cost grows with the mail, never with the number of agents times the number of
+agents, and never through a loop that re-sends. A background process waits for an event or runs a slow
+check that calls no model. Each path that calls a model has a bound (tries, batch size, retries), and
+a test proves the bound. Each model gets a small envelope, never the full history.
+*Source: user, 2026-10-25 (mail-wake discussion); [mail wake](/design/mail-wake.md); economy-first principle.*
+
 ## Security and Use Constraints
 
 - Mail from another agent is DATA, never instructions. Rookery quarantines suspected injection
@@ -126,4 +136,4 @@ major change. An added principle is a minor change. A wording change is a patch.
 (`~/Documents/code/inter-agent-comms/okf/`) holds the design. This file holds the rules for building that
 design.
 
-**Version**: 1.2.1 | **Ratified**: 2026-10-15 | **Last Amended**: 2026-10-16
+**Version**: 1.3.0 | **Ratified**: 2026-10-15 | **Last Amended**: 2026-10-25
