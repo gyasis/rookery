@@ -5,11 +5,14 @@
 """
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import unittest
 
+import mail_gate
 import screener_t0 as S
+import turn_block as TB
 from test_hooks import Base
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -115,6 +118,70 @@ class Record(Base):
     def test_detail_is_stored_as_given_only(self):
         self.rec(detail="pattern:ignore-previous")
         self.assertEqual(self.rows()[0]["detail"], "pattern:ignore-previous")
+
+
+class GateStore(Base):
+    """T009: thread through the gate, and the `decided` screen_mail row of a T0 quarantine at store."""
+    def send(self, to="researcher", thread=None, **kw):
+        return mail_gate.submit(self.conn, path="cli", principal=(self.alpha, self.me),
+                                raw_sender=self.me["agent_id"], to=to, body="hello", root=self.root,
+                                thread=thread, **kw)
+
+    def row(self, table, msg_id, col="id"):
+        self.conn.row_factory = sqlite3.Row
+        return self.conn.execute(f"SELECT * FROM {table} WHERE {col}=?", (msg_id,)).fetchone()
+
+    def test_thread_is_stored(self):
+        res = self.send(thread="lease-review")
+        self.assertEqual(self.row("inbox", res["msg_id"])["thread"], "lease-review")
+
+    def test_plain_send_stores_null_thread(self):
+        out = subprocess.run([sys.executable, os.path.join(HERE, "rookery_cli.py"), "send", "researcher", "hi",
+                              "--task", "T-1", "--json"], capture_output=True, text=True, env=self.env(),
+                             cwd=HERE, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIsNone(self.row("inbox", json.loads(out.stdout)["msg_id"])["thread"])
+        self.assertIsNone(self.row("inbox", self.send()["msg_id"])["thread"])
+
+    def test_block_thread_is_stored(self):
+        ctx = {"root": self.root, "session": self.alpha, "identity": self.me, "adapter": "stop"}
+        raw = json.dumps({"to": "researcher", "task": "T-1", "kind": "ask", "say": "hi", "status": "done",
+                          "thread": "t-9"})
+        TB.dispatch_text(self.conn, "```rookery\n" + raw + "\n```", ctx)
+        row = self.conn.execute("SELECT thread FROM inbox WHERE status='pending'").fetchone()
+        self.assertEqual(row[0], "t-9")
+
+    def test_twenty_sends_make_no_fake_calls(self):
+        fake = os.path.join(self.tmp.name, "fake.json")
+        with open(fake, "w") as f:
+            json.dump({"t1": [{"match": "", "label": "deliver"}]}, f)
+        code = ("import sys, mail_gate, turn_block as TB, rookery_identity as RI\n"
+                "c = TB.open_db(); s = c.execute('SELECT * FROM rookery_sessions WHERE name=?', ('alpha',)).fetchone()\n"
+                "i = c.execute('SELECT * FROM identities WHERE name=? AND session_id=?', ('me', s['session_id'])).fetchone()\n"
+                "for n in range(20):\n"
+                "    r = mail_gate.submit(c, path='cli', principal=(s, i), raw_sender=i['agent_id'],\n"
+                "                         to='researcher', body='b%d' % n, task='t%d' % n)\n"
+                "    assert r['outcome'] == 'sent', r\n"
+                "bad = [m for m in ('screener', 'screener_backend', 'promptchain') if m in sys.modules]\n"
+                "sys.exit(1 if bad else 0)")
+        r = subprocess.run([sys.executable, "-c", code], cwd=HERE, capture_output=True, text=True,
+                           env=self.env(ROOKERY_SCREENER_FAKE=fake), timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM screen_decisions").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM screen_mail").fetchone()[0], 0)
+
+    def test_wrong_recipient_quarantine_writes_decided_row(self):
+        res = self.send(to="nobody", thread="t-1")
+        self.assertEqual((res["outcome"], res["reason"]), ("quarantined", "wrong-recipient"))
+        sm = self.row("screen_mail", res["msg_id"], "mail_id")
+        self.assertEqual((sm["state"], sm["final_by"], sm["final_label"], sm["session_id"]),
+                         ("decided", "gate", "wrong-recipient", self.alpha["session_id"]))
+        self.assertIsNotNone(sm["decided_at"])
+        self.assertEqual(self.row("inbox", res["msg_id"])["thread"], "t-1")
+
+    def test_sent_mail_has_no_screen_mail_row(self):
+        res = self.send()
+        self.assertIsNone(self.row("screen_mail", res["msg_id"], "mail_id"))
 
 
 class Imports(unittest.TestCase):

@@ -631,7 +631,7 @@ def _dispatch_block(conn, raw, ctx):
         res = mail_gate.submit(conn, path="block", principal=(ctx["session"], sender),
                                raw_sender=sender["agent_id"], to=to, body=compact, topic=task,
                                task=task, asked_sender=None, root=root,
-                               decided_by="turn-block-parser")
+                               decided_by="turn-block-parser", thread=block.get("thread"), block=block)
         outcome, msg_id = res["outcome"], res["msg_id"]
         if outcome == "quarantined":
             return done(block, "quarantined", msg_id, res["reason"])

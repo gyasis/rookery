@@ -175,7 +175,7 @@ suites are green.
 **Independent Test**: send 50 mails of every kind, run `rookery screen run --once` with the fake backend. Each
 agent mail has one T1 record, 0 statuses change, and the fake counts 0 calls during the sends.
 
-- [ ] T009 [US1] Files: `mail_gate.py`, `turn_block.py`, `test_screen_t0.py`.
+- [x] T009 [US1] Files: `mail_gate.py`, `turn_block.py`, `test_screen_t0.py`.
   Edit `mail_gate.py`: `submit` and `_submit` take `thread=None` and `block=None`, and pass `thread`
   to `rookery.send`. When a T0 rule of today puts the mail in quarantine at store time, write a `screen_mail` row
   with state `decided` and `final_by` set to that `decided_by`. Edit `turn_block.py:625-629` to pass `thread` and

@@ -46,17 +46,21 @@ def _quarantine_recipient(conn, to):
     return ("rookery", True) if hit is not None else (to, False)
 
 
-def _hold_quarantine(conn, sender, sid, recipient, body, topic, reason, note, suggest, decided_by):
-    """hold + quarantine (+ note) + bounce, inside the caller's transaction. Returns
-    (msg_id, bounce_id)."""
+def _hold_quarantine(conn, sender, sid, recipient, body, topic, reason, note, suggest, decided_by,
+                     thread=None):
+    """hold + quarantine (+ note) + bounce, inside the caller's transaction. Also writes the
+    `screen_mail` row `decided` (a T0 quarantine at store: the screener skips it, FR-005, D9).
+    Returns (msg_id, bounce_id)."""
     raw_to = recipient
     recipient, masked = _quarantine_recipient(conn, raw_to)
     if masked:
         note += f' (You addressed the block to "{_show(raw_to)}".)'
     msg_id = rookery.send(conn, sender, recipient, body, topic=topic, hold=True,
-                          session_id=sid, commit=False)
+                          session_id=sid, commit=False, thread=thread)
     bounce_id = rookery.quarantine(conn, msg_id, reason, decided_by=decided_by, note=note,
                                    suggest=suggest, commit=False, bounce_limit=loop_limit())
+    conn.execute("INSERT INTO screen_mail(mail_id, session_id, state, final_label, final_by, decided_at) "
+                 "VALUES(?,?,?,?,?,?)", (msg_id, sid, "decided", reason, decided_by, rookery.now()))
     return msg_id, bounce_id
 
 
@@ -78,7 +82,7 @@ def quarantine_malformed(conn, ctx, recipient, body, topic, reason, note, sugges
     return msg_id
 
 
-def _send_counted(conn, sender_id, recipient_id, body, task, sid, topic=None):
+def _send_counted(conn, sender_id, recipient_id, body, task, sid, topic=None, thread=None):
     """Send one agent mail. Counts it against two counters in the same transaction: one for the
     (task, pair) and one task-less for the pair (so a new task name does not evade, limit
     loop_pair_limit). At either limit the mail is stored `held` with reason `loop` instead, and no
@@ -87,7 +91,7 @@ def _send_counted(conn, sender_id, recipient_id, body, task, sid, topic=None):
     held = rookery.count_loop(conn, sid, [(task, sender_id, recipient_id, limit),
                                           ("~pair", sender_id, recipient_id, pair_limit)])
     msg_id = rookery.send(conn, sender_id, recipient_id, body, topic=topic, session_id=sid,
-                          hold=True if held else None, commit=False)
+                          hold=True if held else None, commit=False, thread=thread)
     if held:
         conn.execute("UPDATE inbox SET reason='loop', note=? WHERE id=?",
                      (f"Held: too many mails on task {task} (or between these agents) with "
@@ -137,7 +141,7 @@ def _result(outcome, reason=None, warning=None, msg_id=None, bounce_id=None):
 
 
 def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
-           asked_sender=None, root=None, decided_by="gate", pre_store=None):
+           asked_sender=None, root=None, decided_by="gate", pre_store=None, thread=None, block=None):
     """The one door for mail from a local sender. Returns {"outcome", "reason", "warning",
     "msg_id", "bounce_id"}. Never raises for a mail problem. Order of checks: data-model.md."""
     if asked_sender:
@@ -151,7 +155,7 @@ def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
     result = _result("send-failed")
     try:
         result = _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store,
-                         decided_by)
+                         decided_by, thread, block)
     except Exception as exc:        # nothing is stored: _submit rolled back
         result = (_result("db-busy", warning=warning) if _is_busy(exc)
                   else _result("send-failed", f"{type(exc).__name__}: {exc}", warning))
@@ -159,7 +163,8 @@ def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
     return result
 
 
-def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store, decided_by):
+def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store, decided_by,
+            thread=None, block=None):
     if not isinstance(sender, str):
         return _result("refused", "bad-input")
     if is_system_name(sender):                             # 1
@@ -174,7 +179,7 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
 
     def quarantine(recipient, reason, note, suggest=None):
         msg_id, bounce_id = _hold_quarantine(conn, sender, sid, recipient, body, topic, reason,
-                                             note, suggest, decided_by)
+                                             note, suggest, decided_by, thread)
         return _result("quarantined", reason, warning, msg_id, bounce_id)
 
     _begin(conn)
@@ -195,12 +200,12 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
                                           (recipient,)).fetchone())
             if held:
                 msg_id = rookery.send(conn, sender, recipient, body, topic=topic, hold=True,
-                                      session_id=sid, commit=False)
+                                      session_id=sid, commit=False, thread=thread)
                 conn.execute("UPDATE inbox SET reason=? WHERE id=?", (held[1], msg_id))
                 conn.commit()
                 return _result("sent", held[1], warning, msg_id)
         key = task or topic or "-"                         # 7, 8
-        msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic)
+        msg_id, loop_held = _send_counted(conn, sender, recipient, body, key, sid, topic, thread)
         conn.commit()
         if loop_held:
             return _result("loop-held", "loop", warning, msg_id)
