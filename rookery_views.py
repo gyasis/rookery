@@ -444,20 +444,17 @@ def teams(conn, root, session, team, command="up"):
 
 
 def threads(conn, root, command="regen"):
-    """_threads/INDEX.md: one line for each group of mail with the same topic, sender and recipient.
-    Metadata only. The body column is never read."""
-    ids = _names(conn)
+    """_threads/INDEX.md: one row for each row of the threads table, by session and thread, with its status
+    and its mail count. Mail with no thread is not listed (FR-023). Metadata only. The body column is never read."""
     rows = conn.execute(
-        "SELECT topic, sender, recipient, COUNT(*) AS n, MAX(created_at) AS last, MAX(id) AS last_id "
-        "FROM inbox GROUP BY session_id, topic, sender, recipient ORDER BY last DESC, last_id DESC").fetchall()
-    out = []
-    for r in rows:
-        st = conn.execute("SELECT status FROM inbox WHERE id=?", (r["last_id"],)).fetchone()[0]
-        out.append((r["topic"] or "-", ids.get(r["sender"], r["sender"]), ids.get(r["recipient"], r["recipient"]),
-                    r["n"], _iso(r["last"]), st))
+        "SELECT s.name AS session, t.thread, t.status, "
+        "(SELECT COUNT(*) FROM inbox m WHERE m.session_id=t.session_id AND m.thread=t.thread) AS n "
+        "FROM threads t LEFT JOIN rookery_sessions s ON s.session_id=t.session_id "
+        "ORDER BY s.name, t.thread").fetchall()
+    out = [(r["session"] or "-", r["thread"], r["status"], r["n"]) for r in rows]
     return _write(root, "_threads/INDEX.md",
-                  "# Threads\n\nOne line for each thread. No mail body is here.\n\n" +
-                  _table(["thread", "sender", "recipient", "mails", "time", "state"], out), command)
+                  "# Threads\n\nOne line for each thread. Mail with no thread is not here. No mail body is here.\n\n" +
+                  _table(["session", "thread", "state", "mails"], out), command)
 
 
 def _safe_file(s):

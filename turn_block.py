@@ -644,6 +644,12 @@ def _dispatch_block(conn, raw, ctx):
                     return done(block, "loop-held", msg_id, f"loop (could not keep the block: {werr})")
             return done(block, "loop-held", msg_id, "loop")
         if outcome == "sent":
+            if block["kind"] == "handoff" and block.get("status") == "done" and block.get("thread"):
+                # Only the agent that opened the thread can end it this way (D16, FR-022a).
+                conn.execute("UPDATE threads SET status='closed', closed_by=?, closed_at=?, close_reason='done' "
+                             "WHERE session_id=? AND thread=? AND opened_by=? AND status!='closed'",
+                             (f"handoff:{sender['name']}", rookery.now(), sid, block["thread"], sender["agent_id"]))
+                conn.commit()
             return done(block, "sent", msg_id)
         # db-busy, send-failed, refused: nothing stored; keep the block
         reason = res["reason"] or "database is busy"

@@ -410,6 +410,11 @@ def _act_pre(conn, mail_id, owner, cfg, envelope):
             rookery.quarantine(conn, mail_id, rec["label"], by, suggest=peer, commit=False,
                                bounce_limit=mail_gate.loop_limit())
             action = "quarantine"
+            m = rookery.get_message(conn, mail_id)   # a veto closes the thread, same transaction (D16, FR-022a)
+            if m["thread"]:
+                conn.execute("UPDATE threads SET status='closed', closed_by=?, closed_at=?, close_reason='veto' "
+                             "WHERE session_id=? AND thread=? AND status!='closed'",
+                             (by, rookery.now(), m["session_id"], m["thread"]))
         conn.execute("UPDATE screen_decisions SET action=? WHERE id=?", (action, rec["id"]))
         _finish(conn, mail_id, owner, cfg, rec["label"], envelope, commit=False)
         conn.commit()

@@ -60,6 +60,46 @@ def cmd_run(args):
     sys.exit(code)
 
 
+def cmd_thread_close(args):
+    """Close a thread for the user, or for a boss with --as (D16, FR-022a). A closed thread stays closed."""
+    conn = _db()
+    try:
+        s = conn.execute("SELECT session_id, name FROM rookery_sessions WHERE name=? OR session_id=?",
+                         (args.session, args.session)).fetchone()
+        if s is None:
+            _fail(f"session {args.session!r} does not exist")
+        sid = s["session_id"]
+        if conn.execute("SELECT 1 FROM threads WHERE session_id=? AND thread=?", (sid, args.thread)).fetchone() is None:
+            _fail(f"thread {args.thread!r} does not exist in session {s['name']!r}")
+        if args.as_agent:
+            boss = conn.execute("SELECT u.agent_id, i.name FROM up_agents u JOIN identities i ON i.agent_id=u.agent_id "
+                                "WHERE u.session_id=? AND u.role='boss' AND (u.agent_id=? OR i.name=?)",
+                                (sid, args.as_agent, args.as_agent)).fetchone()
+            if boss is None:
+                _fail(f"{args.as_agent!r} is not the boss of session {s['name']!r}")
+            by, reason = f"boss:{boss['name']}", "boss"
+        else:
+            try:
+                by, reason = screener_t0.human_by(getpass.getuser()), "user"
+            except ValueError as e:
+                _fail(str(e))
+        n = conn.execute("UPDATE threads SET status='closed', closed_by=?, closed_at=?, close_reason=? "
+                         "WHERE session_id=? AND thread=? AND status!='closed'",
+                         (by, rookery.now(), reason, sid, args.thread)).rowcount
+        conn.commit()
+        row = conn.execute("SELECT closed_by, close_reason FROM threads WHERE session_id=? AND thread=?",
+                           (sid, args.thread)).fetchone()
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps({"session": s["name"], "thread": args.thread, "closed": bool(n),
+                          "closed_by": row["closed_by"], "close_reason": row["close_reason"]}))
+    elif n:
+        print(f"Closed thread {args.thread}.")
+    else:
+        print(f"Thread {args.thread} is already closed.")
+
+
 def _host_answers(base_url):
     """True when GET {base_url}/v1/models answers (a metadata call, not a model call)."""
     try:
@@ -476,3 +516,15 @@ def add_parser(subparsers):
     x.add_argument("--reason", help="Why the mail waits.")
     x.add_argument("--by", help="Your name (default: your user name).")
     x.set_defaults(func=cmd_escalate)
+
+
+def add_thread_parser(subparsers):
+    p = subparsers.add_parser("thread", help="Close a thread.")
+    sub = p.add_subparsers(dest="thread_command", metavar="<thread_command>")
+    sub.required = True
+    cl = sub.add_parser("close", help="Close a thread. It stays closed.")
+    cl.add_argument("session", metavar="SESSION")
+    cl.add_argument("thread", metavar="THREAD")
+    cl.add_argument("--as", dest="as_agent", metavar="AGENT", help="Close it as the boss of the session.")
+    cl.add_argument("--json", action="store_true", help="Print one JSON object.")
+    cl.set_defaults(func=cmd_thread_close)

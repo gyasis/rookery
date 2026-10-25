@@ -9,9 +9,13 @@ skips T1. A closed thread refuses mail with B3 live, and only records `would-den
 import copy
 import json
 import os
+import re
 import shutil
 import sqlite3
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 
 import mail_gate
 import rookery
@@ -19,7 +23,8 @@ import rookery_identity as RI
 import screener
 import screener_backend as SB
 import screener_config
-from test_hooks import Base
+import turn_block as TB
+from test_hooks import Base, CLI, HERE
 from test_screen_run import FIXTURE, block
 
 BANDS = {"accept": 0.8, "review": 0.5}
@@ -247,6 +252,117 @@ class Threads(Base):
         self.assertEqual(len(lines), 1)
         self.assertEqual(lines[0]["event"], "config-unreadable")
         self.assertTrue(lines[0]["error"])
+
+
+class Closers(Threads):
+    """The four closers (D16, FR-022a): veto, user, boss, handoff done."""
+
+    def closer(self, name="th-1"):
+        t = self.thread(name=name)
+        return (t["status"], t["closed_by"], t["close_reason"], t["closed_at"] is not None)
+
+    def thread_close(self, *args, check=True):
+        p = subprocess.run([sys.executable, CLI, "thread", "close", *args], capture_output=True, text=True,
+                           env=self.env(session=False, node=False), cwd=HERE, timeout=120)
+        if check:
+            self.assertEqual(p.returncode, 0, p.stderr)
+        return p
+
+    def make_boss(self, agent):
+        self.conn.execute("INSERT INTO up_agents VALUES(?,?,?,?,?,?,?,?)",
+                          (agent["agent_id"], self.sid, "claude", "boss", None, None, "none", "now"))
+        self.conn.commit()
+
+    def done_handoff(self, who, thread="th-1"):
+        ctx = {"root": self.root, "session": self.alpha, "identity": who, "adapter": "stop"}
+        raw = json.dumps({"to": "researcher" if who is self.swe else "swe", "task": "T-7", "kind": "handoff",
+                          "say": "finished", "status": "done", "thread": thread})
+        res = TB.dispatch_block(self.conn, raw, ctx)
+        self.assertEqual(res["outcome"], "sent", res)
+
+    def test_veto_closes_the_thread(self):
+        self.config(t1="live")
+        self.send()
+        self.assertEqual(self.passes(), 1)   # approved first
+        self.send(say="CASE-UNNEEDED stop", kind="decline")   # a decline gets a full T1
+        self.assertEqual(self.passes(), 1)
+        self.assertEqual(self.closer(), ("closed", "screener:tev1:4b", "veto", True))
+
+    def test_veto_of_a_first_mail_closes_a_held_thread(self):
+        self.config(t1="live")
+        self.send(say="CASE-UNNEEDED first")
+        self.assertEqual(self.thread()["status"], "held")
+        self.assertEqual(self.passes(), 1)
+        self.assertEqual(self.closer(), ("closed", "screener:tev1:4b", "veto", True))
+
+    def test_user_close(self):
+        self.send()
+        p = self.thread_close("alpha", "th-1")
+        self.assertEqual(p.stdout.strip(), "Closed thread th-1.")
+        self.assertRegex(self.thread()["closed_by"], r"^human:.+")
+        self.assertEqual((self.thread()["status"], self.thread()["close_reason"]), ("closed", "user"))
+        self.assertIsNotNone(self.thread()["closed_at"])
+
+    def test_boss_close(self):
+        self.send()
+        self.make_boss(self.me)
+        p = self.thread_close("alpha", "th-1", "--as", "me", "--json")
+        out = json.loads(p.stdout)
+        self.assertEqual((out["closed"], out["closed_by"], out["close_reason"]), (True, "boss:me", "boss"))
+        self.assertEqual(self.closer(), ("closed", "boss:me", "boss", True))
+
+    def test_as_a_non_boss_exits_2(self):
+        self.send()
+        p = self.thread_close("alpha", "th-1", "--as", "swe", check=False)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("swe", p.stderr)
+        self.assertEqual(self.thread()["status"], "open")
+
+    def test_unknown_thread_exits_2(self):
+        self.assertEqual(self.thread_close("alpha", "nope", check=False).returncode, 2)
+
+    def test_closing_a_closed_thread_exits_0_and_changes_nothing(self):
+        self.send()
+        self.thread_close("alpha", "th-1")
+        before = self.closer()
+        self.make_boss(self.me)
+        p = self.thread_close("alpha", "th-1", "--as", "me")
+        self.assertEqual(p.stdout.strip(), "Thread th-1 is already closed.")
+        self.assertEqual(self.closer(), before)
+
+    def test_done_handoff_from_the_opener_closes(self):
+        self.send()   # swe opens
+        self.done_handoff(self.swe)
+        self.assertEqual(self.closer(), ("closed", "handoff:swe", "done", True))
+
+    def test_done_handoff_from_another_agent_does_not_close(self):
+        self.send()
+        self.done_handoff(self.researcher)
+        self.assertEqual(self.thread()["status"], "open")
+
+    def test_in_progress_handoff_does_not_close(self):
+        self.send()
+        ctx = {"root": self.root, "session": self.alpha, "identity": self.swe, "adapter": "stop"}
+        raw = json.dumps({"to": "researcher", "task": "T-7", "kind": "ask", "say": "more", "status": "in-progress",
+                          "thread": "th-1"})
+        TB.dispatch_block(self.conn, raw, ctx)
+        self.assertEqual(self.thread()["status"], "open")
+
+
+class ClosedWriteScan(unittest.TestCase):
+    """Nothing but the four closers writes status 'closed' to threads (FR-022a: no time-based close)."""
+    ALLOWED = {"screener.py": 1, "turn_block.py": 1, "cli_screen.py": 1}
+    _RE = re.compile(r"update\s+threads\b[^;]*?status\s*=\s*'closed'", re.I | re.S)
+
+    def test_only_the_closer_sites_write_closed(self):
+        found = {}
+        for path in sorted(Path(HERE).glob("*.py")):
+            if path.name.startswith("test_") or path.name == "gate_matrix.py":
+                continue
+            n = len(self._RE.findall(path.read_text()))
+            if n:
+                found[path.name] = n
+        self.assertEqual(found, self.ALLOWED)
 
 
 if __name__ == "__main__":

@@ -118,6 +118,7 @@ def build_parser():
 
     # --- screen ---
     cli_screen.add_parser(sub)
+    cli_screen.add_thread_parser(sub)
 
     # --- known-hosts ---
     p_kh = sub.add_parser(

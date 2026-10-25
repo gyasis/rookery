@@ -579,7 +579,10 @@ class Text(unittest.TestCase):
              "Rookery cannot switch t1 to live mode. It has no bands. Set screener.bands.t1 in the configuration first.",
              "'ghost' is not a check. Use one of injection, duplicate.", "'fast' is not a mode. Use one of shadow, live, off.",
              "Rookery delivered mail 5 from swe to researcher. The screener says unneeded. "
-             "Use rookery screen review to check it."]
+             "Use rookery screen review to check it.",
+             "Close a thread.", "Close a thread. It stays closed.", "Close it as the boss of the session.",
+             "Closed thread th-1.", "Thread th-1 is already closed.",
+             "'swe' is not the boss of session 'alpha'.", "Thread 'x' does not exist in session 'alpha'."]
 
     def test_ste_lint(self):
         exe = shutil.which("ste-lint")

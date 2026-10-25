@@ -298,7 +298,7 @@ refuses the mail and bounces it. With B3 in shadow mode the gate delivers it wit
   not stored, a bounce, and the recipient is not woken (SC-008, FR-031). B3 shadow: stored with `would-deny`. In
   shadow mode a thread never becomes `approved`.
   Verify: `python3 -m unittest test_threads test_screen_t0 test_screen_live test_gate test_wake -v`
-- [ ] T016 [US3] Files: `cli_screen.py`, `screener.py`, `turn_block.py`, `test_threads.py`.
+- [x] T016 [US3] Files: `cli_screen.py`, `screener.py`, `turn_block.py`, `test_threads.py`.
   Add the closers (D16, FR-022a). Edit `cli_screen.py`:
   `rookery thread close SESSION THREAD [--as AGENT] [--json]` (contract). Edit `screener.py`: a live quarantine by
   the screener closes the thread with `close_reason = veto`. Edit `turn_block.py`: a `handoff` with `status: done`
@@ -308,7 +308,7 @@ refuses the mail and bounces it. With B3 in shadow mode the gate delivers it wit
   thread exits 0 and says so. No code path closes a thread because of time (a scan for `closed` writes outside
   these four sites).
   Verify: `python3 -m unittest test_threads test_turn_block test_hooks test_screen_cli -v`
-- [ ] T017 [P] [US3] Files: `rookery_views.py`, `test_views.py`.
+- [x] T017 [P] [US3] Files: `rookery_views.py`, `test_views.py`.
   Edit `rookery_views.threads` (`rookery_views.py:447`): build `_threads/INDEX.md` from the
   `threads` table, grouped by session and thread, with the status and the mail count from `inbox.thread`. Mail
   with no thread is not listed (FR-023). Needs T015 first. Add the cases to `test_views.py` first. Cases: two
