@@ -165,6 +165,7 @@
   },
   "t2": {
    "command": null,
+   "name": null,
    "batch": 20
   },
   "envelope_max_chars": 3000,

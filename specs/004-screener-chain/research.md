@@ -261,9 +261,11 @@ The user chose this on 2026-10-25.
 - **Decision**: `screener.t2.command` is an argument list (no shell). Each pass sends at most
   `screener.t2.batch` escalated mails (first value 20) as JSON lines on stdin, one envelope on each line. The
   command answers with JSON lines `{"mail_id", "label", "reason"}`, where the label is one of the four T1 labels.
-  `decided_by` is `t2:<basename of the first argument>`. A non-zero exit, a timeout, or a line that is not valid
-  leaves the mail `escalated` and writes a failure record. With no command, escalated mail waits for a person
-  (D3).
+  `decided_by` is `t2:<name>`. The name is `screener.t2.name` when set. Otherwise it is the script name of the
+  command (the second argument after an interpreter such as python or bash), without its extension. A non-zero
+  exit, a timeout, or a line that is not valid leaves the mail `escalated` and writes a failure record. A mail
+  gets at most 3 tries. With no command, escalated mail waits for a person (D3). T2 takes only mail that a
+  screener judgement escalated. T2 gets the envelope, which holds the ask text. Use only a T2 command that you trust with that text.
 
 ### D16. Threads and B3 (Q2)
 

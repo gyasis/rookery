@@ -351,7 +351,7 @@ class Closers(Threads):
 
 class ClosedWriteScan(unittest.TestCase):
     """Nothing but the four closers writes status 'closed' to threads (FR-022a: no time-based close)."""
-    ALLOWED = {"screener.py": 1, "turn_block.py": 1, "cli_screen.py": 1}
+    ALLOWED = {"screener.py": 2, "turn_block.py": 1, "cli_screen.py": 1}
     _RE = re.compile(r"update\s+threads\b[^;]*?status\s*=\s*'closed'", re.I | re.S)
 
     def test_only_the_closer_sites_write_closed(self):

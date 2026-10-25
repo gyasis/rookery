@@ -13,6 +13,7 @@ import secrets
 import signal
 import socket
 import sqlite3
+import subprocess
 import sys
 import time
 
@@ -322,7 +323,7 @@ def _finish(conn, mail_id, owner, cfg, label, envelope, state=None, retry_at=Non
 
 def _last(conn, mail_id, stage, attempt=None):
     """The newest record of one stage, or of one attempt of it."""
-    return conn.execute("SELECT id, label, failure, band, attempt FROM screen_decisions WHERE mail_id=? AND stage=? "
+    return conn.execute("SELECT id, label, failure, band, attempt, mode FROM screen_decisions WHERE mail_id=? AND stage=? "
                         "AND (? IS NULL OR attempt=?) ORDER BY id DESC LIMIT 1", (mail_id, stage, attempt, attempt)).fetchone()
 
 
@@ -408,7 +409,7 @@ def _act_pre(conn, mail_id, owner, cfg, envelope):
     if rec["label"] and rec["band"] != "accept" and not skipped:
         reason = f"low-confidence {rec['label']}"
         h = _last(conn, mail_id, "hunch") if rec["band"] == "review" and cfg["checks"].get("hunch") == "live" else None
-        if h is not None and h["id"] < rec["id"]:   # the record of an earlier try, not of this answer
+        if h is not None and (h["id"] < rec["id"] or h["mode"] != "live"):   # an earlier try, or a shadow record: no act
             h = None
         if h is not None and h["label"] == rec["label"]:
             pass   # agreement (D11): the label acts as in the accept band, below. An act by agreement counts as a
@@ -483,6 +484,173 @@ def _post_notice(conn, mail_id):
 def _log(session, mail_id, cause):
     turn_block.log_event(os.path.expanduser("~/.rookery"), stream="screener", session=session, msg_id=mail_id,
                          outcome="error", reason=cause)
+
+
+# --- T2 (D15, FR-003, FR-009) ---
+
+T2_MAX_TRIES = 3          # failure records of one mail, then it waits for a person
+T2_MAX_OUT = 1 << 20      # bytes of stdout that one run may write
+
+
+def _t2_mine(row) -> bool:
+    """True when a screener judgement holds the escalated mail (F1, F2, F7): decided_by `screener:...` and a reason of
+    T1 or hunch (an allow-list). A person's escalation, a failed screen and an envelope that is too large are not."""
+    reason = row["reason"] or ""
+    return (row["status"] == "escalated" and (row["decided_by"] or "").startswith("screener:")
+            and (reason.startswith("low-confidence ") or reason.startswith("hunch ") or reason == "t1 and hunch disagree"))
+
+
+def _t2_batch(conn, cfg):
+    """The escalated mails to send to T2: oldest first over all sessions (not per session), at most t2.batch, none older
+    than max_age_s. Only a screener judgement (see _t2_mine) with no T1 retry pending. A mail with a t2 label, or with
+    T2_MAX_TRIES t2 failures, is not sent again: it waits for a person."""
+    return conn.execute(
+        "SELECT i.* FROM inbox i WHERE i.status='escalated' AND i.created_at>=? AND i.decided_by LIKE 'screener:%' "
+        "AND (i.reason LIKE 'low-confidence %' OR i.reason LIKE 'hunch %' OR i.reason='t1 and hunch disagree') "
+        "AND NOT EXISTS (SELECT 1 FROM screen_mail s WHERE s.mail_id=i.id AND s.retry_at IS NOT NULL) "
+        "AND NOT EXISTS (SELECT 1 FROM screen_decisions d WHERE d.mail_id=i.id AND d.stage='t2' AND d.label IS NOT NULL) "
+        "AND (SELECT COUNT(*) FROM screen_decisions d WHERE d.mail_id=i.id AND d.stage='t2' AND d.failure IS NOT NULL) < ? "
+        "ORDER BY i.created_at, i.id LIMIT ?",
+        (rookery.now() - cfg["max_age_s"], T2_MAX_TRIES, cfg["t2"]["batch"])).fetchall()
+
+
+def _t2_run(command, text, timeout):
+    """Run the command once in its own process group. Returns (stdout, None) or (None, why). On a timeout the whole group
+    is killed, so a child that holds the pipes cannot hold us."""
+    try:
+        proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, shell=False, start_new_session=True)
+    except (OSError, ValueError) as e:
+        return None, type(e).__name__
+    try:
+        out, err = proc.communicate(text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.communicate(timeout=5)
+        except (subprocess.TimeoutExpired, ValueError):
+            pass
+        return None, "timeout"
+    except (OSError, ValueError) as e:
+        return None, type(e).__name__
+    if proc.returncode != 0:
+        return None, f"exit={proc.returncode}" + (f": {err[:200]}" if err else "")
+    if len(out) > T2_MAX_OUT:
+        return None, "output too large"
+    return out, None
+
+
+def _t2_lines(command, mails, cfg):   # mails: (inbox row, envelope text) pairs
+    """Run the command once. Returns ({mail_id: (label, reason)}, None), or ({}, why) for a failed run. A line with a bad
+    shape, a label outside LABELS or a mail_id outside the batch is dropped (the last one is logged)."""
+    lines = [json.dumps({**json.loads(env), "mail_id": m["id"]}, ensure_ascii=False) for m, env in mails]
+    stdout, why = _t2_run(command, "\n".join(lines) + "\n", cfg["timeout_s"])
+    if why:
+        return {}, why
+    ids = {m["id"] for m, _ in mails}
+    out = {}
+    for line in stdout.splitlines():
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or obj.get("label") not in LABELS or type(obj.get("mail_id")) is not int:
+            continue
+        if obj["mail_id"] not in ids:
+            _log(None, obj["mail_id"], "t2 answered a mail that is not in the batch")
+            continue
+        out.setdefault(obj["mail_id"], (obj["label"], obj.get("reason")))
+    return out, None
+
+
+def _t2_act(conn, mail, rec_id, label, by):
+    """Live act on one T2 label, one transaction with the `action` of the record: deliver releases, a reject label
+    quarantines and closes the thread with a veto (as _act_pre does). No user call: only a person writes those. A deliver
+    does not approve the thread. The mail is checked again here: only a screener judgement is acted on."""
+    _begin(conn)
+    try:
+        if not _t2_mine(rookery.get_message(conn, mail["id"])):
+            conn.rollback()   # a person decided it first, or a person holds it
+            return
+        if label == "deliver":   # no thread approval: only T1 in the accept band, or hunch by agreement, approves (D16)
+            rookery._decide_from_open(conn, mail["id"], "pending", "release", None, by, commit=False)
+            action = "release"
+        else:
+            rookery.quarantine(conn, mail["id"], label, by, commit=False, bounce_limit=mail_gate.loop_limit())
+            action = "quarantine"
+            if mail["thread"]:
+                conn.execute("UPDATE threads SET status='closed', closed_by=?, closed_at=?, close_reason='veto' "
+                             "WHERE session_id=? AND thread=? AND status!='closed'",
+                             (by, rookery.now(), mail["session_id"], mail["thread"]))
+        conn.execute("UPDATE screen_decisions SET action=? WHERE id=?", (action, rec_id))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def t2_pass(conn, cfg) -> int:
+    """One T2 pass (D15). No command, or checks.t2 off: nothing is called and escalated mail waits (FR-003). Otherwise one
+    command run for at most t2.batch mails. Each valid answer is a t2 record; in live mode it also acts. A mail with no
+    valid answer keeps its status and gets a failure record `bad-answer`. In shadow mode nothing changes status.
+    Returns the number of mails sent. Never raises: a failure is logged and the mails stay escalated."""
+    mode = cfg["checks"]["t2"]
+    command = cfg["t2"]["command"]
+    if not command or mode == "off":
+        return 0
+    try:
+        by = "t2:" + screener_config.t2_name(cfg["t2"])
+        if not screener_t0.check_decided_by(by):
+            raise ValueError(f"screener.t2.name: {by!r} cannot be a decided_by name")
+        conn.rollback()
+        mails = _t2_batch(conn, cfg)
+        if not mails:
+            return 0
+        sent = []   # (mail, the stored envelope of screen_mail, else a fresh one)
+        for m in list(mails):
+            why = None
+            try:
+                row = conn.execute("SELECT envelope FROM screen_mail WHERE mail_id=?", (m["id"],)).fetchone()
+                env = row and row["envelope"]
+                if not env:
+                    env = build_envelope(conn, m, cfg)
+                    if len(env) > cfg["envelope_max_chars"]:
+                        why = "envelope-too-large"
+                if not why and not isinstance(json.loads(env), dict):
+                    why = "bad-envelope"
+            except ValueError:
+                why = "bad-envelope"
+            if why:
+                mails.remove(m)
+                _write(conn, m, stage="t2", check_name="t2", mode=mode, decided_by=by, failure=why, detail=why)
+            else:
+                sent.append((m, env))
+        if not sent:
+            return 0
+        mails = [m for m, _ in sent]
+        answers, why = _t2_lines(command, sent, cfg)
+    except Exception as e:
+        conn.rollback()
+        _log(None, None, f"t2: {type(e).__name__}: {e}")
+        return 0
+    for m in mails:
+        try:
+            if m["id"] in answers:
+                label, reason = answers[m["id"]]
+                rec = _write(conn, m, stage="t2", check_name="t2", mode=mode, decided_by=by, label=label,
+                             detail=reason[:500] if isinstance(reason, str) else None)
+                if mode == "live":
+                    _t2_act(conn, m, rec, label, by)
+            else:
+                _write(conn, m, stage="t2", check_name="t2", mode=mode, decided_by=by, failure="bad-answer",
+                       detail=why or "no valid line")
+        except Exception as e:   # the mail stays escalated; the next mail goes on
+            conn.rollback()
+            _log(None, m["id"], f"t2: {type(e).__name__}: {e}")
+    return len(mails)
 
 
 def open_sessions(conn, names=None):
@@ -606,6 +774,8 @@ def run(sessions=None, once=False, poll=2.0):
                             conn.rollback()
                             _log(name, None, f"{type(e).__name__}: {e}")
                             code = 2
+            if cfg is not None:
+                taken += t2_pass(conn, cfg)   # no t1 needed: it reads escalated mail only
             if taken:
                 continue   # work was done: look again at once, until every queue is empty
             if once or stop:

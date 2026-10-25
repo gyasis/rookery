@@ -24,7 +24,7 @@ DEFAULTS = {
     "model": "tev1:4b",
     "timeout_s": 300,
     "hunch": {"model": "qwen2.5:3b", "url": None},
-    "t2": {"command": None, "batch": 20},
+    "t2": {"command": None, "name": None, "batch": 20},
     "envelope_max_chars": 3000,
     "ask_budget": 20,
     "duplicate_window_s": 3600,
@@ -32,6 +32,20 @@ DEFAULTS = {
     "lease_s": 600,
     "max_age_s": 86400,
 }
+
+
+_INTERPRETERS = {"bash", "sh", "node", "env", "uv", "ruby", "perl"}
+
+
+def t2_name(t2) -> str:
+    """The name after `t2:` in decided_by (D15): screener.t2.name when set, else the script name of the command (the
+    second argument after an interpreter), without its extension."""
+    if t2.get("name"):
+        return t2["name"]
+    command = t2["command"]
+    first = os.path.basename(command[0])
+    arg = command[1] if len(command) > 1 and (first.startswith("python") or first in _INTERPRETERS) else command[0]
+    return os.path.splitext(os.path.basename(arg))[0]
 
 
 def _merge(base, over):
@@ -103,6 +117,12 @@ def check(cfg) -> None:
     if command is not None and (not isinstance(command, list)
                                 or not all(isinstance(a, str) for a in command)):
         raise ValueError("screener.t2.command: must be null or a list of text")
+    name = cfg.get("t2", {}).get("name")
+    if name is not None and not (isinstance(name, str) and screener_t0.check_decided_by("t2:" + name)):
+        raise ValueError(f"screener.t2.name: must be null or a name (letters, digits and . _ - space), got {name!r}")
+    if command and not screener_t0.check_decided_by("t2:" + t2_name(cfg["t2"])):
+        raise ValueError(f"screener.t2.name: set a name, because {t2_name(cfg['t2'])!r} from screener.t2.command "
+                         "cannot be a decided_by name")
 
     for key, val in (("timeout_s", cfg.get("timeout_s")),
                      ("envelope_max_chars", cfg.get("envelope_max_chars")),

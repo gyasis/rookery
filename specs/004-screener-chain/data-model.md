@@ -192,7 +192,7 @@ because it can hold pasted work. At most `envelope_max_chars` characters (first 
   "model": "tev1:4b",
   "timeout_s": 300,
   "hunch": {"model": "qwen2.5:3b", "url": null},
-  "t2": {"command": null, "batch": 20},
+  "t2": {"command": null, "name": null, "batch": 20},
   "envelope_max_chars": 3000,
   "ask_budget": 20,
   "duplicate_window_s": 3600,

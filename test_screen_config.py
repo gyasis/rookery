@@ -46,7 +46,7 @@ class LoadTests(ConfigBase):
         cfg = SC.load()
         self.assertEqual(cfg["checks"]["t1"], "live")
         self.assertEqual(cfg["checks"]["hunch"], "shadow")
-        self.assertEqual(cfg["t2"], {"command": None, "batch": 5})
+        self.assertEqual(cfg["t2"], {"command": None, "name": None, "batch": 5})
         self.assertEqual(cfg["model"], "tev1:4b")
 
     def test_load_writes_nothing(self):
@@ -116,6 +116,14 @@ class CheckTests(unittest.TestCase):
     def test_bad_t2_command(self):
         self.bad(lambda c: c["t2"].update(command="run it"), "screener.t2.command")
         self.bad(lambda c: c["t2"].update(command=["a", 3]), "screener.t2.command")
+
+    def test_t2_name(self):   # F4
+        self.bad(lambda c: c["t2"].update(name="bad/name"), "screener.t2.name")
+        self.bad(lambda c: c["t2"].update(name=3), "screener.t2.name")
+        self.bad(lambda c: c["t2"].update(command=["python3", "-u"]), "screener.t2.name")   # derived "-u" is refused
+        cfg = copy.deepcopy(SC.DEFAULTS)
+        cfg["t2"].update(command=["python3", "-u"], name="judge")
+        SC.check(cfg)
 
     def test_max_age_s_default_and_check(self):
         self.assertEqual(SC.DEFAULTS["max_age_s"], 86400)

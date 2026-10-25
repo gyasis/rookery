@@ -337,7 +337,7 @@ no T2 command leaves the mail `escalated`, and the boss gets a notice with no bo
   escalates. Unset bands give 0 hunch calls. `t1` live with `hunch` in shadow: a review-band answer escalates with a
   notice. In shadow mode the screener writes the same records and nothing acts.
   Verify: `python3 -m unittest test_screen_tiers test_screen_live test_escalated -v`
-- [ ] T019 [US4] Files: `screener.py`, `fixtures/screener/t2_ok.py`, `fixtures/screener/t2_bad.py`, `test_screen_tiers.py`.
+- [x] T019 [US4] Files: `screener.py`, `fixtures/screener/t2_ok.py`, `fixtures/screener/t2_bad.py`, `test_screen_tiers.py`.
   Edit `screener.py`: add the T2 pass of D15. When `t2.command` has a value, each pass sends at most
   `t2.batch` escalated mails as JSON lines on stdin. It reads `{"mail_id", "label", "reason"}` lines, records each
   with stage `t2` and `decided_by = t2:<basename>`, and acts in live mode. A non-zero exit, a timeout or a line
