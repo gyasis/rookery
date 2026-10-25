@@ -72,6 +72,22 @@ Use these commands only when the user asks to build or end a team.
 
 An agent that `rookery up` starts uses the CLI only for mail: `rookery send`, `rookery inbox` and `rookery ack`. Write only in your own folders. A guard hook warns or denies a write outside them.
 
+## Screener: rookery screen
+
+Use these commands only when the user asks about the screener. The screener checks mail with rules and a small model. Every check starts in `shadow` mode. In shadow mode a check writes a decision and changes no mail.
+
+- `rookery screen run` screens mail that has no decision. Options: `--session S`, `--once`, `--poll N`. Nothing starts it for you. The first run skips mail older than `screener.max_age_s` (one day).
+- `rookery screen status [--session S] [--json]` shows the backend, the model host and the backlog.
+- `rookery screen review` lists decisions that have no call. `rookery screen mark DECISION_ID right|wrong|LABEL` says if a decision was right.
+- `rookery screen report` and `rookery screen export` show the agreement and write the compared decisions.
+- `rookery screen mode CHECK shadow|live|off` sets a check. A model check (`t1`, `hunch`, `t2`) goes live only after 150 compared decisions. `t1` also needs bands.
+- `rookery screen release MAIL_ID`, `rookery screen quarantine MAIL_ID REASON` and `rookery screen escalate MAIL_ID` decide a held or escalated mail.
+- `rookery thread close SESSION THREAD [--as AGENT]` closes a thread. A closed thread refuses new mail. `--as` needs the role `boss`.
+
+A live check fails closed. If it cannot decide, the mail goes to a person, and the boss gets a notice. A held ask has a reason: `budget`, `duplicate`, `screening` or an anomaly. Do not retry a held ask. Wait for the boss.
+
+`rookery session new` with no name makes a name of three words.
+
 ## Legacy mesh (pre-0.7)
 
 Use this only when there is NO Rookery session and the user works with the old node mesh or `mailctl`. The old mesh has a different design. See `docs/NODE_BRIEFING.md`. These old commands are legacy. Each has a `rookery` command:

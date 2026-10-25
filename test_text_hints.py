@@ -97,6 +97,11 @@ class TextHints(unittest.TestCase):
         self.assertIn("postmaster/", readme)
         self.assertIn("state/", readme)
 
+    def test_skill_names_screen_run_and_shadow(self):
+        skill = (ROOT / "skills/rookery/SKILL.md").read_text()
+        self.assertIn("`rookery screen run`", skill)
+        self.assertIn("shadow", skill)
+
     def test_screener_texts_pass_ste_lint(self):
         exe = shutil.which("ste-lint")
         if not exe:

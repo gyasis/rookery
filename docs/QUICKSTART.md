@@ -380,6 +380,22 @@ To join a peer mailroom, use `rookery join URL`. This was `rookery up URL` in ea
 
 ---
 
+## Screen mail
+
+The screener starts in shadow mode. It writes decisions and changes no mail.
+
+1. Run `rookery screen run`. Add `--once` for one pass. The first run skips mail older than one day (`screener.max_age_s`).
+2. Run `rookery screen status` to see the backend, the model host and the backlog.
+3. Run `rookery screen review` and `rookery peek`. Then run `rookery screen mark DECISION_ID right` or `wrong` for each decision.
+4. Run `rookery screen report` to see the agreement.
+5. Run `rookery screen mode injection live`. A model check (`t1`, `hunch`, `t2`) needs 150 compared decisions first, and `t1` needs `screener.bands.t1`. The refusal tells you how many are missing.
+6. In live mode a check that fails sends the mail to a person. The boss of the session gets a notice. Use `rookery screen release MAIL_ID` or `rookery screen quarantine MAIL_ID REASON`.
+7. To close a thread, run `rookery thread close SESSION THREAD`. A closed thread refuses new mail.
+
+`rookery session new` with no name makes a name of three words. The README has the `screener` configuration.
+
+---
+
 ## Where to go next
 
 - `COOKBOOK.md` — copy-paste recipes: research queues, CIBA credential gate,

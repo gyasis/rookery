@@ -424,7 +424,7 @@ injection fixture goes to quarantine, and the recipient is not woken.
   file. It runs `ste-lint --max-score 2.0 --glossary ste-glossary.txt` on that file (FR-032, SC-012). Fix each text
   that fails. Needs T022 first. Skip the case only when `ste-lint` is not on `PATH`.
   Verify: `python3 -m unittest test_text_hints -v`
-- [ ] T025 [P] Files: `README.md`, `docs/QUICKSTART.md`, `CHANGELOG.md`, `skills/rookery/SKILL.md`, `test_text_hints.py`.
+- [x] T025 [P] Files: `README.md`, `docs/QUICKSTART.md`, `CHANGELOG.md`, `skills/rookery/SKILL.md`, `test_text_hints.py`.
   Edit `README.md`, `docs/QUICKSTART.md`, `CHANGELOG.md` and `skills/rookery/SKILL.md`. Document
   `rookery screen` (run, status, review, mark, report, export, mode, release, quarantine, escalate) and
   `rookery thread close`. Document shadow mode first and the 150 rule. Document the `screener` configuration and

@@ -4,6 +4,15 @@
 
 ### Added
 
+- The screener chain. `rookery screen run` screens mail that has no decision. It runs rules for injection, duplicate asks, ask budget, threads and worker gates G1, G2, G3 and G5. Then it runs a small model (`t1`), a second opinion (`hunch`) and an optional command (`t2`). Every check starts in `shadow` mode and changes no mail.
+- `rookery screen status`, `review`, `mark`, `report`, `export`, `mode`, `release`, `quarantine` and `escalate`.
+- The 150 rule. `rookery screen mode CHECK live` refuses a model check with fewer than 150 compared decisions. `t1` also needs `screener.bands.t1`. Editing `config.json` by hand skips the rule.
+- Live mode fails closed. When a live check cannot decide, the mail waits as `escalated`. The boss of the session (role `boss`) gets a notice, and the plugin `sink` event `escalated` fires.
+- Threads. The first mail of a thread gets a review for the pair. A closed thread refuses new mail. `rookery thread close SESSION THREAD [--as AGENT]` closes one.
+- The ask budget (`ask_budget` in the team file, else `screener.ask_budget`) and a hold for duplicate asks.
+- The `screener` block in `~/.rookery/config.json`. The screener uses PromptChain when it imports and a standard-library copy when it does not.
+- `rookery session new` with no name makes a name of three words.
+
 - `rookery up TEAM_FILE [--no-launch] [--json]` builds a team from a JSON team file. It makes a session, an identity and a folder for each agent. It makes a git worktree for each writer and a port map in `ROOKERY_PORTS`. It starts each pane through configured steps (`launch`, `alive`). Agents that it starts use the CLI only for mail.
 - `rookery finish NAME --message TEXT` shows the change, asks three times, then commits, pushes and deletes the worktree. It never deletes the branch.
 - `rookery gc` lists stale worktree rows. It deletes nothing.

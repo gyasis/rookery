@@ -399,6 +399,71 @@ Folder layout of the root:
 └── logs/                      gate.jsonl and the other logs
 ```
 
+## The screener: rookery screen
+
+The screener checks mail before an agent reads it. It is off the delivery path. You start it, as you start the postmaster:
+
+```bash
+rookery screen run            # loop; add --once for one pass
+rookery screen status --json  # backend, model host, backlog
+```
+
+**Shadow mode first.** Every check starts in `shadow`. A shadow check writes a decision and changes no mail. The checks are `injection`, `duplicate`, `budget`, `thread`, `gates`, `t1`, `hunch` and `t2`. Each is `shadow`, `live` or `off`. The first run skips mail older than `screener.max_age_s` (86400 seconds).
+
+**Compare, then go live.**
+
+1. `rookery screen review` lists decisions that have no call. Run `rookery peek` to read a mail.
+2. `rookery screen mark DECISION_ID right|wrong|LABEL` says if the decision was right. `--by NAME` sets your name.
+3. `rookery screen report [--check C] [--json]` shows the agreement. `rookery screen export [--check C] [--out FILE]` writes one JSON line for each compared decision.
+4. `rookery screen mode CHECK live` switches a check. This is the 150 rule: a model check (`t1`, `hunch`, `t2`) needs 150 compared decisions, and `t1` also needs `screener.bands.t1`. The refusal tells you how many are missing. If you edit `config.json` by hand, the 150 rule does not run. That risk is yours. Use `rookery screen mode CHECK shadow` or `off` to go back.
+
+**Live mode fails closed.** In live mode only an answer in the accept band acts. If a check fails, times out or is unsure, the mail goes to a person as `escalated`. Rookery sends a notice to the boss of the session (the agent with the role `boss` in the team file) and fires the plugin `sink` event `escalated`. A person decides:
+
+- `rookery screen release MAIL_ID [--by NAME]` delivers it.
+- `rookery screen quarantine MAIL_ID REASON [--note TEXT] [--suggest AGENT]` rejects it.
+- `rookery screen escalate MAIL_ID [--reason TEXT]` holds a mail for a person.
+
+**Threads.** A thread is the `thread` field of a block. One review covers the first-mail pair of a thread: later mail of those two agents gets no model call. A closed thread refuses new mail, and the sender gets a bounce. A thread closes in four cases.
+
+- A live check puts a mail in quarantine.
+- The user runs `rookery thread close SESSION THREAD`.
+- The boss runs the same command with `--as AGENT`.
+- The agent that opened the thread sends a `handoff` with `status` `done`.
+
+Time never closes a thread.
+
+**Ask budget and duplicates.** Each task has a limit on `ask` mail. The limit is `ask_budget` in the team file, else `screener.ask_budget` (20). Rookery holds an ask over the limit with the reason `budget`. It holds the same ask from the same sender to the same recipient as `duplicate`. This applies inside `screener.duplicate_window_s` (3600 seconds).
+
+**Injection and worker gates.** A fixed set of patterns finds text that tries to change instructions, show the system prompt, ask for keys, run piped shell commands or hide text in base64. A match is `injection-suspect`. The gates read `self_check` in the block.
+
+- G1: `task_complete` is true.
+- G2: `gap` is empty.
+- G3: `gap_in_my_scope` is true.
+- G5: the ask is not allowed, for example over budget.
+
+In live mode a gate anomaly escalates the mail to a person.
+
+**The T2 command.** `screener.t2.command` is a list of arguments (no shell). Rookery sends escalated mail to it, up to `screener.t2.batch` at a time, as JSON lines on stdin: one envelope with a `mail_id` on each line. The command prints one JSON line for each mail: `{"mail_id": 812, "label": "deliver", "reason": "..."}`. T2 takes only mail that a screener judgement escalated, not gate anomalies. The envelope holds the ask text, so use only a command that you trust with that text. Name it with `screener.t2.name`.
+
+**Configuration.** The `screener` block in `~/.rookery/config.json`. Each missing key has a default:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `checks` | all `shadow` | Mode of each check. |
+| `bands.t1` | `null` | `{"accept": N, "review": N}`, numbers from 0 to 1. |
+| `base_url`, `model` | the model host, `tev1:4b` | The `t1` model. |
+| `hunch.model`, `hunch.url` | `qwen2.5:3b`, `null` | The second opinion. |
+| `t2.command`, `t2.name`, `t2.batch` | `null`, `null`, 20 | The T2 command. |
+| `timeout_s` | 300 | Time for one model call. |
+| `lease_s` | 600 | A claim with no answer returns to the queue. Must be at least 2 times `timeout_s`. |
+| `max_age_s` | 86400 | The screener skips older mail. |
+| `ask_budget`, `duplicate_window_s` | 20, 3600 | See above. |
+| `review_mode` | `pre` | `pre` holds a mail until the screener decides. `post` delivers it and sends a notice. Set `review_mode.agents.NAME` for one recipient. |
+
+**PromptChain is optional.** The screener uses PromptChain when it imports. If it does not, the screener uses a standard-library copy with the same contract. `rookery screen status` shows which one runs.
+
+**Session names.** `rookery session new` with no name makes a name of three words, such as `calm-amber-heron`.
+
 ## Federation — multiple mailrooms (`node@mailroom`)
 
 Run several independent mailrooms (one per machine / trust domain) and relay
