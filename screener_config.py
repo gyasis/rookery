@@ -29,7 +29,7 @@ DEFAULTS = {
     "ask_budget": 20,
     "duplicate_window_s": 3600,
     "review_mode": {"default": "pre", "agents": {}},
-    "lease_s": 600,
+    "lease_s": 960,
     "max_age_s": 86400,
 }
 
@@ -133,9 +133,9 @@ def check(cfg) -> None:
                      ("t2.batch", cfg.get("t2", {}).get("batch"))):
         _pos_int(val, f"screener.{key}")
 
-    if cfg["lease_s"] < 2 * cfg["timeout_s"]:
-        raise ValueError(f"screener.lease_s: must be at least twice screener.timeout_s ({cfg['timeout_s']}), "
-                         f"got {cfg['lease_s']}")
+    if cfg["lease_s"] < 3 * cfg["timeout_s"] + 30:   # one mail takes up to 3 model calls (T1, suggest, hunch)
+        raise ValueError(f"screener.lease_s: must be at least 3 times screener.timeout_s ({cfg['timeout_s']}) plus 30, "
+                         f"that is {3 * cfg['timeout_s'] + 30}, got {cfg['lease_s']}")
 
     review = cfg.get("review_mode", {})
     _mode(review.get("default"), "screener.review_mode.default", REVIEW_MODES)

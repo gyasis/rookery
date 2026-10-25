@@ -19,6 +19,7 @@ import time
 
 import mail_gate
 import rookery
+import rookery_identity
 import screener_backend
 import screener_config
 import screener_t0
@@ -232,10 +233,12 @@ def queue(conn, sid, cutoff, limit=None, oldest=None):
     """Mail ids of one session to screen, oldest first (FR-005): no screen_mail row, a claim older than
     cutoff, or an escalated mail whose retry_at has come while the mail is still escalated (FR-012a).
     A system sender is left out. A mail that a T0 check quarantined at store has a decided row.
-    A mail created before `oldest` (an epoch second) is left out: the first run skips old history."""
+    A mail created before `oldest` (an epoch second) is left out: the first run skips old history. Mail that the
+    screener holds (reason `screening`) or has escalated for a retry is always screened, whatever its age."""
     rows = conn.execute(
         "SELECT i.id, i.sender, i.created_at FROM inbox i LEFT JOIN screen_mail m ON m.mail_id=i.id "
-        "WHERE i.session_id=? AND i.created_at>=? "
+        "WHERE i.session_id=? AND (i.created_at>=? OR (i.status='held' AND i.reason='screening') "
+        "OR (i.status='escalated' AND m.retry_at IS NOT NULL)) "
         "AND (m.mail_id IS NULL OR m.state='queued' OR (m.state='claimed' AND m.claimed_at<?) "
         "OR (m.state='escalated' AND m.retry_at<=? AND i.status='escalated')) "
         "ORDER BY i.created_at, i.id", (sid, oldest or 0, cutoff, rookery.now())).fetchall()
@@ -245,6 +248,7 @@ def queue(conn, sid, cutoff, limit=None, oldest=None):
 
 
 MAX_ATTEMPTS = 3   # a claim that expired after this many tries ends as failed (a mail that kills the process)
+MAX_RETRIES = 3    # failed live retries of one mail (after the first failure), then it waits for a person
 PER_SESSION = 5    # mails for one session in one pass, so one busy session does not starve the others
 
 
@@ -348,21 +352,36 @@ def retry_delay(cfg, attempts):
     return min(cfg["timeout_s"], 60 * max(1, attempts))
 
 
+def _still_mine(conn, mail_id, owner):
+    """True when the screener may still change this mail: this owner holds the claim, and the mail is held with the
+    reason `screening`, or escalated by a screener (a failed screening). A person's decision, or a person's
+    escalation, is never overridden."""
+    r = conn.execute("SELECT i.status, i.reason, i.decided_by, s.owner FROM inbox i "
+                     "JOIN screen_mail s ON s.mail_id=i.id WHERE i.id=?", (mail_id,)).fetchone()
+    return (r is not None and r["owner"] == owner
+            and ((r["status"] == "held" and r["reason"] == "screening")
+                 or (r["status"] == "escalated" and (r["decided_by"] or "").startswith("screener:"))))
+
+
 def _escalate_pre(conn, mail_id, owner, cfg, envelope, reason, rec_id=None, retry=True, label=None):
     """Escalate a mail that the screener holds, then send the notice (FR-012a, FR-029). The status change, the
     `action` of the record and the end of the claim commit together. A mail that is already escalated (a failed retry)
     stays so, and sends no second notice. A `retry` has a retry_at, so a later pass asks again. Raises when it
-    cannot: the caller leaves the claim to expire. Returns False when the mail is no longer held or escalated (a
-    person decided it first): nothing changes then."""
+    cannot: the caller leaves the claim to expire. Returns False when the screener may not act (a person decided or
+    escalated it first, or the claim is lost): nothing changes then."""
     by = "screener:" + cfg["model"]
     _begin(conn)
     notify = False
     try:
-        status = rookery.get_message(conn, mail_id)["status"]
-        if status not in ("held", "escalated"):
+        if not _still_mine(conn, mail_id, owner):
             conn.rollback()
             return False
+        status = rookery.get_message(conn, mail_id)["status"]
         attempts = conn.execute("SELECT attempts FROM screen_mail WHERE mail_id=?", (mail_id,)).fetchone()[0]
+        if retry and conn.execute("SELECT COUNT(*) FROM screen_decisions WHERE mail_id=? AND stage='t1' "
+                                  "AND failure IS NOT NULL", (mail_id,)).fetchone()[0] > MAX_RETRIES:
+            retry = False   # no more model calls: the mail stays escalated for a person
+            _log(None, mail_id, f"screening failed after {MAX_RETRIES} retries: left for a person")
         if status == "held":
             rookery._decide(conn, mail_id, "held", "escalated", "escalate", reason, by, commit=False)
             notify = True
@@ -427,7 +446,7 @@ def _act_pre(conn, mail_id, owner, cfg, envelope):
             or _already_decided(conn, mail_id, owner, cfg, envelope)
     _begin(conn)
     try:
-        if rookery.get_message(conn, mail_id)["status"] not in ("held", "escalated"):
+        if not _still_mine(conn, mail_id, owner):
             conn.rollback()
             return _already_decided(conn, mail_id, owner, cfg, envelope)
         if rec["label"] in ("deliver", "skipped"):
@@ -503,18 +522,62 @@ def _t2_mine(row) -> bool:
             and (reason.startswith("low-confidence ") or reason.startswith("hunch ") or reason == "t1 and hunch disagree"))
 
 
-def _t2_batch(conn, cfg):
-    """The escalated mails to send to T2: oldest first over all sessions (not per session), at most t2.batch, none older
-    than max_age_s. Only a screener judgement (see _t2_mine) with no T1 retry pending. A mail with a t2 label, or with
-    T2_MAX_TRIES t2 failures, is not sent again: it waits for a person."""
-    return conn.execute(
-        "SELECT i.* FROM inbox i WHERE i.status='escalated' AND i.created_at>=? AND i.decided_by LIKE 'screener:%' "
-        "AND (i.reason LIKE 'low-confidence %' OR i.reason LIKE 'hunch %' OR i.reason='t1 and hunch disagree') "
-        "AND NOT EXISTS (SELECT 1 FROM screen_mail s WHERE s.mail_id=i.id AND s.retry_at IS NOT NULL) "
-        "AND NOT EXISTS (SELECT 1 FROM screen_decisions d WHERE d.mail_id=i.id AND d.stage='t2' AND d.label IS NOT NULL) "
-        "AND (SELECT COUNT(*) FROM screen_decisions d WHERE d.mail_id=i.id AND d.stage='t2' AND d.failure IS NOT NULL) < ? "
-        "ORDER BY i.created_at, i.id LIMIT ?",
-        (rookery.now() - cfg["max_age_s"], T2_MAX_TRIES, cfg["t2"]["batch"])).fetchall()
+_T2_WHERE = (
+    "i.status='escalated' AND i.created_at>=? AND i.decided_by LIKE 'screener:%' "
+    "AND (i.reason LIKE 'low-confidence %' OR i.reason LIKE 'hunch %' OR i.reason='t1 and hunch disagree') "
+    "AND NOT EXISTS (SELECT 1 FROM screen_mail s WHERE s.mail_id=i.id AND s.retry_at IS NOT NULL) "
+    "AND NOT EXISTS (SELECT 1 FROM screen_decisions d WHERE d.mail_id=i.id AND d.stage='t2' AND d.label IS NOT NULL) "
+    "AND (SELECT COUNT(*) FROM screen_decisions d WHERE d.mail_id=i.id AND d.stage='t2' AND d.failure IS NOT NULL) < ?")
+
+
+def _t2_batch(conn, cfg, sid):
+    """The escalated mails of ONE session to send to T2: oldest first, at most t2.batch, none older than max_age_s.
+    Only a screener judgement (see _t2_mine) with no T1 retry pending. A mail with a t2 label, or with T2_MAX_TRIES t2
+    failures, is not sent again: it waits for a person."""
+    return conn.execute("SELECT i.* FROM inbox i WHERE i.session_id=? AND " + _T2_WHERE +
+                        " ORDER BY i.created_at, i.id LIMIT ?",
+                        (sid, rookery.now() - cfg["max_age_s"], T2_MAX_TRIES, cfg["t2"]["batch"])).fetchall()
+
+
+def _t2_claim(conn, mails, owner, cfg):
+    """Mark the batch mails as taken by this owner, so two processes never send the same mail. One write transaction:
+    a mail is won when its screen_mail row has no T2 owner (an old T1 owner does not count), this owner, or an
+    expired lease, and it still fits the batch rules. A T2 owner is stored as `t2:<owner>`. Returns the mails won."""
+    now = rookery.now()
+    owner = "t2:" + owner
+    won = []
+    _begin(conn)
+    try:
+        for m in mails:
+            if conn.execute("SELECT 1 FROM inbox i WHERE i.id=? AND " + _T2_WHERE,
+                            (m["id"], now - cfg["max_age_s"], T2_MAX_TRIES)).fetchone() is None:
+                continue   # decided or sent by another process since the batch was read
+            conn.execute("INSERT OR IGNORE INTO screen_mail(mail_id, session_id, state) VALUES(?,?,'escalated')",
+                         (m["id"], m["session_id"]))
+            cur = conn.execute("UPDATE screen_mail SET owner=?, claimed_at=? WHERE mail_id=? AND state='escalated' "
+                               "AND (owner IS NULL OR owner NOT LIKE 't2:%' OR owner=? OR claimed_at<?)",
+                               (owner, now, m["id"], owner, now - cfg["lease_s"]))
+            if cur.rowcount == 1:
+                won.append(m)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return won
+
+
+def _t2_release(conn, mails, owner):
+    """Give the claim on the batch mails back (an owner of a lost lease changes nothing)."""
+    owner = "t2:" + owner
+    _begin(conn)
+    try:
+        for m in mails:
+            conn.execute("UPDATE screen_mail SET owner=NULL, claimed_at=NULL WHERE mail_id=? AND owner=? "
+                         "AND state='escalated'", (m["id"], owner))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def _t2_run(command, text, timeout):
@@ -595,10 +658,16 @@ def _t2_act(conn, mail, rec_id, label, by):
         raise
 
 
-def t2_pass(conn, cfg) -> int:
+def _owner():
+    return f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
+
+
+def t2_pass(conn, cfg, sessions=None) -> int:
     """One T2 pass (D15). No command, or checks.t2 off: nothing is called and escalated mail waits (FR-003). Otherwise one
-    command run for at most t2.batch mails. Each valid answer is a t2 record; in live mode it also acts. A mail with no
-    valid answer keeps its status and gets a failure record `bad-answer`. In shadow mode nothing changes status.
+    command run for each session that has escalated mail, for at most t2.batch mails of that session (a batch never
+    holds two sessions). `sessions` is a list of session IDs that this process serves; None is all. A mail that
+    another process has taken is left to it. Each valid answer is a t2 record; in live mode it also acts. A mail with
+    no valid answer keeps its status and gets a failure record `bad-answer`. In shadow mode nothing changes status.
     Returns the number of mails sent. Never raises: a failure is logged and the mails stay escalated."""
     mode = cfg["checks"]["t2"]
     command = cfg["t2"]["command"]
@@ -609,9 +678,40 @@ def t2_pass(conn, cfg) -> int:
         if not screener_t0.check_decided_by(by):
             raise ValueError(f"screener.t2.name: {by!r} cannot be a decided_by name")
         conn.rollback()
-        mails = _t2_batch(conn, cfg)
-        if not mails:
-            return 0
+        if sessions is None:
+            sessions = [r[0] for r in conn.execute("SELECT DISTINCT session_id FROM inbox WHERE status='escalated' "
+                                                   "AND decided_by LIKE 'screener:%' ORDER BY session_id")]
+    except Exception as e:
+        conn.rollback()
+        _log(None, None, f"t2: {type(e).__name__}: {e}")
+        return 0
+    owner = _owner()
+    return sum(_t2_session(conn, cfg, sid, mode, command, by, owner) for sid in sessions)
+
+
+def _t2_session(conn, cfg, sid, mode, command, by, owner) -> int:
+    """The T2 batch of one session (see t2_pass): claim it, send what this owner won, give the claim back."""
+    try:
+        claimed = _t2_claim(conn, _t2_batch(conn, cfg, sid), owner, cfg)
+    except Exception as e:
+        conn.rollback()
+        _log(None, None, f"t2: {type(e).__name__}: {e}")
+        return 0
+    if not claimed:
+        return 0
+    try:
+        return _t2_send(conn, cfg, mode, command, by, list(claimed))
+    finally:
+        try:
+            _t2_release(conn, claimed, owner)
+        except Exception as e:
+            conn.rollback()
+            _log(None, None, f"t2 release: {type(e).__name__}: {e}")
+
+
+def _t2_send(conn, cfg, mode, command, by, mails) -> int:
+    """Run the command for the claimed mails of one session and write the records. Returns the number sent."""
+    try:
         sent = []   # (mail, the stored envelope of screen_mail, else a fresh one)
         for m in list(mails):
             why = None
@@ -672,8 +772,8 @@ def open_sessions(conn, names=None):
 
 def _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop, hunch=None):
     """Screen up to PER_SESSION mails of one session. A mail that raises is logged and ends as failed; the next
-    mail goes on. Returns the number of mails taken. The lease (lease_s, at least twice timeout_s by
-    screener_config.check) is longer than one decision, so the owner is not rechecked before a write."""
+    mail goes on. Returns the number of mails taken. The lease (lease_s, at least 3 x timeout_s + 30 by
+    screener_config.check) is longer than one decision; _act_pre still checks the owner before it acts."""
     taken = 0
     oldest = rookery.now() - cfg["max_age_s"]
     for row in queue(conn, sid, cutoff, limit=PER_SESSION, oldest=oldest):
@@ -724,6 +824,31 @@ def _screen_session(conn, sid, name, cfg, backend, owner, cutoff, stop, hunch=No
     return taken
 
 
+def _stop_held(conn):
+    """The configuration cannot be used: every mail that the screener holds goes to a person (fail closed), with the
+    reason `screening-stopped` and a notice. decided_by names the model of the configuration when it is a valid name."""
+    model = screener_config.DEFAULTS["model"]
+    try:
+        raw = rookery_identity.load_config(persist=False).get("screener")
+        if isinstance(raw, dict) and isinstance(raw.get("model"), str) \
+                and screener_t0.check_decided_by("screener:" + raw["model"]):
+            model = raw["model"]
+    except Exception:
+        pass   # the default model name stands
+    for r in conn.execute("SELECT id FROM inbox WHERE status='held' AND reason='screening'").fetchall():
+        try:
+            _begin(conn)
+            rookery._decide(conn, r["id"], "held", "escalated", "escalate", "screening-stopped", "screener:" + model,
+                            commit=False)
+            conn.commit()
+        except Exception as e:   # a person decided it first, or the write failed: leave it
+            conn.rollback()
+            _log(None, r["id"], f"not stopped: {type(e).__name__}: {e}")
+            continue
+        _log(None, r["id"], "configuration invalid: held mail escalated as screening-stopped")
+        _notify(conn, r["id"], "screening-stopped")
+
+
 def run(sessions=None, once=False, poll=2.0):
     """Screen the queue of each session, PER_SESSION mails at a time, until a pass screens nothing. An error is
     logged and the loop goes on. SIGTERM ends it after the current mail. The configuration is read on each
@@ -748,6 +873,11 @@ def run(sessions=None, once=False, poll=2.0):
                 print(f"rookery: {e}", file=sys.stderr)
                 cfg = None
                 code = 2
+                try:
+                    _stop_held(conn)
+                except Exception as e2:
+                    conn.rollback()
+                    _log(None, None, f"stop failed: {type(e2).__name__}: {e2}")
             if cfg is not None and cfg["checks"]["t1"] != "off":
                 try:
                     backend = screener_backend.system_one(cfg)
@@ -778,7 +908,15 @@ def run(sessions=None, once=False, poll=2.0):
                             _log(name, None, f"{type(e).__name__}: {e}")
                             code = 2
             if cfg is not None:
-                taken += t2_pass(conn, cfg)   # no t1 needed: it reads escalated mail only
+                t2_sids = None   # the sessions this process serves; a name that does not resolve sends nothing
+                if sessions:
+                    try:
+                        t2_sids = [sid for sid, _ in open_sessions(conn, sessions)]
+                    except Exception as e:
+                        conn.rollback()
+                        _log(None, None, f"t2 sessions: {type(e).__name__}: {e}")
+                        t2_sids = []
+                taken += t2_pass(conn, cfg, t2_sids)   # no t1 needed: it reads escalated mail only
             if taken:
                 continue   # work was done: look again at once, until every queue is empty
             if once or stop:

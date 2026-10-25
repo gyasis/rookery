@@ -171,7 +171,7 @@ class Gates(Base):
         import screener
         row = self.row(r)
         self.assertFalse(screener._t2_mine(row))
-        self.assertEqual(screener._t2_batch(self.conn, self.cfg), [])
+        self.assertEqual(screener._t2_batch(self.conn, self.cfg, self.alpha["session_id"]), [])
         self.passes()
         row = self.row(r)
         self.assertEqual((row["status"], row["decided_by"]), ("escalated", "t0:gates"))

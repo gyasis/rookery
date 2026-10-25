@@ -280,7 +280,7 @@ The user chose this on 2026-10-25.
     Only the two agents of the first mail can use the review of a thread. Other agents, and a recruit, get a full T1 check.
   - A thread closes in four cases. The first is a veto from a live check (a quarantine by the screener). The
     second is `rookery thread close SESSION THREAD`. The third is the same command with `--as AGENT` where that
-    agent has the role `boss`. The fourth is a `handoff` with `status: done` from the agent that opened the thread. Nothing closes a thread because of time. The row
+    agent has the role `boss`. The fourth is a `handoff` with `status: done` from the agent that opened the thread. Nothing closes a thread because of time. When a live check puts a mail in quarantine, its thread closes. Releasing that mail later does not open the thread again. Start a new thread. The row
     records who closed it.
 - **B3**: in the gate, the gate refuses a mail on a closed thread when B3 is live. Rookery does not store it, and it
   sends a bounce with the reason text "the thread has closed". In shadow mode the gate stores the mail and writes

@@ -1,4 +1,4 @@
-"""cli_screen -- `rookery screen run|status|review|mark|report|export|release|quarantine|escalate` (specs/004-screener-chain, contracts/screener.md).
+"""cli_screen -- `rookery screen run|status|review|mark|report|export|release|quarantine|escalate|escalated` (specs/004-screener-chain, contracts/screener.md).
 
 Register with: cli_screen.add_parser(subparsers)
 Exit codes: 0 ok, 2 bad input or bad configuration (stderr names the item), 130 stopped with Ctrl-C.
@@ -127,7 +127,8 @@ def cmd_status(args):
                                        (sid,)).fetchall())
             rows.append({"session": name, "backlog": len(q),
                          "oldest_age_s": max(0, now - q[0]["created_at"]) if q else None,
-                         "escalated": counts.get("escalated", 0), "failed": counts.get("failed", 0),
+                         "escalated": conn.execute("SELECT COUNT(*) FROM inbox WHERE session_id=? AND status='escalated'",
+                                                       (sid,)).fetchone()[0], "failed": counts.get("failed", 0),
                          "decided": counts.get("decided", 0),
                          "held_screening": conn.execute("SELECT COUNT(*) FROM inbox WHERE session_id=? AND status='held' "
                                                         "AND reason='screening'", (sid,)).fetchone()[0]})
@@ -464,6 +465,37 @@ def cmd_escalate(args):
     print(f"Escalated mail {args.mail_id}.")
 
 
+def cmd_escalated(args):
+    """List the escalated mail: who sent it, why it waits, how old it is. Never a mail body (peek shows it)."""
+    conn = _db()
+    try:
+        sql = ("SELECT i.id, COALESCE((SELECT name FROM identities WHERE agent_id=i.sender), i.sender), "
+               "COALESCE((SELECT name FROM identities WHERE agent_id=i.recipient), i.recipient), i.reason, "
+               "i.decided_by, i.created_at FROM inbox i WHERE i.status='escalated'")
+        params = []
+        if args.session:
+            s = conn.execute("SELECT session_id FROM rookery_sessions WHERE name=? OR session_id=?",
+                             (args.session, args.session)).fetchone()
+            if s is None:
+                _fail(f"session {args.session}: no such session")
+            sql += " AND i.session_id=?"
+            params.append(s[0])
+        rows = conn.execute(sql + " ORDER BY i.created_at, i.id", params).fetchall()
+    finally:
+        conn.close()
+    now = rookery.now()
+    out = [{"id": r[0], "from": r[1], "to": r[2], "reason": r[3], "decided_by": r[4], "age_s": max(0, now - r[5])}
+           for r in rows]
+    if args.json:
+        print(json.dumps(out))
+        return
+    if not out:
+        print("No mail waits for a person.")
+    for r in out:
+        print(f"mail {r['id']} from={r['from']} to={r['to']} reason={r['reason']} decided_by={r['decided_by']} "
+              f"age_s={r['age_s']}")
+
+
 def add_parser(subparsers):
     p = subparsers.add_parser("screen", help="Screen mail with the T1 decision model.")
     sub = p.add_subparsers(dest="screen_command", metavar="<screen_command>")
@@ -516,6 +548,10 @@ def add_parser(subparsers):
     x.add_argument("--reason", help="Why the mail waits.")
     x.add_argument("--by", help="Your name (default: your user name).")
     x.set_defaults(func=cmd_escalate)
+    ls = sub.add_parser("escalated", help="List the mail that waits for a person.")
+    ls.add_argument("--session", help="Show only this session (name or ID).")
+    ls.add_argument("--json", action="store_true", help="Print a JSON list.")
+    ls.set_defaults(func=cmd_escalated)
 
 
 def add_thread_parser(subparsers):

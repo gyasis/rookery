@@ -571,6 +571,7 @@ class Text(unittest.TestCase):
              "Say if a decision was right.", "Show how often the calls agree with the decisions.",
              "Write one JSON line for each compared decision.", "Deliver a held or escalated mail.",
              "Reject a held or escalated mail.", "Hold a mail for a person.", "Why the mail waits.",
+             "List the mail that waits for a person.", "No mail waits for a person.",
              "Your name (default: your user name).", "The agent that the sender should use.",
              "This decision has no mail. Rookery cannot record a call for it.",
              "Set t1 to live mode.", "Set a check to shadow, live or off.",

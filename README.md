@@ -430,9 +430,9 @@ rookery screen status --json  # backend, model host, backlog
 - The boss runs the same command with `--as AGENT`.
 - The agent that opened the thread sends a `handoff` with `status` `done`.
 
-Time never closes a thread.
+Time never closes a thread. A live check that puts a mail in quarantine closes its thread. Releasing that mail later does not open the thread again. Start a new thread.
 
-**Ask budget and duplicates.** Each task has a limit on `ask` mail. The limit is `ask_budget` in the team file, else `screener.ask_budget` (20). Rookery holds an ask over the limit with the reason `budget`. It holds the same ask from the same sender to the same recipient as `duplicate`. This applies inside `screener.duplicate_window_s` (3600 seconds).
+**Ask budget and duplicates.** Each task has a limit on `ask` mail. The limit is `ask_budget` in the team file, else `screener.ask_budget` (20). Rookery holds an ask over the limit with the reason `budget`. It holds the same ask from the same sender to the same recipient on the same task as `duplicate`. Rookery compares the question in lower case, with only its letters and digits and single spaces. A question with no letters or digits is never a duplicate. This applies inside `screener.duplicate_window_s` (3600 seconds).
 
 **Injection and worker gates.** A fixed set of patterns finds text that tries to change instructions, show the system prompt, ask for keys, run piped shell commands or hide text in base64. A match is `injection-suspect`. The gates read `self_check` in the block.
 
@@ -455,12 +455,14 @@ In live mode a gate anomaly escalates the mail to a person.
 | `hunch.model`, `hunch.url` | `qwen2.5:3b`, `null` | The second opinion. |
 | `t2.command`, `t2.name`, `t2.batch` | `null`, `null`, 20 | The T2 command. |
 | `timeout_s` | 300 | Time for one model call. |
-| `lease_s` | 600 | A claim with no answer returns to the queue. Must be at least 2 times `timeout_s`. |
+| `lease_s` | 960 | A claim with no answer returns to the queue. Must be at least 3 times `timeout_s` plus 30. One screening can make three model calls. |
 | `max_age_s` | 86400 | The screener skips older mail. |
 | `ask_budget`, `duplicate_window_s` | 20, 3600 | See above. |
 | `review_mode` | `pre` | `pre` holds a mail until the screener decides. `post` delivers it and sends a notice. Set `review_mode.agents.NAME` for one recipient. |
 
-**PromptChain is optional.** The screener uses PromptChain when it imports. If it does not, the screener uses a standard-library copy with the same contract. `rookery screen status` shows which one runs.
+**PromptChain is optional.** The screener uses PromptChain when it imports. If it does not, the screener uses a standard-library copy with the same contract. `rookery screen status` shows which one runs. It counts escalated mail from the inbox. `rookery screen escalated` lists escalated mail and shows no body.
+
+**Bad config.** If `config.json` is invalid or unreadable, the T0 checks and the screening hold turn off. The gate logs it. The screener escalates mail that waits for screening.
 
 **Session names.** `rookery session new` with no name makes a name of three words, such as `calm-amber-heron`.
 

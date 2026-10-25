@@ -139,7 +139,7 @@ delivers all three mails, because the checks are in shadow mode.
 4. **Given** an envelope is larger than the model input limit, **When** the screener builds it, **Then** it
    records `envelope-too-large` and makes no model call. It never records `deliver` for that mail.
 5. **Given** the screener stops and starts again, **When** it runs, **Then** it decides each stored mail once.
-   It decides no mail twice and skips no mail.
+   It decides no mail twice. It skips mail older than `screener.max_age_s`, except mail held for screening and escalated mail with a retry pending.
 
 ---
 
@@ -321,7 +321,8 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
 
 - **FR-005**: The screener MUST decide each stored agent mail once. After a restart it MUST continue from the
   first mail that has no decision. It MUST NOT screen mail from a system sender, or mail that a T0 check put in
-  quarantine.
+  quarantine. It MUST skip mail older than `screener.max_age_s` (one day by default). It always screens mail held for
+  screening, and escalated mail with a retry pending.
 - **FR-006**: The new T0 checks MUST run with no model. They are the injection pattern set, duplicate questions, the ask
   budget, a closed thread, and the worker-gate anomalies. Each check MUST write its own record (RQ-3.1).
 - **FR-007**: T1 MUST ask the decision model one closed question with exactly four labels: `deliver`,
@@ -405,7 +406,7 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
 **Worker and peer gates (RQ-R.1, RQ-R.2)**
 
 - **FR-030**: The code MUST read the `self_check` flags of a block. An ask with `task_complete: true` MUST give
-  the anomaly `g1-task-complete`. An ask with `gap: false` MUST give the anomaly `g2-no-gap`. An ask with
+  the anomaly `g1-task-complete`. An ask with a `gap` that is an empty or blank string MUST give the anomaly `g2-no-gap`. A block with no `gap` gives nothing. An ask with
   `gap_in_my_scope: true` MUST give the anomaly `g3-gap-in-scope`. An ask that fails the B1 roster check or
   the B2 ask budget MUST give the anomaly `g5-ask-not-allowed` (RQ-R.1). The code MUST NOT check G4 (peer
   match) or P1 (in my scope). These stay in the personas, and the T1 checks for wrong recipient and unneeded

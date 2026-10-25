@@ -425,6 +425,96 @@ class Live(Base):
                          [("sent", "screening"), ("sent", "screening"), ("loop-held", "loop")])
         self.assertEqual([self.row(r["msg_id"])["reason"] for r in ids], ["screening", "screening", "loop"])
 
+    # --- final audit fixes ---
+
+    def test_a_person_who_escalates_during_decide_is_not_overridden(self):   # audit 1
+        mid = self.submit("CASE-DELIVER")
+        real = self.backend.decide
+
+        def late(*a, **k):
+            out = real(*a, **k)
+            rookery.escalate(self.conn, mid, "human:x", "mine")
+            return out
+        with mock.patch.object(self.backend, "decide", late):
+            self.passes()
+        r = self.row(mid)
+        self.assertEqual((r["status"], r["decided_by"]), ("escalated", "human:x"))
+        (rec,) = self.recs(mid)
+        self.assertEqual(rec["action"], "none")
+        self.assertEqual(self.state(mid)["state"], "decided")
+
+    def test_a_lost_claim_changes_nothing(self):   # audit 6
+        mid = self.submit("CASE-DELIVER")
+        real = screener.screen_one
+
+        def stolen(conn, m, cfg, backend, **kw):
+            out = real(conn, m, cfg, backend, **kw)
+            conn.execute("UPDATE screen_mail SET owner='other:1:y' WHERE mail_id=?", (m,))
+            conn.commit()
+            return out
+        with mock.patch.object(screener, "screen_one", stolen):
+            self.passes()
+        self.assertEqual((self.row(mid)["status"], self.row(mid)["reason"]), ("held", "screening"))
+        self.assertEqual(self.recs(mid)[0]["action"], "none")
+        self.assertEqual(self.state(mid)["owner"], "other:1:y")
+
+    @property
+    def gate_log(self):
+        return os.path.join(self.tmp.name, ".rookery", "logs", "gate.jsonl")
+
+    def gate_lines(self, event):
+        with open(self.gate_log) as fh:
+            return [json.loads(x) for x in fh if event in x]
+
+    def test_an_invalid_value_in_the_config_turns_the_gate_checks_off(self):   # audit 2
+        for block_ in ({"checks": {"gates": "on"}}, {"ask_budget": "20"}):
+            self.write_config(block_)
+            before = len(self.gate_lines("config-invalid")) if os.path.exists(self.gate_log) else 0
+            r = mail_gate.submit(self.conn, path="t", principal=(self.alpha, self.swe), raw_sender="x",
+                                 to="researcher", body=block(say="x"), topic="T-7")
+            self.assertEqual(r["outcome"], "sent", r)
+            self.assertEqual(self.row(r["msg_id"])["status"], "pending")   # no pre_hold either
+            self.assertEqual(len(self.gate_lines("config-invalid")), before + 1)   # one line for each send
+        self.assertTrue(all(x["error"] for x in self.gate_lines("config-invalid")))
+
+    def test_live_without_bands_does_not_hold_and_run_escalates_held_mail(self):   # audit 3
+        held = self.submit("CASE-DELIVER")
+        self.assertEqual(self.row(held)["reason"], "screening")
+        self.write_config({"checks": {"t1": "live"}, "bands": {"t1": None}})
+        r = mail_gate.submit(self.conn, path="t", principal=(self.alpha, self.swe), raw_sender="x", to="researcher",
+                             body=block(say="later"), topic="T-7")
+        self.assertEqual(self.row(r["msg_id"])["status"], "pending")
+        self.boss()
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(screener.run(once=True), 2)
+        row = self.row(held)
+        self.assertEqual((row["status"], row["reason"], row["decided_by"]),
+                         ("escalated", "screening-stopped", "screener:tev1:4b"))
+        self.assertEqual(len(self.notices(self.me["agent_id"])), 1)
+        self.assertEqual(self.calls(), 0)
+
+    def test_screening_mail_is_screened_whatever_its_age(self):   # audit 4
+        mid = self.submit("CASE-DELIVER")
+        self.conn.execute("UPDATE inbox SET created_at=? WHERE id=?", (rookery.now() - 90000, mid))
+        self.conn.commit()
+        self.assertEqual(self.passes(), 1)
+        self.assertEqual(self.row(mid)["status"], "pending")
+
+    def test_live_retries_stop_after_three_failed_retries(self):   # audit 9
+        self.boss()
+        mid = self.submit("CASE-TIMEOUT")
+        self.passes()
+        for _ in range(screener.MAX_RETRIES):
+            self.conn.execute("UPDATE screen_mail SET retry_at=0 WHERE mail_id=?", (mid,))
+            self.conn.commit()
+            self.assertEqual(self.passes(), 1)
+        self.assertEqual(self.calls(), 1 + screener.MAX_RETRIES)
+        s = self.state(mid)
+        self.assertEqual((self.row(mid)["status"], s["state"], s["retry_at"]), ("escalated", "escalated", None))
+        self.assertEqual(self.passes(), 0)   # nothing is due and nothing is asked again
+        self.assertEqual(self.calls(), 1 + screener.MAX_RETRIES)
+        self.assertEqual(len(self.notices()), 1)
+
     def test_the_hook_path_never_imports_the_screener(self):
         for name in ("screener_t0.py", "mail_gate.py"):
             with open(os.path.join(HERE, name)) as fh:

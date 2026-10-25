@@ -130,10 +130,11 @@ class CheckTests(unittest.TestCase):
         self.bad(lambda c: c.update(max_age_s=0), "screener.max_age_s")
         self.bad(lambda c: c.update(max_age_s=True), "screener.max_age_s")
 
-    def test_lease_must_be_twice_the_timeout(self):
-        self.bad(lambda c: c.update(timeout_s=300, lease_s=599), "screener.lease_s")
+    def test_lease_must_cover_three_calls_and_30_seconds(self):   # audit 6
+        self.assertEqual(SC.DEFAULTS["lease_s"], 960)
+        self.bad(lambda c: c.update(timeout_s=300, lease_s=929), "screener.lease_s")
         cfg = copy.deepcopy(SC.DEFAULTS)
-        cfg.update(timeout_s=300, lease_s=600)
+        cfg.update(timeout_s=300, lease_s=930)
         SC.check(cfg)
 
     def test_non_positive_numbers(self):

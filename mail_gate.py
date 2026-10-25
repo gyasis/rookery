@@ -202,13 +202,19 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
     topic = topic or None
     cfg_box = []
 
-    def get_cfg():   # one read for this send, shared by pre_hold and the thread check; None when unreadable
+    def get_cfg():   # one read for this send, shared by pre_hold and the thread check; None when unreadable or invalid
         if not cfg_box:
             try:
                 cfg_box.append(screener_config.load())
             except (ValueError, OSError) as err:
                 cfg_box.append(None)
                 _tb.log_event(None, "gate", event="config-unreadable", error=str(err))
+                return None
+            try:
+                screener_config.check(cfg_box[0])   # a value that the screener refuses must not drive the gate
+            except ValueError as err:
+                cfg_box[0] = None
+                _tb.log_event(None, "gate", event="config-invalid", error=str(err))
         return cfg_box[0]
     # Screening reads no database row, so it runs before the write lock (a slow policy must not hold it).
     verdict = security.get_policy().inspect_inbound(sender, to, body)

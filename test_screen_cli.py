@@ -298,7 +298,7 @@ class Hardening(Cli):
     def test_claim_expires_after_lease_s_alone(self):
         mid = self.send("CASE-DELIVER x")
         self.conn.execute("INSERT INTO screen_mail(mail_id, session_id, state, owner, claimed_at) VALUES(?,?,?,?,?)",
-                          (mid, self.sid, "claimed", "dead:1:x", rookery.now() - 650))   # past lease_s 600, inside 900
+                          (mid, self.sid, "claimed", "dead:1:x", rookery.now() - 1000))   # past lease_s 960, inside 1440
         self.conn.commit()
         self.assertEqual(self.run_once()[0], 0)
         self.assertEqual(self.states(), {mid: "decided"})
@@ -351,6 +351,41 @@ class Status(Cli):
         self.assertEqual({k: row[k] for k in ("backlog", "escalated", "failed", "decided")},
                          {"backlog": 1, "escalated": 0, "failed": 1, "decided": 1})
         self.assertIsInstance(row["oldest_age_s"], int)
+
+    def held_escalated(self, text, sid=None, sender=None, to=None):
+        body = json.dumps({"to": "researcher", "task": "T-7", "kind": "ask", "say": text, "status": "in-progress"})
+        mid = rookery.send(self.conn, sender or self.swe["agent_id"], to or self.researcher["agent_id"], body,
+                           topic="T-7", hold=True, session_id=sid or self.sid)
+        rookery.escalate(self.conn, mid, "human:ann", "needs a look")
+        return mid
+
+    def test_status_counts_escalated_mail_from_the_inbox(self):   # audit 7
+        mid = self.held_escalated("SECRET-BODY CASE-DELIVER")   # no screen_mail row at all
+        out = json.loads(self.screen("status", "--json").stdout)
+        row = [r for r in out["sessions"] if r["session"] == "alpha"][0]
+        self.assertEqual(row["escalated"], 1)
+        self.conn.execute("INSERT INTO screen_mail(mail_id, session_id, state) VALUES(?,?,?)", (mid, self.sid, "escalated"))
+        self.conn.execute("UPDATE inbox SET status='quarantined' WHERE id=?", (mid,))
+        self.conn.commit()
+        out = json.loads(self.screen("status", "--json").stdout)
+        self.assertEqual([r for r in out["sessions"] if r["session"] == "alpha"][0]["escalated"], 0)
+
+    def test_screen_escalated_lists_mail_and_never_a_body(self):   # audit 7
+        mid = self.held_escalated("SECRET-BODY CASE-DELIVER")
+        self.send("SECRET-BODY other")
+        p = self.screen("escalated", "--json")
+        self.assertNotIn("SECRET-BODY", p.stdout)
+        (row,) = json.loads(p.stdout)
+        self.assertEqual({k: row[k] for k in ("id", "from", "to", "reason", "decided_by")},
+                         {"id": mid, "from": "swe", "to": "researcher", "reason": "needs a look", "decided_by": "human:ann"})
+        self.assertIsInstance(row["age_s"], int)
+        text = self.screen("escalated", "--session", "alpha").stdout
+        self.assertIn(f"mail {mid} from=swe to=researcher", text)
+        self.assertNotIn("SECRET-BODY", text)
+        self.assertEqual(json.loads(self.screen("escalated", "--session", RI.new_session(self.conn, name="beta")["name"],
+                                                "--json").stdout), [])
+        self.assertIn("No mail waits for a person.", self.screen("escalated", "--session", "beta").stdout)
+        self.assertEqual(self.screen("escalated", "--session", "ghost", check=False).returncode, 2)
 
     def test_host_that_does_not_answer(self):
         self.write_config({"base_url": "http://127.0.0.1:1/llm"})

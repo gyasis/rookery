@@ -175,7 +175,7 @@
    "default": "pre",
    "agents": {}
   },
-  "lease_s": 600,
+  "lease_s": 960,
   "max_age_s": 86400
  }
 }

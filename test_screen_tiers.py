@@ -14,15 +14,18 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import unittest
 import unittest.mock as mock
 
 import mail_gate
 import rookery
+import rookery_identity as RI
 import screener
 import screener_backend as SB
 import screener_config
+import turn_block
 from test_hooks import Base
 from test_screen_run import block
 
@@ -332,10 +335,10 @@ class T2(Tiers):
         self.conn.execute("UPDATE screen_mail SET retry_at=NULL")
         self.conn.commit()
         self.command()
-        self.assertEqual([r["id"] for r in screener._t2_batch(self.conn, self.cfg)], [low])
+        self.assertEqual([r["id"] for r in screener._t2_batch(self.conn, self.cfg, self.sid)], [low])
         self.conn.execute("UPDATE inbox SET reason='envelope-too-large' WHERE id=?", (low,))
         self.conn.commit()
-        self.assertEqual(screener._t2_batch(self.conn, self.cfg), [])
+        self.assertEqual(screener._t2_batch(self.conn, self.cfg, self.sid), [])
 
     def test_F3_one_failed_run_then_a_good_run_decides_the_mail(self):
         (mid,) = self.escalate("CASE-DELIVER")
@@ -408,6 +411,66 @@ class T2(Tiers):
         screener.t2_pass(self.conn, self.cfg)
         self.assertEqual(self.row(mid)["status"], "pending")
         self.assertEqual(self.conn.execute("SELECT status FROM threads WHERE thread='th1'").fetchone()[0], "held")
+
+    def beta_escalated(self, say):
+        """An escalated screener mail of a second session."""
+        beta = RI.new_session(self.conn, name="beta")
+        a, b = (RI.new_identity(self.conn, beta["session_id"], n) for n in ("a", "b"))
+        body = json.dumps({"to": "b", "task": "T", "kind": "ask", "say": say, "status": "in-progress"})
+        mid = rookery.send(self.conn, a["agent_id"], b["agent_id"], body, topic="T", hold=True,
+                           session_id=beta["session_id"])
+        rookery._decide(self.conn, mid, "held", "escalated", "escalate", "low-confidence unneeded", "screener:tev1:4b")
+        return mid, beta["session_id"]
+
+    def test_t2_serves_only_the_sessions_of_the_process_and_one_session_a_batch(self):   # audit 5
+        (a,) = self.escalate("CASE-DELIVER")
+        b, beta = self.beta_escalated("CASE-DELIVER")
+        log = os.path.join(self.tmp.name, "t2.log")
+        self.command("t2_log.py")
+        with mock.patch.dict(os.environ, {"T2_LOG": log}):
+            self.assertEqual(screener.t2_pass(self.conn, self.cfg, [self.sid]), 1)
+            self.assertEqual((self.row(a)["status"], self.row(b)["status"]), ("pending", "escalated"))
+            self.assertEqual(self.recs(b, "t2"), [])
+            self.assertEqual(screener.t2_pass(self.conn, self.cfg), 1)
+        self.assertEqual(self.row(b)["status"], "pending")
+        with open(log) as fh:
+            self.assertEqual([json.loads(x) for x in fh], [[a], [b]])   # one run for each session
+
+    def test_t2_two_batches_for_two_sessions_in_one_pass(self):   # audit 5
+        a, b = self.escalate("CASE-DELIVER 1")[0], self.beta_escalated("CASE-DELIVER 2")[0]
+        log = os.path.join(self.tmp.name, "t2.log")
+        self.command("t2_log.py")
+        with mock.patch.dict(os.environ, {"T2_LOG": log}):
+            self.assertEqual(screener.t2_pass(self.conn, self.cfg), 2)
+        with open(log) as fh:
+            runs = [json.loads(x) for x in fh]
+        self.assertEqual(sorted(runs), [[a], [b]])
+
+    def test_t2_two_processes_never_send_the_same_mail(self):   # audit 5
+        ids = self.escalate("CASE-DELIVER 1", "CASE-DELIVER 2", "CASE-DELIVER 3")
+        log = os.path.join(self.tmp.name, "t2.log")
+        self.command("t2_log.py")
+        done = []
+
+        def worker():
+            c = rookery.connect(turn_block.db_path())
+            try:
+                done.append(screener.t2_pass(c, self.cfg))
+            finally:
+                c.close()
+        with mock.patch.dict(os.environ, {"T2_LOG": log, "T2_SLEEP": "1.5"}):
+            threads = [threading.Thread(target=worker) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(60)
+        with open(log) as fh:
+            sent = [i for x in fh for i in json.loads(x)]
+        self.assertEqual(sorted(sent), sorted(ids))   # each mail once
+        self.assertEqual(sorted(done), [0, 3])
+        for mid in ids:
+            self.assertEqual(len(self.recs(mid, "t2")), 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM screen_mail WHERE owner IS NOT NULL").fetchone()[0], 0)
 
     def test_no_code_names_a_t2_model(self):   # scan: a model-like name next to t2
         pat = re.compile(r"t2[^\n]{0,80}(tev1|qwen|llama|gemma|gpt|claude|mistral|phi\d|\w+:\d+b)|"
