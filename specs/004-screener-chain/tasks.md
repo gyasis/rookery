@@ -62,7 +62,8 @@ writes the code. No task leaves a failing test.
 
 **Purpose**: the fixtures and the one change that no story needs.
 
-- [ ] T001 [P] Create `fixtures/bin/hunch` (executable, `#!/usr/bin/env python3`, standard library). It reads the
+- [ ] T001 [P] Files: `fixtures/bin/hunch`, `fixtures/screener/team.json`, `fixtures/screener/fake_t1.json`,
+  `fixtures/screener/injection.txt`. Create `fixtures/bin/hunch` (executable, `#!/usr/bin/env python3`, standard library). It reads the
   state from stdin and `-q <json>`, and takes `--raw` and `--timeout`. It answers from the JSON file in
   `$ROOKERY_FAKE_HUNCH`, with the same rule format as the fake backend of the contract (`match`, `label`,
   `confidence`, `fail`). `fail: "error"` prints exit 0 with `answers[q] = {"error": "..."}`. `fail: "exit1"` exits
@@ -72,7 +73,8 @@ writes the code. No task leaves a failing test.
   Create `fixtures/screener/fake_t1.json` (one rule for each of the four labels, one `timeout` rule, one
   `bad-answer` rule). Create `fixtures/screener/injection.txt` (one line for each pattern family of D18).
   Verify: `L=$(mktemp) && echo '{"t1":[{"match":"x","label":"deliver","confidence":0.9}]}' > $L.json && echo x | ROOKERY_FAKE_HUNCH=$L.json ROOKERY_FIXTURE_LOG=$L fixtures/bin/hunch - -q '{"route":{"type":"choice","criteria":["deliver","unneeded"]}}' --raw && test -s $L`
-- [ ] T002 [P] Create `rookery_names.py` with three lists of 64 words (moods, colors, animals; lower-case ASCII, no
+- [ ] T002 [P] Files: `rookery_names.py`, `rookery_identity.py`, `test_session_names.py`.
+  Create `rookery_names.py` with three lists of 64 words (moods, colors, animals; lower-case ASCII, no
   hyphen, no duplicates) and `make_name(rng=secrets)`. Edit `rookery_identity._new_session`
   (`rookery_identity.py:154-180`): when `name is None`, choose a name with `make_name` and try again on a clash,
   inside the existing loop of `_ID_TRIES`. The session ID stays `rs-` plus 8 hex characters. (D22, FR-037). Write `test_session_names.py` first. Cases: 1,000 sessions with no name
@@ -87,7 +89,8 @@ writes the code. No task leaves a failing test.
 
 **Purpose**: the schema, the configuration, the backend, the record writer and the `escalated` status.
 
-- [ ] T003 Edit `rookery.py`. Add `thread TEXT` with `_add_column` in `init_db`. Add the six tables of
+- [ ] T003 Files: `rookery.py`, `turn_block.py`, `test_screen_schema.py`.
+  Edit `rookery.py`. Add `thread TEXT` with `_add_column` in `init_db`. Add the six tables of
   [data-model.md](data-model.md) (`session_context`, `agent_scope`, `threads`, `screen_mail`, `screen_decisions`,
   `screen_calls`) with their keys and indexes to `_SESSION_TABLES_SQL`. Edit `turn_block._schema_current`
   (`turn_block.py:120-133`) so that it knows the new column and tables (F8). Write `test_screen_schema.py` first.
@@ -98,7 +101,8 @@ writes the code. No task leaves a failing test.
   temporary folder. It migrates the copy, as `test_sessions_migration.SessionsMigrationLiveCopy` does (FR-035). After the migration,
   a hook on 10,000 rows stays under 1 s, as `test_hooks.HookTiming` measures (D25).
   Verify: `python3 -m unittest test_screen_schema test_sessions_migration test_up_schema test_turn_block test_hooks test_send -v`
-- [ ] T004 [P] Create `screener_config.py` with `load() -> dict` (defaults in code for each missing key of the
+- [ ] T004 [P] Files: `screener_config.py`, `rookery_config.default.json`, `test_screen_config.py`.
+  Create `screener_config.py` with `load() -> dict` (defaults in code for each missing key of the
   data-model `screener` block). It also has `check(cfg)`, which raises `ValueError` that names the key. The causes
   are a mode not in `shadow|live|off`, bands not `0 <= review <= accept <= 1`, a T2 command that is not a list of
   text, and a non-positive number. It also has `set_mode(check, mode)`. This writes only `screener.checks.<check>`
@@ -106,7 +110,8 @@ writes the code. No task leaves a failing test.
   configuration file with no `screener` key gives every default, and every mode is `shadow`. Each bad value gives
   an error that names its key. `set_mode` keeps an unrelated key and the other modes.
   Verify: `python3 -m unittest test_screen_config test_identity -v`
-- [ ] T005 [P] Create `screener_backend.py` (D6, D7, contract "The decision backend"). It has `Answer`,
+- [ ] T005 [P] Files: `screener_backend.py`, `test_screen_backend.py`.
+  Create `screener_backend.py` (D6, D7, contract "The decision backend"). It has `Answer`,
   `BackendError(cause)`, `system_one(cfg)`, `hunch_vote(cfg)` and `fake(path)`. It tries the import of
   `promptchain.utils.decision_step` inside `system_one()` and `hunch_vote()`, never at module import (F20). With PromptChain, the backends wrap `SystemOneBackend` and
   `hunch_backend(model, vote=6)`, and a `DecisionError` becomes a `BackendError` with the cause. Without it,
@@ -127,7 +132,8 @@ writes the code. No task leaves a failing test.
   - Each error gives a `BackendError`, never an `Answer` (FR-012).
   - `import screener_backend` alone does not put `promptchain` in `sys.modules` (F20).
   Verify: `python3 -m unittest test_screen_backend -v`
-- [ ] T006 Edit `rookery.py`. Needs T003 first (same file). Add `escalate(conn, msg_id, decided_by, reason)`
+- [ ] T006 Files: `rookery.py`, `postmaster.py`, `rookery_views.py`, `test_escalated.py`.
+  Edit `rookery.py`. Needs T003 first (same file). Add `escalate(conn, msg_id, decided_by, reason)`
   (`held` to `escalated` through `_decide`). `release` and `quarantine` accept `held` or `escalated` as the start
   status. `send` takes `thread=None` and writes it. Edit `postmaster.py:144` and `:475` so that both skip
   `escalated`. Edit `rookery_views.mail_mirror` (`rookery_views.py:~484`) so that it lists `escalated` (D14,
@@ -136,7 +142,8 @@ writes the code. No task leaves a failing test.
   mentioned by the postmaster (`_mention_pass`, wake), and `_answers_open_ask` ignores it (SC-009). The mail
   mirror lists it with no body. `send(thread="t1")` stores the thread.
   Verify: `python3 -m unittest test_escalated test_held_quarantine test_views test_wake test_outbox test_send test_gate -v`
-- [ ] T007 Create `screener_t0.py` with
+- [ ] T007 Files: `screener_t0.py`, `test_screen_t0.py`.
+  Create `screener_t0.py` with
   `record(conn, *, mail_id, session_id, stage, check_name, mode, decided_by, label=None, failure=None, attempt=1, confidence=None, band=None, action="none", detail=None, impl=None, usage=None)`
   and `check_decided_by(text)`. `record` refuses a row with both or neither of `label` and `failure`. It refuses an
   `action` other than `none` in shadow mode. It matches `decided_by` against the five forms of FR-010
@@ -145,7 +152,8 @@ writes the code. No task leaves a failing test.
   first. Write `test_screen_t0.py` first. Cases: each rule above, and one
   gate-log line for each row (FR-010, FR-012, FR-014, FR-033).
   Verify: `python3 -m unittest test_screen_t0 test_gate_log test_screen_schema -v`
-- [ ] T008 [P] Edit `cli_workspace.py` so that `rookery up` writes `session_context` and `agent_scope` from the
+- [ ] T008 [P] Files: `cli_workspace.py`, `rookery_team.py`, `test_session_context.py`.
+  Edit `cli_workspace.py` so that `rookery up` writes `session_context` and `agent_scope` from the
   team file. It does so in the transaction that makes the session. A second run replaces the rows of that session.
   Edit `rookery_team.py` to accept an optional `ask_budget` (a positive integer, else an error that names it) (D8,
   D17). Needs T003 first. Write `test_session_context.py` first. Cases:
@@ -166,14 +174,16 @@ suites are green.
 **Independent Test**: send 50 mails of every kind, run `rookery screen run --once` with the fake backend. Each
 agent mail has one T1 record, 0 statuses change, and the fake counts 0 calls during the sends.
 
-- [ ] T009 [US1] Edit `mail_gate.py`: `submit` and `_submit` take `thread=None` and `block=None`, and pass `thread`
+- [ ] T009 [US1] Files: `mail_gate.py`, `turn_block.py`, `test_screen_t0.py`.
+  Edit `mail_gate.py`: `submit` and `_submit` take `thread=None` and `block=None`, and pass `thread`
   to `rookery.send`. When a T0 rule of today puts the mail in quarantine at store time, write a `screen_mail` row
   with state `decided` and `final_by` set to that `decided_by`. Edit `turn_block.py:625-629` to pass `thread` and
   the parsed block. Needs T006 and T007 first. Add the cases to `test_screen_t0.py` first. Cases: a block with
   `thread` stores the thread. A plain `rookery send` stores NULL. With `ROOKERY_SCREENER_FAKE` set, 20 sends make 0
   fake calls (FR-001, SC-003). A wrong-recipient quarantine at store gives a `decided` row.
   Verify: `python3 -m unittest test_screen_t0 test_gate test_turn_block test_hooks test_send test_gate_log -v`
-- [ ] T010 [US1] Create `screener.py` with `build_envelope(conn, mail_row, cfg)` and
+- [ ] T010 [US1] Files: `screener.py`, `test_screen_run.py`.
+  Create `screener.py` with `build_envelope(conn, mail_row, cfg)` and
   `screen_one(conn, mail_id, cfg, backend)` (D8, contract "The decision backend"). The envelope follows the
   data-model shape: compact JSON, keys in order, no `evidence`, scope cards and acceptance from `session_context`
   and `agent_scope` of the mail's session only. A state longer than `envelope_max_chars` gives a `t1` record with
@@ -189,7 +199,8 @@ agent mail has one T1 record, 0 statuses change, and the fake counts 0 calls dur
   its own roster and cards (FR-013). Timeout and bad answer give failures with no label (FR-012). The `suggest`
   labels leave out the sender and the first recipient (FR-008). Every record passes `check_decided_by` (FR-010).
   Verify: `python3 -m unittest test_screen_run test_screen_t0 test_screen_backend -v`
-- [ ] T011 [US1] Edit `screener.py`. Add `run(sessions=None, once=False, poll=2.0)` with the claim of D12
+- [ ] T011 [US1] Files: `screener.py`, `cli_screen.py`, `rookery_cli.py`, `test_screen_cli.py`.
+  Edit `screener.py`. Add `run(sessions=None, once=False, poll=2.0)` with the claim of D12
   (`INSERT OR IGNORE INTO screen_mail` in `BEGIN IMMEDIATE`, an owner token, a lease of `lease_s` plus
   `timeout_s`). `run` also has the queue of FR-005 (real session, non-system sender, no `screen_mail` row, oldest
   first). It has one `try` for each session with a log line to the `screener` stream. It stops on SIGTERM after the
@@ -219,7 +230,8 @@ agent mail has one T1 record, 0 statuses change, and the fake counts 0 calls dur
 **Independent Test**: 150 fake decisions, 140 marked right: the report shows 150 and 93%. At 149 the live switch
 refuses and names 1 missing.
 
-- [ ] T012 [US2] Edit `cli_screen.py`: add `screen review`, `mark`, `report` and `export`, and `screen release`,
+- [ ] T012 [US2] Files: `cli_screen.py`, `screener_t0.py`, `mail_screen.py`, `test_screen_calls.py`.
+  Edit `cli_screen.py`: add `screen review`, `mark`, `report` and `export`, and `screen release`,
   `quarantine` and `escalate` (contract). Add `calls_for_action(conn, mail_id, action, reason, by)` to
   `screener_t0.py` (D14: no model import), which writes the calls of the data-model mapping table for each `t0`, `t1`, `hunch` and `t2`
   decision of the mail. Edit `mail_screen.py` so that its release, quarantine and unquarantine write the same
@@ -230,7 +242,8 @@ refuses and names 1 missing.
   and in text (FR-016). The export has one line for each compared decision with the keys of the contract and no
   body (FR-018). `review` prints no body.
   Verify: `python3 -m unittest test_screen_calls test_held_quarantine test_screen_cli -v`
-- [ ] T013 [US2] Edit `cli_screen.py`: add `screen mode CHECK MODE` with `screener_config.set_mode`. For `t1`,
+- [ ] T013 [US2] Files: `cli_screen.py`, `test_screen_calls.py`.
+  Edit `cli_screen.py`: add `screen mode CHECK MODE` with `screener_config.set_mode`. For `t1`,
   `hunch` and `t2` with `live`, it refuses (exit 2) with fewer than 150 compared decisions. For `t1` it also refuses
   with unset bands (constitution IV). The refusal
   gives the number that is missing (contract text, FR-017). Needs T012 first (same files). Add the class
@@ -238,7 +251,7 @@ refuses and names 1 missing.
   and writes the file. 150 with no bands refuses and names the bands. A T0 check switches to `live` with no count
   (SC-005). `hunch` and `t2` at 149 refuse, and at 150 they accept with no bands.
   Verify: `python3 -m unittest test_screen_calls test_screen_config -v`
-- [ ] T014 [US2] Add the live actions (D13, D14, FR-012a, FR-019, FR-027). Edit `mail_gate.py`: give the existing
+- [ ] T014 [US2] Files: `mail_gate.py`, `screener.py`, `screener_t0.py`, `test_screen_live.py`. Add the live actions (D13, D14, FR-012a, FR-019, FR-027). Edit `mail_gate.py`: give the existing
   `pre_store` hook a function `screener_t0.pre_hold(conn, recipient, cfg)`. It holds the mail with the reason
   `screening` when `t1` is live and the recipient's review mode is `pre`. Edit `screener.py`: in live mode, act
   only on a mail held with the reason `screening`. Map each label with the verdict table of data-model: `deliver`
@@ -268,7 +281,8 @@ refuses and names 1 missing.
 **Independent Test**: open a thread, close it with `rookery thread close`, send again. With B3 live the gate
 refuses the mail and bounces it. With B3 in shadow mode the gate delivers it with a `would-deny` record.
 
-- [ ] T015 [US3] Add `screener_t0.thread_check(conn, session_id, thread, sender, held, cfg)`. It makes the
+- [ ] T015 [US3] Files: `screener_t0.py`, `mail_gate.py`, `rookery.py`, `screener.py`, `test_threads.py`. Add
+  `screener_t0.thread_check(conn, session_id, thread, sender, held, cfg)`. It makes the
   `threads` row for a new thread (`held` or `open`), and returns `would-deny` or `denied` for a closed thread. Call
   it from `mail_gate._submit`. With `thread` live, a mail on a closed thread is not stored. The gate returns the
   outcome `refused` with the reason `thread-closed`. It sends the B3 bounce text of the contract. It writes a `t0`
@@ -283,7 +297,8 @@ refuses the mail and bounces it. With B3 in shadow mode the gate delivers it wit
   not stored, a bounce, and the recipient is not woken (SC-008, FR-031). B3 shadow: stored with `would-deny`. In
   shadow mode a thread never becomes `approved`.
   Verify: `python3 -m unittest test_threads test_screen_t0 test_screen_live test_gate test_wake -v`
-- [ ] T016 [US3] Add the closers (D16, FR-022a). Edit `cli_screen.py`:
+- [ ] T016 [US3] Files: `cli_screen.py`, `screener.py`, `turn_block.py`, `test_threads.py`.
+  Add the closers (D16, FR-022a). Edit `cli_screen.py`:
   `rookery thread close SESSION THREAD [--as AGENT] [--json]` (contract). Edit `screener.py`: a live quarantine by
   the screener closes the thread with `close_reason = veto`. Edit `turn_block.py`: a `handoff` with `status: done`
   from the agent that opened the thread closes it with `handoff:<agent>`. Needs T015 first. Add the cases to
@@ -292,7 +307,8 @@ refuses the mail and bounces it. With B3 in shadow mode the gate delivers it wit
   thread exits 0 and says so. No code path closes a thread because of time (a scan for `closed` writes outside
   these four sites).
   Verify: `python3 -m unittest test_threads test_turn_block test_hooks test_screen_cli -v`
-- [ ] T017 [P] [US3] Edit `rookery_views.threads` (`rookery_views.py:447`): build `_threads/INDEX.md` from the
+- [ ] T017 [P] [US3] Files: `rookery_views.py`, `test_views.py`.
+  Edit `rookery_views.threads` (`rookery_views.py:447`): build `_threads/INDEX.md` from the
   `threads` table, grouped by session and thread, with the status and the mail count from `inbox.thread`. Mail
   with no thread is not listed (FR-023). Needs T015 first. Add the cases to `test_views.py` first. Cases: two
   threads and three mails with no thread give two rows with their status. No body text appears. `regen`
@@ -310,7 +326,8 @@ refuses the mail and bounces it. With B3 in shadow mode the gate delivers it wit
 **Independent Test**: with bands set, a review-band answer calls the fake hunch. Agreement acts. Disagreement with
 no T2 command leaves the mail `escalated`, and the boss gets a notice with no body.
 
-- [ ] T018 [US4] Edit `screener.py` (D11, D14, FR-009, FR-029). With bands set for `t1`, apply the `band()` rule:
+- [ ] T018 [US4] Files: `screener.py`, `test_screen_tiers.py`.
+  Edit `screener.py` (D11, D14, FR-009, FR-029). With bands set for `t1`, apply the `band()` rule:
   `accept` acts, `review` asks `hunch_vote` the same question, and lower escalates. Record the hunch answer with
   stage `hunch` and `decided_by = hunch:vote6:<model>`. Agreement acts. Disagreement escalates. With unset bands,
   hunch never runs. When `t1` is live and `hunch` is not live, a review-band answer escalates, and the hunch record
@@ -319,7 +336,8 @@ no T2 command leaves the mail `escalated`, and the boss gets a notice with no bo
   escalates. Unset bands give 0 hunch calls. `t1` live with `hunch` in shadow: a review-band answer escalates with a
   notice. In shadow mode the screener writes the same records and nothing acts.
   Verify: `python3 -m unittest test_screen_tiers test_screen_live test_escalated -v`
-- [ ] T019 [US4] Edit `screener.py`: add the T2 pass of D15. When `t2.command` has a value, each pass sends at most
+- [ ] T019 [US4] Files: `screener.py`, `fixtures/screener/t2_ok.py`, `fixtures/screener/t2_bad.py`, `test_screen_tiers.py`.
+  Edit `screener.py`: add the T2 pass of D15. When `t2.command` has a value, each pass sends at most
   `t2.batch` escalated mails as JSON lines on stdin. It reads `{"mail_id", "label", "reason"}` lines, records each
   with stage `t2` and `decided_by = t2:<basename>`, and acts in live mode. A non-zero exit, a timeout or a line
   that is not valid keeps the mail `escalated`, with a failure record `bad-answer`. With no command, escalated mail
@@ -340,7 +358,8 @@ no T2 command leaves the mail `escalated`, and the boss gets a notice with no bo
 **Independent Test**: in shadow mode each fixture gives its record and the gate delivers the mail. In live mode the
 injection fixture goes to quarantine, and the recipient is not woken.
 
-- [ ] T020 [US5] Add the injection pattern set to `screener_t0.py` (D18): fixed case-insensitive patterns, one for
+- [ ] T020 [US5] Files: `screener_t0.py`, `mail_gate.py`, `test_screen_injection.py`.
+  Add the injection pattern set to `screener_t0.py` (D18): fixed case-insensitive patterns, one for
   each family of `fixtures/screener/injection.txt`. Call it from `mail_gate._submit` after `inspect_inbound`. A
   match writes `injection-suspect` with the pattern name in `detail`. With `injection` live, the gate puts the mail
   in quarantine with the reason `injection-suspect`. Needs T009 first. Write `test_screen_injection.py` first.
@@ -348,7 +367,8 @@ injection fixture goes to quarantine, and the recipient is not woken.
   delivers the mail (SC-006). Live: quarantined, and a postmaster wake pass does not wake the recipient (R17).
   `inspect_inbound` still acts as before.
   Verify: `python3 -m unittest test_screen_injection test_gate test_wake test_screen_t0 -v`
-- [ ] T021 [US5] Add the ask budget and duplicates to `screener_t0.py` (D17, FR-025, FR-026). Budget: count the
+- [ ] T021 [US5] Files: `screener_t0.py`, `mail_gate.py`, `test_screen_b2.py`.
+  Add the ask budget and duplicates to `screener_t0.py` (D17, FR-025, FR-026). Budget: count the
   asks of the session and task. The limit is `session_context.ask_budget`, else `screener.ask_budget`. Over the
   limit writes `over-budget`. Duplicate: normalize the `say` text (lower case, letters, digits and single spaces).
   Store its SHA-256 in `screen_mail.ask_hash`. Look for the same sender, recipient, task and hash inside
@@ -371,7 +391,8 @@ injection fixture goes to quarantine, and the recipient is not woken.
 **Independent Test**: an ask with `task_complete: true` gives `g1-task-complete`. An ask with
 `gap_in_my_scope: true` gives `g3-gap-in-scope`.
 
-- [ ] T022 [US6] Add `screener_t0.gate_anomalies(block, budget_over, b1_failed)` (D19, FR-030). On an ask:
+- [ ] T022 [US6] Files: `screener_t0.py`, `mail_gate.py`, `test_screen_gates.py`. Add
+  `screener_t0.gate_anomalies(block, budget_over, b1_failed)` (D19, FR-030). On an ask:
   `task_complete: true` gives `g1-task-complete`, an empty `gap` gives `g2-no-gap`, `gap_in_my_scope: true` gives
   `g3-gap-in-scope`, and over budget or a B1 failure gives `g5-ask-not-allowed`. Each is its own record with check
   `gates`. Call it from `mail_gate._submit`. With `gates` live, the gate holds the mail and then escalates it, and
@@ -386,7 +407,8 @@ injection fixture goes to quarantine, and the recipient is not woken.
 
 ## Phase 9: Polish and cross-cutting concerns
 
-- [ ] T023 [P] Edit `test_gate_scan.py` (D23). Add `screener.py` and `cli_screen.py` to `QUARANTINE_OK`. Watch
+- [ ] T023 [P] Files: `test_gate_scan.py`.
+  Edit `test_gate_scan.py` (D23). Add `screener.py` and `cli_screen.py` to `QUARANTINE_OK`. Watch
   `rookery.escalate` with the allow list `rookery.py`, `screener.py`, `cli_screen.py`, `mail_screen.py`. Add
   rules: no screener module passes the literal `"loop"` to `quarantine`. `mail_gate.py`, `turn_block.py`,
   `cli_hook.py` and `screener_t0.py` never import `screener_backend` or `promptchain`. No non-test module has
@@ -395,18 +417,21 @@ injection fixture goes to quarantine, and the recipient is not woken.
   `mail_screen.py` never imports `screener` or `screener_backend`. `cli_screen.py` imports `screener` only inside a
   function (D23). Needs T022 first.
   Verify: `python3 -m unittest test_gate_scan -v`
-- [ ] T024 [P] Add a case to `test_text_hints.py`. It collects every bounce, notice, refusal and error text of
+- [ ] T024 [P] Files: `test_text_hints.py`.
+  Add a case to `test_text_hints.py`. It collects every bounce, notice, refusal and error text of
   `screener.py`, `screener_t0.py`, `screener_config.py`, `cli_screen.py` and `rookery_names.py` into one temporary
   file. It runs `ste-lint --max-score 2.0 --glossary ste-glossary.txt` on that file (FR-032, SC-012). Fix each text
   that fails. Needs T022 first. Skip the case only when `ste-lint` is not on `PATH`.
   Verify: `python3 -m unittest test_text_hints -v`
-- [ ] T025 [P] Edit `README.md`, `docs/QUICKSTART.md`, `CHANGELOG.md` and `skills/rookery/SKILL.md`. Document
+- [ ] T025 [P] Files: `README.md`, `docs/QUICKSTART.md`, `CHANGELOG.md`, `skills/rookery/SKILL.md`, `test_text_hints.py`.
+  Edit `README.md`, `docs/QUICKSTART.md`, `CHANGELOG.md` and `skills/rookery/SKILL.md`. Document
   `rookery screen` (run, status, review, mark, report, export, mode, release, quarantine, escalate) and
   `rookery thread close`. Document shadow mode first and the 150 rule. Document the `screener` configuration and
   the optional PromptChain import. Document session names of three words. CHANGELOG gets "### Added". Add a case to
   `test_text_hints.py` first: SKILL.md names `rookery screen run` and `shadow`. Needs T024 first (same test file).
   Verify: `python3 -m unittest test_text_hints -v && for f in README.md docs/QUICKSTART.md CHANGELOG.md skills/rookery/SKILL.md; do ste-lint $f --max-score 2.0 --glossary ste-glossary.txt | tail -1; done`
-- [ ] T026 Add `rookery_names.py`, `screener_config.py`, `screener_backend.py`, `screener_t0.py`, `screener.py` and
+- [ ] T026 Files: `bootstrap.py`, `test_join_rename.py`.
+  Add `rookery_names.py`, `screener_config.py`, `screener_backend.py`, `screener_t0.py`, `screener.py` and
   `cli_screen.py` to `bootstrap._PY_MODULES` in one edit. Add a case to `test_join_rename.py` first that asserts all
   six are in the list. Run the full suite, the coverage gate, and quickstart 1 on a copy of the live database (in
   `~/Documents/code/.worktrees/`, never `/tmp`). Needs T023, T024 and T025 first. Fix any test that fails in this
