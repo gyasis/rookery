@@ -75,6 +75,11 @@ class CheckTests(unittest.TestCase):
     def test_defaults_pass(self):
         SC.check(copy.deepcopy(SC.DEFAULTS))
 
+    def test_model_names_must_fit_decided_by(self):   # F5
+        for bad in ("my model+x", "", None, 5):
+            self.bad(lambda c, b=bad: c.__setitem__("model", b), "screener.model")
+            self.bad(lambda c, b=bad: c["hunch"].__setitem__("model", b), "screener.hunch.model")
+
     def test_good_bands_pass(self):
         cfg = copy.deepcopy(SC.DEFAULTS)
         cfg["bands"]["t1"] = {"accept": 0.9, "review": 0.6}

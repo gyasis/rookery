@@ -11,6 +11,7 @@ import json
 import os
 
 import rookery_identity
+import screener_t0
 
 CHECKS = ("injection", "duplicate", "budget", "thread", "gates", "t1", "hunch", "t2")
 MODES = ("shadow", "live", "off")
@@ -88,6 +89,11 @@ def check(cfg) -> None:
                 raise ValueError(f"screener.bands.t1.{part}: must be a number from 0 to 1, got {val!r}")
         if band["review"] > band["accept"]:
             raise ValueError("screener.bands.t1.review: must not be above screener.bands.t1.accept")
+
+    for key, prefix, val in (("model", "screener:", cfg.get("model")),
+                             ("hunch.model", "hunch:vote6:", cfg.get("hunch", {}).get("model"))):
+        if not screener_t0.check_decided_by(prefix + str(val)) or not isinstance(val, str):
+            raise ValueError(f"screener.{key}: must be a model name (letters, digits and . _ : @ / -), got {val!r}")
 
     command = cfg.get("t2", {}).get("command")
     if command is not None and (not isinstance(command, list)

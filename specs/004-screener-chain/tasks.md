@@ -183,7 +183,7 @@ agent mail has one T1 record, 0 statuses change, and the fake counts 0 calls dur
   `thread` stores the thread. A plain `rookery send` stores NULL. With `ROOKERY_SCREENER_FAKE` set, 20 sends make 0
   fake calls (FR-001, SC-003). A wrong-recipient quarantine at store gives a `decided` row.
   Verify: `python3 -m unittest test_screen_t0 test_gate test_turn_block test_hooks test_send test_gate_log -v`
-- [ ] T010 [US1] Files: `screener.py`, `test_screen_run.py`.
+- [x] T010 [US1] Files: `screener.py`, `test_screen_run.py`.
   Create `screener.py` with `build_envelope(conn, mail_row, cfg)` and
   `screen_one(conn, mail_id, cfg, backend)` (D8, contract "The decision backend"). The envelope follows the
   data-model shape: compact JSON, keys in order, no `evidence`, scope cards and acceptance from `session_context`

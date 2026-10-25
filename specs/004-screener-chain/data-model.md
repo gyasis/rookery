@@ -114,7 +114,7 @@ One row for each answer of each check or tier.
 | `action` | TEXT NULL | what the record did: `none`, `release`, `quarantine`, `hold`, `escalate`, `refuse` |
 | `decided_by` | TEXT NOT NULL | one of the FR-010 forms (validated by `screener.check_decided_by`) |
 | `backend_impl` | TEXT NULL | `promptchain`, `stdlib` or `fake` (D6) |
-| `failure` | TEXT NULL | the cause when there is no label: `envelope-too-large`, `timeout`, `http <code>`, `bad-answer`, `no-backend` |
+| `failure` | TEXT NULL | the cause when there is no label: `envelope-too-large`, `bad-envelope`, `timeout`, `http <code>`, `bad-answer`, `no-backend` |
 | `detail` | TEXT NULL | pattern name, normalized-question hash, budget numbers. Never a mail body |
 | `prompt_tokens` | INTEGER NULL | from `usage` |
 | `reasoning_tokens` | INTEGER NULL | from `usage`; 0 or NULL proves thinking is off (SC-013) |
