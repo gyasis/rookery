@@ -40,3 +40,5 @@
   found it.
 - `spec-pane cover . 3 requirements/rookery-0-7.md`: 16 of 16 phase IDs in spec.md.
 - The lint gate (`ste-lint --max-score 2.0`) runs on spec.md before `/speckit-clarify`.
+- `/speckit-clarify` (2026-10-24 and 2026-10-25): 5 questions answered (Q9, Q2, Q6, Q5, Q8). Q1, Q3, Q4 and Q7
+  go to research and plan. D5 (session names of three words) was added at the request of the user.

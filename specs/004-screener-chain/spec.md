@@ -52,6 +52,25 @@ gets its first version tag, `v0.7.0` (PRD open item).
 - `screener-chain.md` "Built so far: held/quarantine statuses — Gitea PR #14". The team merged that PR. The code is on
   GitHub `master` now, and Gitea mirrors it.
 
+## Clarifications
+
+### Session 2026-10-24
+
+- Q: A check is live and the model host does not answer. What happens to the held mail (Q9)? → A: Fail
+  closed. The mail waits with the status `escalated` until the model answers or a person decides.
+- Q: What is one thread, and who closes it (Q2)? → A: The key is the session plus the `thread` value of the
+  block. These close a thread: a live veto, the boss, the user with a command, and a `status: done` handoff
+  from the sender. A thread never closes because of time.
+- Q: How does Rookery record the user's calls, and what does "thresholds per task" mean (Q6)? → A: Two
+  kinds of call count: a mark from the review command (right, wrong or the correct label) and each release,
+  quarantine or unquarantine by a person. "Task" means the decision task of one check, not a work task. The
+  count of 150 and the confidence bands apply to each check.
+- Q: How do the screener processes run (Q5)? → A: One screener process handles each session separately. A flag
+  `--session X` runs a process for one session only, so a person can start a second process for one session.
+- Q: Which worker and peer gates does the code check (Q8)? → A: Code checks the flags and the tables: G1, G2,
+  G3, G5 (the B1 roster and the B2 ask budget) and P0. G4 and P1 stay in the personas, and the T1 checks catch
+  their failures. G4b uses the existing `recruit` kind. Each failed gate is an anomaly record in shadow mode.
+
 ## Decisions
 
 The user made these decisions on 2026-10-24. The user locked these decisions.
@@ -70,26 +89,28 @@ The user made these decisions on 2026-10-24. The user locked these decisions.
   The checks are the injection pattern set, thread close (B3), the ask budget, duplicate suppression, and the model decisions.
   Each check stays in shadow mode until the user switches it on in the configuration. The T0 checks that act
   today (off-team, wrong recipient, malformed, the loop breaker) do not change.
+- **D5. A session with no name gets a name of three words.** The user asked for this on 2026-10-25, in the
+  style of the names that Docker gives to containers (for example `calm-amber-heron`). Today a session with no
+  name takes its ID (`rs-...`) as its name (`rookery_identity.py:172`).
 
 ## Open questions
 
 These questions are for `/speckit-clarify`, research and plan. The spec does not decide them.
 
 - **Q1**: The shape of the decision record, and how the T0, T1, `hunch` and T2 records of one message link.
-- **Q2**: The thread record: its key, how the `thread` value of a block maps to it, who closes a thread, and
-  how `_threads/INDEX.md` changes to use it. Today `rookery_views.py:447` groups mail by topic and pair.
+- **Q2**: Resolved 2026-10-24: the key is the session plus the `thread` value; FR-020 and FR-022a give the
+  closers. The shape of the record stays for the plan.
 - **Q3**: Where the `escalated` status sits in the postmaster scan and in `_decide`, and who resolves it.
 - **Q4**: Where the user sets the review mode (`pre` hold or `post` audit) for each peer (RQ-3.7).
-- **Q5**: One screener for each session (RQ-3.14). Either one process filters by session, or one process runs for each
-  session.
-- **Q6**: The shadow comparison: how Rookery records the user's calls, how it measures agreement over 150 or more
-  decisions, and how it shows the result (R15, RQ-3.6). Thresholds for each task.
+- **Q5**: Resolved 2026-10-25: one process handles each session separately, and `--session X` limits a process to
+  one session (see Clarifications and FR-013a).
+- **Q6**: Resolved 2026-10-24: the review command and manual actions both count; the count and the bands apply
+  to each check (see Clarifications, FR-015 to FR-017).
 - **Q7**: The label export for SIO and NanoJev (RQ-3.11): the file format only, or also a feed. Training a model
   is out of scope.
-- **Q8**: The worker gates G1 to G5 from `self_check` (RQ-R.1) and the peer gates P0 and P1 (RQ-R.2). What does the
-  code check in this phase? What stays in the personas?
-- **Q9**: A check in live mode when the model host is down. Does the mail wait (fail closed) or go
-  through (fail open)? After how long?
+- **Q8**: Resolved 2026-10-25: code checks G1, G2, G3, G5 and P0; G4 and P1 stay in the personas (see
+  Clarifications, FR-030 and FR-031).
+- **Q9**: Resolved 2026-10-24: fail closed (see Clarifications and FR-012a).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -126,7 +147,7 @@ delivers all three mails, because the checks are in shadow mode.
 
 The user looks at the decisions of the screener. The user marks each one right or wrong, or uses the existing
 release, quarantine and unquarantine commands, which also count as the user's call. Rookery shows the agreement
-for each check and each task. When a check agrees well enough over 150 or more compared decisions, the user
+for each check. When a check agrees well enough over 150 or more compared decisions, the user
 switches it to live mode in the configuration.
 
 **Why this priority**: constitution IV and risk R15. A model must not block mail before a shadow run against the
@@ -259,6 +280,7 @@ Send an ask with `gap_in_my_scope` set to true. The screener records a G3 anomal
 
 - The model host is down for a long time. The backlog grows. The status command shows the backlog size and the
   age of the oldest mail that has no decision. Delivery in shadow mode does not change.
+  In live mode the waiting mail gets the status `escalated`, and the status command counts it.
 - The model returns a label outside the four labels, or no label. Rookery records a failure, never a label.
 - The model answers, but the answer has reasoning text. Rookery records it as a failure of the thinking-off rule.
 - A mail is from a system sender (postmaster, relay, rookery). The screener never screens it.
@@ -306,7 +328,7 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
   `wrong-recipient`, `task-already-done`, `unneeded`. Thinking MUST be off (RQ-3.2).
 - **FR-008**: For `wrong-recipient`, the screener MUST ask a second closed question over the roster of the
   sender's session, without the sender and the first recipient. The answer MUST fill `suggest` (RQ-3.3).
-- **FR-009**: The screener MUST route each T1 answer by confidence bands for each task: accept, review, and
+- **FR-009**: The screener MUST route each T1 answer by confidence bands for each check: accept, review, and
   reject. A review-band answer MUST go to the second opinion. Agreement acts. Disagreement escalates. Plain
   `hunch` with no vote MUST NOT stand behind an automatic accept (RQ-3.3).
 - **FR-010**: Each record MUST have `decided_by` in one of these forms: `screener:tev1:4b`, `hunch:vote6:<model>`,
@@ -317,8 +339,15 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
   `envelope-too-large` and no model call. It MUST NOT pass as `deliver` (RQ-3.5, R16).
 - **FR-012**: A model call that fails, times out, or gives an answer outside the labels MUST give a failure
   record with the cause. It MUST NOT give a label.
+- **FR-012a**: In live mode, a mail whose model call fails MUST get the status `escalated`. It MUST wait until a
+  later model call decides it or a person releases or quarantines it. Rookery MUST NOT release it because of a
+  timeout (fail closed, Q9). In shadow mode the failure record is the only effect.
 - **FR-013**: Screening MUST stay inside one session. A decision for a mail MUST use only the roster, the scope
   cards and the criteria of that mail's session (RQ-3.14).
+- **FR-013a**: One screener process MUST handle each session separately: its own queue, its own counters and its
+  own lines in the status output. A failure in the work of one session MUST NOT stop the work of the other
+  sessions. The flag `--session X` MUST limit a process to session X. Two processes MUST NOT decide the same
+  mail (Q5).
 
 **Shadow mode and the comparison (RQ-3.6, RQ-3.11, R15)**
 
@@ -326,10 +355,11 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
   postmaster delivers (RQ-3.6).
 - **FR-015**: The user MUST be able to mark a decision right or wrong, or give the correct label. A release,
   quarantine or unquarantine by a person MUST also count as that person's call for the mail.
-- **FR-016**: Rookery MUST report the agreement for each check and each task: the number of compared decisions,
+- **FR-016**: Rookery MUST report the agreement for each check: the number of compared decisions,
   the agreement rate and the disagreements by label. The report MUST have a JSON form and a text form.
 - **FR-017**: Rookery MUST refuse to switch a model check to live mode with fewer than 150 compared decisions for
-  that check. The refusal MUST give the number that is missing (constitution IV, R15).
+  that check. The refusal MUST give the number that is missing (constitution IV, R15). The count and the
+  confidence bands MUST apply to one check, not to one work task (Q6).
 - **FR-018**: The label export MUST write one JSON line for each compared decision: the envelope pointers, the
   screener decision, the user's call and `decided_by` (RQ-3.11).
 
@@ -341,11 +371,15 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
 **Threads and B3 (RQ-3.8, C4)**
 
 - **FR-020**: The gate MUST store the `thread` value of a block with the mail. A new thread value MUST make a
-  thread with a status: `held`, `open`, `approved` or `closed`. A thread MUST belong to one session.
+  thread with a status: `held`, `open`, `approved` or `closed`. A thread MUST belong to one session. The key of
+  a thread MUST be the session plus the `thread` value (Q2).
 - **FR-021**: After the first message of a thread gets a review, later messages on that thread MUST skip T1.
   These exceptions MUST still get a review: a decline, a repeat ask, and a hop-limit hold.
 - **FR-022**: A closed thread MUST deny every later message on it (B3). In live mode the gate MUST refuse the mail
   and bounce it to the sender. In shadow mode Rookery MUST record "would deny" and deliver the mail.
+- **FR-022a**: Only these MUST close a thread: a veto from a live check, the boss of the session, the user with
+  a command, and a handoff with `status: done` from the agent that opened the thread. A thread MUST NOT close
+  because of time. Each close MUST record who closed it (Q2).
 - **FR-023**: `_threads/INDEX.md` MUST list the real threads with their status. Mail with no thread MUST NOT
   appear as a thread.
 
@@ -371,8 +405,11 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
 **Worker and peer gates (RQ-R.1, RQ-R.2)**
 
 - **FR-030**: The code MUST read the `self_check` flags of a block. An ask with `task_complete: true` MUST give
-  the anomaly `g1-task-complete`. An ask with `gap_in_my_scope: true` MUST give the anomaly `g3-gap-in-scope`
-  (RQ-R.1).
+  the anomaly `g1-task-complete`. An ask with `gap: false` MUST give the anomaly `g2-no-gap`. An ask with
+  `gap_in_my_scope: true` MUST give the anomaly `g3-gap-in-scope`. An ask that fails the B1 roster check or
+  the B2 ask budget MUST give the anomaly `g5-ask-not-allowed` (RQ-R.1). The code MUST NOT check G4 (peer
+  match) or P1 (in my scope). These stay in the personas, and the T1 checks for wrong recipient and unneeded
+  catch their failures. G4b MUST use the existing `recruit` kind (Q8).
 - **FR-031**: A mail on a closed thread MUST NOT wake its recipient when B3 is live (P0). A `decline` that names
   a peer MUST keep that peer as the suggestion (P1, RQ-R.2).
 
@@ -388,6 +425,13 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
   the emitted reasoning, to prove that thinking is off.
 - **FR-035**: The schema change MUST be additive. A test MUST check it on a copy of the live database.
 - **FR-036**: Tests MUST NOT call a model. They MUST use a fake backend.
+
+**Session names (D5)**
+
+- **FR-037**: A new session with no name MUST get a name of three words from fixed word lists, joined by `-`
+  (for example `calm-amber-heron`). The name MUST pass the existing session-name rules and MUST NOT look like
+  an ID. A name that is already used MUST NOT be given again: Rookery MUST choose again. The session ID stays
+  `rs-...`. A name that the user gives MUST work as it does today.
 
 ### Key Entities
 
@@ -432,6 +476,8 @@ here. Risks R15 to R18 need their proof tests here. In 002, the team built and t
   tokens.
 - **SC-014**: The OKF risk register shows R16, R17 and R18 as proven, and R15 as built. R15 becomes proven only
   after a shadow run of 150 decisions with real mail, after this feature merges.
+- **SC-015**: Of 1,000 new sessions with no name in a test, each one gets a different name of three words, and
+  no name has the form `rs-...`.
 
 ## Assumptions
 
