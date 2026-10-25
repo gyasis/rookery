@@ -57,6 +57,11 @@ class JoinRename(unittest.TestCase):
         self.assertIn("cli_join.py", bootstrap._PY_MODULES)
         self.assertNotIn("cli_up.py", bootstrap._PY_MODULES)
 
+    def test_bootstrap_has_the_screener_modules(self):   # spec 004, T026
+        for name in ("rookery_names.py", "screener_config.py", "screener_backend.py", "screener_t0.py",
+                     "screener.py", "cli_screen.py"):
+            self.assertIn(name, bootstrap._PY_MODULES)
+
 
 class DocsNameJoin(unittest.TestCase):
     def test_docs_use_join_not_up(self):

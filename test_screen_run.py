@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 
 import rookery
@@ -301,7 +302,10 @@ class Screen(Base):
         for key in ("max_tokens", "max_completion_tokens", "num_predict", "num_ctx", "think"):
             self.assertNotIn(key, src)
         self.assertNotIn("import promptchain", src)
-        self.assertNotIn("promptchain", sys.modules)
+        # a fresh process: another test module may import promptchain on purpose (its contract half)
+        out = subprocess.run([sys.executable, "-c", "import sys, screener; print('promptchain' in sys.modules)"],
+                             cwd=HERE, capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(out, "False")
 
 
 if __name__ == "__main__":

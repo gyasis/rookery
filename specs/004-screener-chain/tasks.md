@@ -431,7 +431,7 @@ injection fixture goes to quarantine, and the recipient is not woken.
   the optional PromptChain import. Document session names of three words. CHANGELOG gets "### Added". Add a case to
   `test_text_hints.py` first: SKILL.md names `rookery screen run` and `shadow`. Needs T024 first (same test file).
   Verify: `python3 -m unittest test_text_hints -v && for f in README.md docs/QUICKSTART.md CHANGELOG.md skills/rookery/SKILL.md; do ste-lint $f --max-score 2.0 --glossary ste-glossary.txt | tail -1; done`
-- [ ] T026 Files: `bootstrap.py`, `test_join_rename.py`.
+- [x] T026 Files: `bootstrap.py`, `test_join_rename.py`.
   Add `rookery_names.py`, `screener_config.py`, `screener_backend.py`, `screener_t0.py`, `screener.py` and
   `cli_screen.py` to `bootstrap._PY_MODULES` in one edit. Add a case to `test_join_rename.py` first that asserts all
   six are in the list. Run the full suite, the coverage gate, and quickstart 1 on a copy of the live database (in
