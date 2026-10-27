@@ -154,7 +154,7 @@ FR-006, FR-012, FR-014).
   screener backend. A live `t1` that delivers a held ask spawns one wake after the commit. A mail that stays held
   or escalates spawns none. Needs T006 first. (R1, Q1)
   Verify: `python3 -m unittest test_wake_event_screener test_screen_run test_screen_live test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate test_gate_log test_held_quarantine test_escalated test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T010 [US1] Files: `test_wake_detached.py`. End-to-end with no stand-in: a real `rookery send` (subprocess)
+- [x] T010 [US1] Files: `test_wake_detached.py`. End-to-end with no stand-in: a real `rookery send` (subprocess)
   of an ask to an idle identity bound to the fake herdr. Within 5 seconds `$HERDR_RECORD` has one push and the log
   has `pushed` (SC-001). Ten asks within 1 second give at most 10 pushes, and no mail ID appears twice across the
   announced IDs of `pushed/` and the notices (SC-005). Time 20 sends with the wake on and 20 with `spawn` turned

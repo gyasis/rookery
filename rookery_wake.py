@@ -104,6 +104,8 @@ def after_pending(conn, msg_ids, log_root=None) -> int:
     that the push gate accepts. Skips a missing row, a non-pending one, `legacy` or no session, a session
     that is not open, a self-send and a mail that _needs_push rejects. Never raises: a failure logs one
     `wake-spawn-failed` line. Returns the number of wakes spawned."""
+    if os.environ.get("ROOKERY_WAKE") == "off":   # operator kill switch and test switch
+        return 0
     try:
         import postmaster
         groups = {}
