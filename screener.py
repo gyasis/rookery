@@ -413,6 +413,13 @@ def _already_decided(conn, mail_id, owner, cfg, envelope):
     return True
 
 
+def _wake_released(conn, ids):
+    """005 T009: after a step committed a release to `pending`, wake the recipients. after_pending never raises.
+    Imported here: the screener does not import rookery_wake at top level."""
+    import rookery_wake
+    rookery_wake.after_pending(conn, ids)
+
+
 def _act_pre(conn, mail_id, owner, cfg, envelope):
     """Act on one screened mail that the screener holds (FR-027, FR-012a, D11). The status change, the `action` of
     the T1 record and the end of the claim commit together. In the band `accept`, deliver releases and a reject label
@@ -449,6 +456,7 @@ def _act_pre(conn, mail_id, owner, cfg, envelope):
         if not _still_mine(conn, mail_id, owner):
             conn.rollback()
             return _already_decided(conn, mail_id, owner, cfg, envelope)
+        bid = None
         if rec["label"] in ("deliver", "skipped"):
             rookery._decide_from_open(conn, mail_id, "pending", "release", None, by, commit=False)
             action = "release"
@@ -460,8 +468,8 @@ def _act_pre(conn, mail_id, owner, cfg, envelope):
         else:
             sug = _last(conn, mail_id, "suggest", rec["attempt"])
             peer = sug["label"] if sug and sug["label"] not in (None, "none") else None
-            rookery.quarantine(conn, mail_id, rec["label"], by, suggest=peer, commit=False,
-                               bounce_limit=mail_gate.loop_limit())
+            bid = rookery.quarantine(conn, mail_id, rec["label"], by, suggest=peer, commit=False,
+                                     bounce_limit=mail_gate.loop_limit())
             action = "quarantine"
             m = rookery.get_message(conn, mail_id)   # a veto closes the thread, same transaction (D16, FR-022a)
             if m["thread"]:
@@ -471,6 +479,10 @@ def _act_pre(conn, mail_id, owner, cfg, envelope):
         conn.execute("UPDATE screen_decisions SET action=? WHERE id=?", (action, rec["id"]))
         _finish(conn, mail_id, owner, cfg, rec["label"], envelope, commit=False)
         conn.commit()
+        if action == "release":
+            _wake_released(conn, [mail_id])   # 005 T009: only after the commit
+        elif bid:
+            _wake_released(conn, [bid])       # the bounce wakes the sender, after the commit
     except ValueError as e:   # the mail is no longer held: a person decided it first
         conn.rollback()
         _log(None, mail_id, f"no action: {e}")
@@ -641,11 +653,12 @@ def _t2_act(conn, mail, rec_id, label, by):
         if not _t2_mine(rookery.get_message(conn, mail["id"])):
             conn.rollback()   # a person decided it first, or a person holds it
             return
+        bid = None
         if label == "deliver":   # no thread approval: only T1 in the accept band, or hunch by agreement, approves (D16)
             rookery._decide_from_open(conn, mail["id"], "pending", "release", None, by, commit=False)
             action = "release"
         else:
-            rookery.quarantine(conn, mail["id"], label, by, commit=False, bounce_limit=mail_gate.loop_limit())
+            bid = rookery.quarantine(conn, mail["id"], label, by, commit=False, bounce_limit=mail_gate.loop_limit())
             action = "quarantine"
             if mail["thread"]:
                 conn.execute("UPDATE threads SET status='closed', closed_by=?, closed_at=?, close_reason='veto' "
@@ -653,6 +666,10 @@ def _t2_act(conn, mail, rec_id, label, by):
                              (by, rookery.now(), mail["session_id"], mail["thread"]))
         conn.execute("UPDATE screen_decisions SET action=? WHERE id=?", (action, rec_id))
         conn.commit()
+        if action == "release":
+            _wake_released(conn, [mail["id"]])   # 005 T009: only after the commit
+        elif bid:
+            _wake_released(conn, [bid])          # the bounce wakes the sender, after the commit
     except BaseException:
         conn.rollback()
         raise

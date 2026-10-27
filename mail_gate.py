@@ -161,6 +161,19 @@ def _log(root, path, principal, sender, asked_sender, recipient, session, result
                   msg_id=result["msg_id"], bounce_id=result["bounce_id"], decided_by=decided_by)
 
 
+def _wake(conn, msg_ids, root):
+    """Wake the recipients of the pending rows among msg_ids (feature 005). after_pending skips a row that
+    is not pending (held, quarantined) and never raises; this guard makes a send safe even so."""
+    ids = [i for i in msg_ids if i]
+    if not ids:
+        return
+    try:
+        import rookery_wake      # inside: postmaster imports mail_gate
+        rookery_wake.after_pending(conn, ids, log_root=root)
+    except Exception:
+        pass
+
+
 def _result(outcome, reason=None, warning=None, msg_id=None, bounce_id=None):
     return {"outcome": outcome, "reason": reason, "warning": warning,
             "msg_id": msg_id, "bounce_id": bounce_id}
@@ -186,6 +199,7 @@ def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
         result = (_result("db-busy", warning=warning) if _is_busy(exc)
                   else _result("send-failed", f"{type(exc).__name__}: {exc}", warning))
     _log(root, path, principal, sender, asked_sender, to, sid, result, decided_by)
+    _wake(conn, [result.get("msg_id"), result.get("bounce_id")], root)   # after the commit; the send is already done
     return result
 
 
@@ -327,6 +341,7 @@ def system_send(conn, sender, recipient, body, *, topic=None, session_id, root=N
         raise
     _log(root, "system", None, sender, None, recipient, session_id,
          _result("sent", msg_id=msg_id), "gate")
+    _wake(conn, [msg_id], root)
     return msg_id
 
 

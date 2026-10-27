@@ -430,12 +430,23 @@ def list_dlq(conn):
     return conn.execute("SELECT * FROM inbox WHERE status='dlq' ORDER BY id").fetchall()
 
 
+def _wake_after(conn, msg_id):
+    """After a commit that made msg_id pending: wake its recipient (feature 005). Never raises."""
+    try:
+        import rookery_wake   # inside: import-cycle rule
+        rookery_wake.after_pending(conn, [msg_id])
+    except Exception:
+        pass
+
+
 def requeue_dlq(conn, msg_id):
-    conn.execute(
+    cur = conn.execute(
         "UPDATE inbox SET status='pending', attempts=0, note=NULL WHERE id=? AND status='dlq'",
         (msg_id,),
     )
     conn.commit()
+    if cur.rowcount == 1:
+        _wake_after(conn, msg_id)
 
 
 def requeue_stale(conn, dead_after):
@@ -507,6 +518,7 @@ def release(conn, msg_id, decided_by):
     _decide_from_open(conn, msg_id, "pending", "release", None, decided_by, commit=False)
     conn.execute("UPDATE threads SET status='open' WHERE first_mail=? AND status='held'", (msg_id,))   # D16
     conn.commit()
+    _wake_after(conn, msg_id)
 
 
 def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce=True,
@@ -537,6 +549,7 @@ def quarantine(conn, msg_id, reason, decided_by, note=None, suggest=None, bounce
                      ("Held: too many bounces to this agent with no human prompt in between.", bid))
     if commit:
         conn.commit()
+        _wake_after(conn, bid)   # 005: the bounce is pending mail for the sender (a held bounce wakes nobody)
     return bid
 
 
@@ -552,6 +565,7 @@ def unquarantine(conn, msg_id, decided_by):
     conn.commit()
     if cur.rowcount != 1:
         raise ValueError(f"message #{msg_id} is not quarantined")
+    _wake_after(conn, msg_id)
 
 
 def list_quarantined(conn, reason=None):

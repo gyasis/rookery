@@ -8,12 +8,14 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 
 import turn_block
 
 MIN_SWEEP_S = 300
 _children: list = []   # handles of spawned children, polled at each spawn so none stays a zombie
+_children_lock = threading.Lock()   # the mailroom serves requests on threads
 
 
 def program_argv() -> list:
@@ -27,10 +29,11 @@ def program_argv() -> list:
 def spawn(args, log_root=None) -> bool:
     """Start `rookery <args>` detached and return at once. False when it could not start."""
     try:
-        _children[:] = [p for p in _children if p.poll() is None]
-        _children.append(subprocess.Popen(
-            program_argv() + list(args), start_new_session=True, stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True))
+        with _children_lock:
+            _children[:] = [p for p in _children if p.poll() is None]
+            _children.append(subprocess.Popen(
+                program_argv() + list(args), start_new_session=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True))
         return True
     except Exception as exc:
         try:

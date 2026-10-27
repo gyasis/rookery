@@ -137,18 +137,18 @@ FR-006, FR-012, FR-014).
   a `legacy` mail and a closed session spawn none. Two mails for one agent spawn one wake. A database error inside
   gives one log line and no exception. Needs T005 first. (R1, R2)
   Verify: `python3 -m unittest test_wake_event test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate test_gate_log test_held_quarantine test_escalated test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T007 [P] [US1] Files: `mail_gate.py`, `test_wake_event_gate.py`. After the commit in `_submit` that stores
+- [x] T007 [P] [US1] Files: `mail_gate.py`, `test_wake_event_gate.py`. After the commit in `_submit` that stores
   a mail as `pending`, call `rookery_wake.after_pending(conn, [msg_id])` (import inside the function). A refused,
   held or quarantined mail calls nothing. Write the test first with a recorder for `spawn`. `rookery send` of an
   ask spawns one wake. A mail held by the loop breaker spawns none. A quarantined mail spawns none. A `spawn` that
   raises still returns the normal send result. Needs T006 first. (R1)
   Verify: `python3 -m unittest test_wake_event_gate test_gate test_send test_turn_block test_hooks test_outbox test_wake test_identity test_gate_log test_held_quarantine test_escalated test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T008 [P] [US1] Files: `rookery.py`, `test_wake_event_release.py`. In `release`, `unquarantine` and
+- [x] T008 [P] [US1] Files: `rookery.py`, `test_wake_event_release.py`. In `release`, `unquarantine` and
   `requeue_dlq`, after the commit, call `rookery_wake.after_pending(conn, [msg_id])` (import inside). Do not call it
   in `_decide_from_open` (it may not commit) or in `requeue_stale` (v1). Write the test first. Each of the three
   spawns one wake for an ask. A release of a `status` mail spawns none. Needs T006 first. (R1)
   Verify: `python3 -m unittest test_wake_event_release test_held_quarantine test_escalated test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate test_gate_log test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T009 [P] [US1] Files: `screener.py`, `test_wake_event_screener.py`. Collect the IDs that a screening step
+- [x] T009 [P] [US1] Files: `screener.py`, `test_wake_event_screener.py`. Collect the IDs that a screening step
   releases with `_decide_from_open(..., "pending", ...)` (`screener.py:453`, `:645`). Call
   `rookery_wake.after_pending` after the commit of that step (import inside). Write the test first with the fake
   screener backend. A live `t1` that delivers a held ask spawns one wake after the commit. A mail that stays held
