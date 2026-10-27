@@ -94,7 +94,7 @@ code. No task leaves a failing test.
 
 **Purpose**: one wake code path (FR-004, D2, R5).
 
-- [ ] T004 Files: `postmaster.py`, `test_wake_split.py`. Split `wake_identities` into a loop. Add the function
+- [x] T004 Files: `postmaster.py`, `test_wake_split.py`. Split `wake_identities` into a loop. Add the function
   `wake_one(conn, root, config, ident, run=subprocess.run, skip_logged=None, backoff=None, now=time.time, nopush=None,
   probe_state=None)`. It returns the outcome string (`pushed`, `nothing`, `busy`, `wake-failed`, `no-idle-state`,
   `no-wake-binding`, `unsafe-name`). Move the pane typing into `type_notice(entry, value, text, run)`. It returns

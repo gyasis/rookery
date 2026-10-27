@@ -177,6 +177,169 @@ def _load_pushed(root, agent_id):
         return None, 0
 
 
+def type_notice(entry, value, text, run=subprocess.run):
+    """Run each command of a wake entry with {value}/{text} filled. None on success, else the
+    error text of the first command that failed."""
+    err = None
+    for argv in entry:
+        try:
+            res = run(_fill(argv, value, text), shell=False, timeout=WAKE_TIMEOUT,
+                      capture_output=True)
+            if res.returncode != 0:
+                err = f"{argv[0]} exited {res.returncode}"
+        except (OSError, subprocess.SubprocessError) as exc:
+            err = f"{argv[0]}: {exc}"
+        if err:
+            break
+    return err
+
+
+def _backoff_path(root, agent_id):
+    if not turn_block.is_safe_name(agent_id):
+        return None
+    return os.path.join(root, "postmaster", "backoff", agent_id + ".json")
+
+
+def _backoff_load(root, agent_id):
+    """The back-off record from its file, or None (missing, unparsable or wrong shape)."""
+    path = _backoff_path(root, agent_id)
+    if path is None:
+        return None
+    try:
+        with open(path) as fh:
+            d = json.load(fh)
+        lg = d["logged"]
+        return {"until": float(d["until"]), "delay": float(d["delay"]), "newest": int(d["newest"]),
+                "logged": (int(lg[0]), str(lg[1])) if lg else None}
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+        return None
+
+
+def _backoff_save(root, agent_id, rec):
+    path = _backoff_path(root, agent_id)
+    if path is None:
+        return
+    try:
+        out = dict(rec)
+        out["logged"] = list(rec["logged"]) if rec["logged"] else None
+        turn_block.write_json_atomic(path, out)
+    except OSError as exc:
+        return str(exc)                    # the caller logs it: without the file, the next wake types again
+    return None
+
+
+def _backoff_clear(root, agent_id):
+    path = _backoff_path(root, agent_id)
+    if path is None:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def wake_one(conn, root, config, ident, run=subprocess.run, skip_logged=None, backoff=None,
+             now=time.time, nopush=None, probe_state=None):
+    """One identity's wake step (the body of the wake_identities loop). Returns one outcome:
+    pushed, nothing (no new mail to push), busy (turn busy: quiet wait), backoff-wait (a recent
+    wake failed), wake-failed, no-idle-state, no-wake-binding, unsafe-name.
+    `backoff` is a dict kept by the caller; None keeps the record in
+    <root>/postmaster/backoff/<agent_id>.json instead, so a new process still waits."""
+    skip_logged = {} if skip_logged is None else skip_logged
+    probe_state = {} if probe_state is None else probe_state   # busy streaks + herdr listing cache
+    nopush = {} if nopush is None else nopush    # agent_id -> ids judged "no push"; kept in memory
+    wake_cfg = (config or {}).get("wake") or {}
+    aid = ident["agent_id"]
+    done_ids, last = _load_pushed(root, aid)
+    pending = conn.execute(
+        "SELECT id, sender, topic, body FROM inbox WHERE recipient=? AND status='pending' "
+        "ORDER BY id", (aid,)).fetchall()
+    pending_ids = [r["id"] for r in pending]
+    if done_ids is None:
+        done_ids = {i for i in pending_ids if i <= last}
+    skipped = nopush.setdefault(aid, set())
+    skipped &= set(pending_ids)              # bounded: forget ids that left pending
+    rows = []
+    for r in pending:
+        if r["id"] in done_ids or r["id"] in skipped:
+            continue
+        if _needs_push(r, aid, conn):
+            rows.append(r)
+        else:
+            skipped.add(r["id"])
+    if not rows:
+        if done_ids - set(pending_ids):      # forget ids that left pending (read, requeued)
+            _write_pushed(root, aid, pending_ids, [i for i in pending_ids if i in done_ids])
+        return "nothing"
+    newest = rows[-1]["id"]
+    log_f = dict(session=ident["sname"], agent_id=aid, name=ident["name"])
+
+    def skip(reason):
+        if skip_logged.get((aid, reason), 0) < newest:
+            skip_logged[(aid, reason)] = newest
+            turn_block.log_event(root, "postmaster", outcome=reason, mail_id=newest, **log_f)
+
+    if not (turn_block.is_safe_name(ident["sname"]) and turn_block.is_safe_name(ident["name"])):
+        skip("unsafe-name")
+        return "unsafe-name"
+    tpath = os.path.join(root, "agents", ident["sname"], ident["name"], "state", "turn.json")
+    try:
+        with open(tpath) as fh:
+            tdoc = json.load(fh)
+        state = tdoc.get("state")
+    except (OSError, ValueError, AttributeError):
+        skip("no-idle-state")
+        return "no-idle-state"
+    if state != "busy":
+        probe_state.get("streak", {}).pop(aid, None)       # no busy turn: drop its streak
+    if state != "idle":
+        if state != "busy" or not _busy_is_over(conn, config, ident, tdoc, tpath, now(), probe_state):
+            return "busy"                  # busy: wait quietly for the turn to end
+        _log_busy_end(root, skip_logged, aid, tdoc, log_f)
+    entry = None
+    for b in conn.execute(
+            "SELECT kind, value FROM bindings WHERE session_id=? AND owner_type='identity' "
+            "AND owner_id=? ORDER BY created_at, rowid", (ident["session_id"], aid)):
+        if wake_cfg.get(b["kind"]):
+            entry, kind, value = wake_cfg[b["kind"]], b["kind"], b["value"]
+            break
+    if entry is None:
+        skip("no-wake-binding")
+        return "no-wake-binding"
+    bo = backoff.get(aid) if backoff is not None else _backoff_load(root, aid)
+    if bo and now() < bo["until"] and bo["newest"] == newest:
+        return "backoff-wait"              # a recent wake failed: wait before typing again
+    text = _notice(conn, ident, rows)
+    err = type_notice(entry, value, text, run)
+    if err:
+        # a file record for an older mail is stale: start again at 30 s (the in-memory dict keeps its old rule)
+        grow = bool(bo) and (backoff is not None or bo["newest"] == newest)
+        delay = min(bo["delay"] * 2, BACKOFF_MAX) if grow else BACKOFF_START
+        prev_key = bo["logged"] if bo else None
+        key = (newest, err)
+        rec = {"until": now() + delay, "delay": delay, "newest": newest, "logged": key}
+        if backoff is not None:
+            backoff[aid] = rec
+        else:
+            werr = _backoff_save(root, aid, rec)
+            if werr:
+                turn_block.log_event(root, "postmaster", outcome="backoff-write-failed", reason=werr,
+                                     mail_id=newest, **log_f)
+        if key != prev_key:
+            turn_block.log_event(root, "postmaster", outcome="wake-failed", reason=err,
+                                 kind=kind, mail_id=newest, retry_in=delay, **log_f)
+        return "wake-failed"
+    if backoff is not None:
+        backoff.pop(aid, None)
+    else:
+        _backoff_clear(root, aid)
+    announced = done_ids | {r["id"] for r in rows}       # status/answer ids stay un-announced
+    _write_pushed(root, aid, pending_ids, [i for i in pending_ids if i in announced])
+    turn_block.log_event(root, "postmaster", outcome="pushed", kind=kind,
+                         mail_id=newest, count=len(rows), **log_f)
+    return "pushed"
+
+
 def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, backoff=None,
                     now=time.time, nopush=None, probe_state=None):
     """Push a notice into each idle identity (open session) with pending mail not yet announced
@@ -186,107 +349,21 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
     Never writes state/turn.json or anything under agents/. The pushed file is written only
     after EVERY command of the wake entry returned 0 within the timeout. On failure
     `wake-failed` is logged once per (agent, newest new id, error) and that agent is not retried
-    for 30 s, doubling to 600 s (backoff: a dict kept by the caller). no-idle-state /
-    no-wake-binding are logged once per (agent, newest new mail id) via skip_logged.
-    Returns the number of identities pushed."""
+    for 30 s, doubling to 600 s (backoff: a dict kept by the caller, else a file per agent).
+    no-idle-state / no-wake-binding are logged once per (agent, newest new mail id) via
+    skip_logged. Returns the number of identities pushed."""
     skip_logged = {} if skip_logged is None else skip_logged
-    backoff = {} if backoff is None else backoff
     probe_state = {} if probe_state is None else probe_state   # busy streaks + herdr listing cache
     nopush = {} if nopush is None else nopush    # agent_id -> ids judged "no push"; kept in memory
-    wake_cfg = (config or {}).get("wake") or {}
     pushed = 0
     ids = conn.execute(
         "SELECT i.agent_id, i.name, i.session_id, s.name AS sname FROM identities i "
         "JOIN rookery_sessions s ON s.session_id=i.session_id WHERE s.state='open' "
         "ORDER BY i.created_at, i.rowid").fetchall()
     for ident in ids:
-        aid = ident["agent_id"]
-        done_ids, last = _load_pushed(root, aid)
-        pending = conn.execute(
-            "SELECT id, sender, topic, body FROM inbox WHERE recipient=? AND status='pending' "
-            "ORDER BY id", (aid,)).fetchall()
-        pending_ids = [r["id"] for r in pending]
-        if done_ids is None:
-            done_ids = {i for i in pending_ids if i <= last}
-        skipped = nopush.setdefault(aid, set())
-        skipped &= set(pending_ids)              # bounded: forget ids that left pending
-        rows = []
-        for r in pending:
-            if r["id"] in done_ids or r["id"] in skipped:
-                continue
-            if _needs_push(r, aid, conn):
-                rows.append(r)
-            else:
-                skipped.add(r["id"])
-        if not rows:
-            if done_ids - set(pending_ids):      # forget ids that left pending (read, requeued)
-                _write_pushed(root, aid, pending_ids, [i for i in pending_ids if i in done_ids])
-            continue
-        newest = rows[-1]["id"]
-        log_f = dict(session=ident["sname"], agent_id=aid, name=ident["name"])
-
-        def skip(reason):
-            if skip_logged.get((aid, reason), 0) < newest:
-                skip_logged[(aid, reason)] = newest
-                turn_block.log_event(root, "postmaster", outcome=reason, mail_id=newest, **log_f)
-
-        if not (turn_block.is_safe_name(ident["sname"]) and turn_block.is_safe_name(ident["name"])):
-            skip("unsafe-name")
-            continue
-        tpath = os.path.join(root, "agents", ident["sname"], ident["name"], "state", "turn.json")
-        try:
-            with open(tpath) as fh:
-                tdoc = json.load(fh)
-            state = tdoc.get("state")
-        except (OSError, ValueError, AttributeError):
-            skip("no-idle-state")
-            continue
-        if state != "busy":
-            probe_state.get("streak", {}).pop(aid, None)       # no busy turn: drop its streak
-        if state != "idle":
-            if state != "busy" or not _busy_is_over(conn, config, ident, tdoc, tpath, now(), probe_state):
-                continue                   # busy: wait quietly for the turn to end
-            _log_busy_end(root, skip_logged, aid, tdoc, log_f)
-        entry = None
-        for b in conn.execute(
-                "SELECT kind, value FROM bindings WHERE session_id=? AND owner_type='identity' "
-                "AND owner_id=? ORDER BY created_at, rowid", (ident["session_id"], aid)):
-            if wake_cfg.get(b["kind"]):
-                entry, kind, value = wake_cfg[b["kind"]], b["kind"], b["value"]
-                break
-        if entry is None:
-            skip("no-wake-binding")
-            continue
-        bo = backoff.get(aid)
-        if bo and now() < bo["until"] and bo["newest"] == newest:
-            continue                       # a recent wake failed: wait before typing again
-        text = _notice(conn, ident, rows)
-        err = None
-        for argv in entry:
-            try:
-                res = run(_fill(argv, value, text), shell=False, timeout=WAKE_TIMEOUT,
-                          capture_output=True)
-                if res.returncode != 0:
-                    err = f"{argv[0]} exited {res.returncode}"
-            except (OSError, subprocess.SubprocessError) as exc:
-                err = f"{argv[0]}: {exc}"
-            if err:
-                break
-        if err:
-            delay = min(bo["delay"] * 2, BACKOFF_MAX) if bo else BACKOFF_START
-            prev_key = bo["logged"] if bo else None
-            key = (newest, err)
-            backoff[aid] = {"until": now() + delay, "delay": delay, "newest": newest, "logged": key}
-            if key != prev_key:
-                turn_block.log_event(root, "postmaster", outcome="wake-failed", reason=err,
-                                     kind=kind, mail_id=newest, retry_in=delay, **log_f)
-            continue
-        backoff.pop(aid, None)
-        announced = done_ids | {r["id"] for r in rows}       # status/answer ids stay un-announced
-        _write_pushed(root, aid, pending_ids, [i for i in pending_ids if i in announced])
-        turn_block.log_event(root, "postmaster", outcome="pushed", kind=kind,
-                             mail_id=newest, count=len(rows), **log_f)
-        pushed += 1
+        if wake_one(conn, root, config, ident, run, skip_logged, backoff, now, nopush,
+                    probe_state) == "pushed":
+            pushed += 1
     return pushed
 
 
