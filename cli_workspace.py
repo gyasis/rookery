@@ -384,6 +384,28 @@ def _build_rows(conn, team, host, root, config):
     return session, rows, notes
 
 
+NAME_TRIES = 5
+
+
+def _fresh_name(make=None, tries=NAME_TRIES):
+    """A made session name that no session (any state) has yet; _Bad after `tries` clashes."""
+    import rookery_identity as ri
+    import rookery_names
+    import turn_block
+    make = make or rookery_names.make_name
+    conn = turn_block.open_db()
+    try:
+        turn_block.ensure_up_tables(conn)
+        for _ in range(tries):
+            name = make()
+            if ri.get_session(conn, name) is None:
+                return name
+    finally:
+        conn.close()
+    raise _Bad(f"Rookery made {tries} session names and every one is taken. "
+               "Run it again, or choose a name with --session NAME.")
+
+
 def _up(args):
     import cli_init
     import rookery_identity
@@ -394,8 +416,17 @@ def _up(args):
 
     if args.team_file.startswith(("http://", "https://")):
         raise _Bad(URL_MSG)
+    made = []
+
+    def _make():
+        made.append(True)
+        return _fresh_name()
     try:
-        team = rookery_team.load(args.team_file, _up_config(rookery_identity.load_config(persist=False)))
+        team = rookery_team.load(args.team_file, _up_config(rookery_identity.load_config(persist=False)),
+                                 session=getattr(args, "session", None), make_name=_make)
+        if team.get("session_overridden"):
+            sys.stderr.write(f"NOTE: --session {team['session']} replaces the session "
+                             f"{team['session_overridden']} of the team file.\n")
     except rookery_team.TeamError as e:
         _report_team_errors(args, e.errors)
     host, project = host_repo(os.getcwd())
@@ -504,8 +535,10 @@ def _up(args):
         ok = all(r["launch"] in ("started", "running") for r in report) or (
             args.no_launch and not any(r["launch"].startswith("not started") for r in report))
         print(json.dumps({"ok": ok, "root": root, "session_id": session["session_id"],
+                          "session_name": session["name"], "name_made": bool(made),
                           "agents": agents, "notes": notes, "errors": []}))
     else:
+        print(f"Session: {session['name']}" + (" (name made)" if made else ""))
         for n in notes:
             print(n)
         for r in report:
@@ -621,6 +654,7 @@ def add_parser(subparsers):
     p = subparsers.add_parser("up", help="Build a team from a team file.")
     p.add_argument("team_file", metavar="TEAM_FILE", help="Path to a JSON team file.")
     p.add_argument("--no-launch", action="store_true", help="Build everything and run no agent.")
+    p.add_argument("--session", help="Session name. Wins over the name in the team file.")
     p.add_argument("--json", action="store_true", help="Print one JSON object.")
     p.set_defaults(func=cmd_up)
     f = subparsers.add_parser("finish", help="Commit, push and remove a writer's worktree.")

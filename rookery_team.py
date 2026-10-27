@@ -62,8 +62,10 @@ def _bad_claim(c):
             or ".." in c.split("/"))
 
 
-def load(path, config=None) -> dict:
-    """Return the team with defaults filled. Raise TeamError with every problem found."""
+def load(path, config=None, session=None, make_name=None) -> dict:
+    """Return the team with defaults filled. Raise TeamError with every problem found.
+    session (the --session flag) wins over the file's name; with no name from either,
+    make_name() is called, and only then (T017)."""
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
@@ -86,7 +88,10 @@ def load(path, config=None) -> dict:
 
     if not isinstance(team, dict):
         raise _fail("The team file must hold one JSON object.")
-    session = team.get("session")
+    in_file = team.get("session")
+    session = session if session is not None else in_file
+    if session is None and make_name is not None:
+        session = make_name()
     if session is None:
         err(None, None, "The team file has no session name.")
     elif (p := _safe(session, "session name")):
@@ -210,5 +215,8 @@ def load(path, config=None) -> dict:
     if errors:
         raise TeamError(errors)
     result = dict(team)
+    result["session"] = session
+    if in_file is not None and in_file != session:
+        result["session_overridden"] = in_file   # the flag won; `up` prints a note
     result["agents"] = out
     return result

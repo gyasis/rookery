@@ -243,7 +243,7 @@ FR-006, FR-012, FR-014).
 **Goal**: FR-023 to FR-026.
 **Independent test**: `rookery up --no-launch` twice, the second time with `--session NAME`, gives one session.
 
-- [ ] T017 [US7] Files: `rookery_team.py`, `cli_workspace.py`, `test_up_session.py`. Add `--session NAME` to
+- [x] T017 [US7] Files: `rookery_team.py`, `cli_workspace.py`, `test_up_session.py`. Add `--session NAME` to
   `rookery up`. It sets the session name before validation. Make `session` optional in the team file when a name
   comes from the flag or the default. With no name, call `rookery_names.make_name()`. Retry on a name that exists,
   at most 5 times, then fail with exit 2. Print the name. Add `session_name` and `name_made` to `--json`. Write the
