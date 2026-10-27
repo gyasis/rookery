@@ -287,7 +287,7 @@ FR-006, FR-012, FR-014).
   none. A `status` gives none. A server that answers 500 gives `check-failed` and exit 0. Needs T003, T004, T005,
   T012 first. (R8)
   Verify: `python3 -m unittest test_wake_remote test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate test_gate_log test_held_quarantine test_escalated test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T020 [US6] Files: `rookery_remote.py`, `test_wake_remote_follow.py`. `--follow`: write `NODE.follow`
+- [x] T020 [US6] Files: `rookery_remote.py`, `test_wake_remote_follow.py`. `--follow`: write `NODE.follow`
   `{"start": now}`, then spawn the follower (`rookery check --follower`, hidden flag). Print `follower-started`, or
   `follower-running` when `NODE.lock` has a holder. The follower takes the lock and checks at once. Then it sleeps
   300 s (injected) and checks again. Before each check it reads `NODE.follow`. It restarts its count when the start

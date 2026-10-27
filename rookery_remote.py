@@ -1,6 +1,7 @@
 """rookery_remote -- the remote check: an agent on another machine checks the mailroom for its own mail
 (research R8 of spec 005). `check_once` does one GET /inbox, applies the push rules, types one notice into the
 agent's own pane, and remembers the announced ids in ~/.rookery/remote/NODE.json."""
+import argparse
 import json
 import os
 import subprocess
@@ -165,16 +166,99 @@ def check_once(url, token, node, config, run=subprocess.run, opener=None, env=No
         return out
 
 
+def _remote_path(node, ext):
+    return os.path.join(os.path.expanduser("~"), ".rookery", "remote", node + ext)
+
+
+def _write_follow(node, start):
+    path = _remote_path(node, ".follow")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as fh:
+        json.dump({"start": start}, fh)
+    os.replace(tmp, path)
+
+
+def _read_follow(node):
+    """The start of the newest trigger, or None when the file is missing or bad."""
+    try:
+        with open(_remote_path(node, ".follow")) as fh:
+            return float(json.load(fh)["start"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def start_follow(node, now=time.time) -> str:
+    """Record a new trigger and start the follower unless one holds NODE.lock. Never raises."""
+    import rookery_wake
+    try:
+        _write_follow(node, now())
+        probe = rookery_wake.try_lock(_remote_path(node, ".lock"))
+        if probe is None:
+            return "follower-running"
+        probe.close()
+        return "follower-started" if rookery_wake.spawn(["check", "--follower"]) else "follower-failed"
+    except Exception:
+        return "follower-failed"
+
+
+def run_follower(url, token, node, config, sleep=time.sleep, now=time.time, run=subprocess.run,
+                 opener=None, env=None, interval=300, max_checks=5) -> dict:
+    """Check at once, then every `interval` s, at most `max_checks` per trigger (a newer NODE.follow start
+    restarts the count). Stops after the first notice. One follower per node (NODE.lock). After it releases
+    the lock it reads NODE.follow once more: a trigger written while it was finishing (and that saw the lock
+    held) starts a new round instead of being lost."""
+    import rookery_wake
+    out = {"node": node, "outcome": "follower-running", "checks": 0}
+    seen = None
+    while True:
+        lock = rookery_wake.try_lock(_remote_path(node, ".lock"))
+        if lock is None:
+            return out                   # another follower runs; it reads the newest trigger
+        try:
+            count = 0
+            while True:
+                start = _read_follow(node)
+                if start is None:       # no readable trigger: keep the last one, else this run's own start
+                    start = seen if seen is not None else now()
+                if start != seen:
+                    seen, count = start, 0
+                res = check_once(url, token, node, config, run=run, opener=opener, env=env, now=now)
+                out["outcome"] = res["outcome"]
+                out["checks"] += 1
+                count += 1
+                if res["outcome"] == "pushed" or count >= max_checks:
+                    break
+                sleep(interval)
+        except KeyboardInterrupt:
+            return out
+        finally:
+            lock.close()
+        latest = _read_follow(node)
+        if latest is None or latest == seen:
+            return out                   # no trigger came in while this round finished
+
+
 def cmd_check(args):
     url, node = os.environ.get("ROOKERY_URL"), os.environ.get("ROOKERY_NODE")
     if not url or not node:
         print("rookery check: ROOKERY_URL and ROOKERY_NODE must be set", file=sys.stderr)
         raise SystemExit(2)
+    if getattr(args, "follow", False):
+        res = {"node": node, "outcome": start_follow(node)}
+        print(json.dumps(res) if args.json else res["outcome"])
+        return
     try:
         import rookery_identity
         config = rookery_identity.load_config(persist=False)
     except Exception:
         config = {}
+    if getattr(args, "follower", False):
+        try:
+            run_follower(url, os.environ.get("ROOKERY_TOKEN"), node, config)
+        except Exception:
+            pass
+        return
     res = check_once(url, os.environ.get("ROOKERY_TOKEN"), node, config)
     print(json.dumps(res) if args.json else f"check {node}: {res['outcome']}")
 
@@ -182,4 +266,7 @@ def cmd_check(args):
 def add_parser(subparsers):
     p = subparsers.add_parser("check", help="Check the remote mailroom for mail and type one notice into this pane.")
     p.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    p.add_argument("--follow", action="store_true",
+                   help="Check now and every 300 s, at most 5 checks per trigger, in a detached follower.")
+    p.add_argument("--follower", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_check)
