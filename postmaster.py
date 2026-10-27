@@ -540,6 +540,32 @@ def _note_poll_raised(root, was):
         pass
 
 
+def _sweep_screen(conn, root, cfg, sid):
+    """One screening pass for the session when screening is on (feature 005, FR-022). Imports are
+    local: screener is slow to import and must not load when screening is off. Shares the lock of an
+    event-started `rookery screen run --session` (screen-SID.lock): held means skip this round.
+    The pass runs inline, so a round that screens mail takes as long as its model calls (a few seconds,
+    bounded by screener.run: 5 mails a pass, 3 tries a mail). The wake round and the outbox scan of this
+    session wait for it, once every 300 seconds at most."""
+    lock = None
+    try:
+        import screener_config
+        if not screener_config.screening_on(conn, cfg, sid):
+            return
+        lock = rookery_wake.try_lock(os.path.join(root, "postmaster", "lock", f"screen-{sid}.lock"),
+                                     log_root=root)
+        if lock is None:
+            turn_block.log_event(root, "postmaster", outcome="screen-busy", session_id=sid)
+            return
+        import screener
+        screener.run(sessions=[sid], once=True)
+    except Exception as exc:               # never kill the loop; retried next round
+        turn_block.log_event(root, "postmaster", outcome="screen-step-error", reason=str(exc))
+    finally:
+        if lock is not None:
+            lock.close()
+
+
 def run_session_sweep(root, config, session, sleep=time.sleep, now=time.time, rounds=None):
     """Periodic safety net for ONE session (feature 005, R7): wake the identities of that session
     that have mail the event wake missed, then sleep sweep_interval. Returns 0, or 3 when the
@@ -587,6 +613,7 @@ def run_session_sweep(root, config, session, sleep=time.sleep, now=time.time, ro
                                 nopush=nopush, probe_state=probe_state, session_id=sid)
             except Exception as exc:      # never kill the loop; retried next round
                 turn_block.log_event(root, "postmaster", outcome="wake-step-error", reason=str(exc))
+            _sweep_screen(conn, root, cfg, sid)
             done += 1
             if rounds is not None and done >= rounds:
                 return 0

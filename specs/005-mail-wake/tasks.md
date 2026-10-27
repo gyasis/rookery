@@ -215,7 +215,7 @@ FR-006, FR-012, FR-014).
 **Goal**: FR-009, FR-010, FR-011, D3.
 **Independent test**: with screening on, a stored mail gives one screening pass for its session.
 
-- [ ] T014 [US4] Files: `cli_screen.py`, `test_screen_event.py`. `rookery screen run --session S --once`: take
+- [x] T014 [US4] Files: `cli_screen.py`, `test_screen_event.py`. `rookery screen run --session S --once`: take
   `ROOT/postmaster/lock/screen-SESSION_ID.lock` (`screen-busy` and exit 0 when held). Run
   `screener.run(sessions=[S], once=True)` and release the lock. Then look for mail with no decision. Repeat at most
   3 rounds. Change the default `--poll` of the loop to 300. Write the test first with the fake backend. One pass
@@ -230,7 +230,7 @@ FR-006, FR-012, FR-014).
   The session binding spawns one for that session only. A `spawn` that raises keeps the send result. Needs T001,
   T007, T014 first. (R6)
   Verify: `python3 -m unittest test_screen_event_gate test_wake_event_gate test_gate test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate_log test_held_quarantine test_escalated test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T016 [US4] Files: `postmaster.py`, `test_wake_sweep_screen.py`. In the session sweep, after
+- [x] T016 [US4] Files: `postmaster.py`, `test_wake_sweep_screen.py`. In the session sweep, after
   `wake_identities`, call `screener.run(sessions=[sid], once=True)` when `screening_on` is true (import inside).
   Write the test first. Screening on gives one screening pass for each round. Screening off gives none and 0 model
   calls. Needs T001, T012 first. (R7, FR-022)
