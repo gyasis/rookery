@@ -202,7 +202,7 @@ FR-006, FR-012, FR-014).
   sweep of session A never wakes an identity of session B. `rookery sweep --session S` (subprocess, with the test
   switch `ROOKERY_SWEEP_ROUNDS=1`) runs one round and exits 0. Needs T002, T004, T005 first. (R7, R9)
   Verify: `python3 -m unittest test_wake_sweep test_wake_lock test_wake test_turn_block test_send test_hooks test_outbox test_identity test_gate test_gate_log test_held_quarantine test_escalated test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T013 [P] [US3] Files: `test_wake_cost.py`. Cost proofs with the fake screener backend counting calls. Replace
+- [x] T013 [P] [US3] Files: `test_wake_cost.py`. Cost proofs with the fake screener backend counting calls. Replace
   `spawn` with a recorder. One simulated idle hour (injected clock) of the sweep with no mail gives 0 model calls
   and at most 12 rounds (SC-003). Test 2, 5 and 10 agents, where each agent sends one ask to one other agent. The
   number of spawned wakes equals the number of asks (SC-004). Needs T006, T012 first.
