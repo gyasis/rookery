@@ -275,7 +275,7 @@ FR-006, FR-012, FR-014).
 **Goal**: FR-019, FR-020, FR-021, SC-011.
 **Independent test**: with a fake mailroom on `127.0.0.1` and an injected clock, at most 5 checks and one notice.
 
-- [ ] T019 [US6] Files: `rookery_remote.py`, `rookery_cli.py`, `test_wake_remote.py`. Fill `rookery_remote.py`.
+- [x] T019 [US6] Files: `rookery_remote.py`, `rookery_cli.py`, `test_wake_remote.py`. Fill `rookery_remote.py`.
   `check_once(url, token, node, config, run, opener)` does `GET URL/inbox?node=NODE` with the token. It applies the
   push rules to the rows: a self-send and kind `status` do not push, and an `answer` pushes. It skips IDs in
   `~/.rookery/remote/NODE.json`. It types one notice with `postmaster.type_notice`. The notice goes through the pane
