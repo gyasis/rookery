@@ -121,7 +121,7 @@ class TestFollowCommand(FollowBase):
             self.assertEqual(json.load(fh), {"start": 1000.0})
         self.assertTrue(self.lock_free())
 
-    def test_follow_with_lock_held_does_not_spawn_but_updates_start(self):
+    def test_follow_with_lock_held_spawns_one_check_and_updates_start(self):
         self.write_follow(1.0)
         held = rookery_wake.try_lock(os.path.join(self.rdir, "remote1.lock"))
         try:
@@ -129,7 +129,7 @@ class TestFollowCommand(FollowBase):
                 self.assertEqual(RR.start_follow("remote1", now=self.now), "follower-running")
         finally:
             held.close()
-        sp.assert_not_called()
+        sp.assert_called_once_with(["check"])
         with open(os.path.join(self.rdir, "remote1.follow")) as fh:
             self.assertEqual(json.load(fh), {"start": 1000.0})
 
@@ -141,7 +141,8 @@ class TestFollowCommand(FollowBase):
         # a held lock keeps the CLI from spawning a real follower
         held = rookery_wake.try_lock(os.path.join(self.rdir, "remote1.lock"))
         try:
-            r = self.cli("--follow", "--json", env={"ROOKERY_URL": self.url, "ROOKERY_NODE": "remote1"})
+            r = self.cli("--follow", "--json", env={"ROOKERY_URL": self.url, "ROOKERY_NODE": "remote1",
+                                                    "ROOKERY_WAKE": "off"})   # no real one-shot check child
         finally:
             held.close()
         self.assertEqual(r.returncode, 0, r.stderr)

@@ -364,9 +364,18 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
         + ("" if session_id is None else "AND i.session_id=? ")
         + "ORDER BY i.created_at, i.rowid", () if session_id is None else (session_id,)).fetchall()
     for ident in ids:
-        if wake_one(conn, root, config, ident, run, skip_logged, backoff, now, nopush,
-                    probe_state) == "pushed":
-            pushed += 1
+        # the per-agent lock of rookery_wake.run_wake: an event wake holding it covers this mail
+        lock = rookery_wake.try_lock(os.path.join(root, "postmaster", "lock", ident["agent_id"] + ".lock"),
+                                     log_root=root)
+        if lock is None:
+            turn_block.log_event(root, "postmaster", outcome="wake-busy", agent_id=ident["agent_id"])
+            continue
+        try:
+            if wake_one(conn, root, config, ident, run, skip_logged, backoff, now, nopush,
+                        probe_state) == "pushed":
+                pushed += 1
+        finally:
+            lock.close()
     return pushed
 
 
@@ -592,7 +601,23 @@ def run_session_sweep(root, config, session, sleep=time.sleep, now=time.time, ro
                 rounds = None
         skip_logged, nopush, probe_state = {}, {}, {}
         done, noted = 0, False
+        try:
+            st = os.stat(turn_block.db_path())
+            db_id = (st.st_ino, st.st_dev)
+        except OSError:
+            db_id = None
         while True:
+            if not os.path.isdir(root):   # the project folder is gone: recreate nothing, log nothing
+                return 0
+            try:
+                st = os.stat(turn_block.db_path())
+                now_id = (st.st_ino, st.st_dev)
+            except OSError:
+                now_id = None
+            if now_id != db_id:           # DB deleted or replaced (a rollback): this connection is stale
+                turn_block.log_event(root, "postmaster", outcome="sweep-end", session=sess["name"],
+                                     reason="db-replaced")
+                return 0
             row = conn.execute("SELECT state FROM rookery_sessions WHERE session_id=?", (sid,)).fetchone()
             if row is None or row[0] != "open":
                 turn_block.log_event(root, "postmaster", outcome="sweep-end", session=sess["name"])

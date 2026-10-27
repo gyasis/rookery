@@ -172,6 +172,9 @@ def _remote_follow():
         if not node or os.environ.get("ROOKERY_WAKE") == "off":
             return
         import rookery_remote
+        import turn_block
+        if not turn_block.is_safe_name(node):
+            return
         rookery_remote.start_follow(node)
     except Exception:
         pass

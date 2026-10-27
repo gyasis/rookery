@@ -72,6 +72,17 @@ def resolve_root(conn, session_id):
     return os.environ.get("ROOKERY_ROOT") or None
 
 
+def root_args(conn, session_id, log_root):
+    """["--root", ROOT] when the session has no root binding and no ROOKERY_ROOT but the spawning side
+    knows a real project folder; else []. The detached child cannot find the root otherwise."""
+    try:
+        if resolve_root(conn, session_id) is None and isinstance(log_root, str) and os.path.isdir(log_root):
+            return ["--root", os.path.abspath(log_root)]
+    except Exception:
+        pass
+    return []
+
+
 def sweep_interval(config):
     """(seconds, raised). sweep_s defaults to 300 and is never below 300."""
     if not isinstance(config, dict):
@@ -125,7 +136,8 @@ def after_pending(conn, msg_ids, log_root=None) -> int:
             groups[(sid, row["recipient"])] = True
         spawned = 0
         for sid, agent in groups:
-            if spawn(["wake", "--session", sid, "--agent", agent], log_root=log_root):
+            if spawn(["wake", "--session", sid, "--agent", agent] + root_args(conn, sid, log_root),
+                     log_root=log_root):
                 spawned += 1
         return spawned
     except Exception as exc:
@@ -232,7 +244,13 @@ def cmd_wake(args):
         if ident is None:
             _fail(f"no agent {args.agent!r} in session {args.session!r}", EXIT_MISSING)
         config = rookery_identity.load_config(persist=False)
-        result = run_wake(conn, resolve_root(conn, sess["session_id"]), config,
+        given = getattr(args, "root", None)
+        root = None
+        if isinstance(given, str) and given and os.path.isdir(os.path.abspath(given)):
+            root = os.path.abspath(given)
+        if root is None:
+            root = resolve_root(conn, sess["session_id"])
+        result = run_wake(conn, root, config,
                           sess["session_id"], ident["agent_id"])
     except sqlite3.OperationalError as exc:
         msg = str(exc).lower()
@@ -256,5 +274,6 @@ def add_parser(subparsers):
     p = subparsers.add_parser("wake", help="Push a notice to one idle agent that has new mail.")
     p.add_argument("--session", required=True, help="Session name or ID.")
     p.add_argument("--agent", required=True, help="Identity name or ID in that session.")
+    p.add_argument("--root", default=None, help="Project folder, when the session has no root binding.")
     p.add_argument("--json", action="store_true", help="Print the result as JSON.")
     p.set_defaults(func=cmd_wake)

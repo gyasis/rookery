@@ -59,9 +59,11 @@ def stop(args):
         import turn_block
         import rookery_identity
 
+        # a joined machine has no local DB and no session: arm the remote trigger before that gate
+        armed = bool(os.environ.get("ROOKERY_URL") and os.environ.get("ROOKERY_NODE")
+                     and os.environ.get("ROOKERY_WAKE") != "off")
         if _no_session_possible(turn_block, rookery_identity):
             return                          # no Rookery environment: write nothing (SC-010)
-        armed = True                        # every exit from here on ends with one remote trigger
         root = turn_block.project_root(args.project)
         hook_input, bad = _read_input()
         text = hook_input.get("last_assistant_message")
@@ -122,6 +124,9 @@ def _remote_follow():
     try:
         node = os.environ.get("ROOKERY_NODE")
         if not os.environ.get("ROOKERY_URL") or not node or os.environ.get("ROOKERY_WAKE") == "off":
+            return
+        import turn_block
+        if not turn_block.is_safe_name(node):
             return
         import rookery_remote
         rookery_remote.start_follow(node)
@@ -209,7 +214,8 @@ def _wake_self(conn, root, session, identity):
         import rookery_wake
         if rookery_wake._unpushed(conn, root, identity["agent_id"]):
             rookery_wake.spawn(["wake", "--session", session["session_id"],
-                                "--agent", identity["agent_id"]], log_root=root)
+                                "--agent", identity["agent_id"]]
+                               + rookery_wake.root_args(conn, session["session_id"], root), log_root=root)
     except Exception:
         pass
 

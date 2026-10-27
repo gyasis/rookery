@@ -23,14 +23,19 @@ class UpSweep(tb.UpBuild):
         self.wake = rookery_wake
         self.spawns = []
         patches = [
+            # fake herdr/tmux first on PATH: `up` launches in-process, so the real herdr would open real tabs
             mock.patch.dict(os.environ, {"HOME": self.home, "ROOKERY_DB": self.db,
-                                         "ROOKERY_ROOT": self.root}),
+                                         "ROOKERY_ROOT": self.root,
+                                         "PATH": os.path.join(tb.HERE, "fixtures", "bin") + os.pathsep + os.environ["PATH"],
+                                         "HERDR_RECORD": os.path.join(self.home, "herdr.log"),
+                                         "ROOKERY_FIXTURE_LOG": os.path.join(self.home, "tmux.log")}),
             mock.patch.object(rookery_wake, "spawn", side_effect=self.fake_spawn),
         ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
         os.environ.pop("ROOKERY_WAKE", None)
+        os.environ.pop("HERDR_WORKSPACE_ID", None)
         self.spawn_ok = True
         self.cwd = os.getcwd()
         os.chdir(self.repo)

@@ -120,9 +120,15 @@ def _notice(node, rows):
 def check_once(url, token, node, config, run=subprocess.run, opener=None, env=None, now=time.time) -> dict:
     """One remote check. Never raises. Returns {"node", "outcome", "count", "reason"?}."""
     out = {"node": node, "outcome": "nothing", "count": 0}
+    lock = None
     try:
         if not turn_block.is_safe_name(node):
             out["outcome"] = "bad-node"
+            return out
+        import rookery_wake
+        lock = rookery_wake.try_lock(_remote_path(node, ".check.lock"))
+        if lock is None:                   # another check (one-shot or follower) is announcing: do not double up
+            out["outcome"] = "check-busy"
             return out
         try:
             rows = _fetch(url, token, node, opener)
@@ -164,6 +170,9 @@ def check_once(url, token, node, config, run=subprocess.run, opener=None, env=No
     except Exception as exc:
         out.update(outcome="check-failed", reason=f"{type(exc).__name__}: {exc}")
         return out
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 def _remote_path(node, ext):
@@ -191,10 +200,15 @@ def _read_follow(node):
 def start_follow(node, now=time.time) -> str:
     """Record a new trigger and start the follower unless one holds NODE.lock. Never raises."""
     import rookery_wake
+    if not turn_block.is_safe_name(node):
+        return "bad-node"
     try:
         _write_follow(node, now())
         probe = rookery_wake.try_lock(_remote_path(node, ".lock"))
         if probe is None:
+            # a follower sleeps up to 300 s: one detached single check makes this trigger count at once
+            if os.environ.get("ROOKERY_WAKE") != "off":   # the kill switch covers every event spawn
+                rookery_wake.spawn(["check"])
             return "follower-running"
         probe.close()
         return "follower-started" if rookery_wake.spawn(["check", "--follower"]) else "follower-failed"
@@ -210,6 +224,9 @@ def run_follower(url, token, node, config, sleep=time.sleep, now=time.time, run=
     held) starts a new round instead of being lost."""
     import rookery_wake
     out = {"node": node, "outcome": "follower-running", "checks": 0}
+    if not turn_block.is_safe_name(node):
+        out["outcome"] = "bad-node"
+        return out
     seen = None
     while True:
         lock = rookery_wake.try_lock(_remote_path(node, ".lock"))
@@ -243,6 +260,9 @@ def cmd_check(args):
     url, node = os.environ.get("ROOKERY_URL"), os.environ.get("ROOKERY_NODE")
     if not url or not node:
         print("rookery check: ROOKERY_URL and ROOKERY_NODE must be set", file=sys.stderr)
+        raise SystemExit(2)
+    if not turn_block.is_safe_name(node):
+        print("rookery check: ROOKERY_NODE is not a safe node name", file=sys.stderr)
         raise SystemExit(2)
     if getattr(args, "follow", False):
         res = {"node": node, "outcome": start_follow(node)}
