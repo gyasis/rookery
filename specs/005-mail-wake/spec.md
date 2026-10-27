@@ -50,11 +50,11 @@ These go to `/speckit-clarify`, research and plan. The spec does not decide them
 
 - **Q1.** Answered 2026-10-27: every change to `pending` fires the wake. See FR-012.
 - **Q2.** Answered 2026-10-27: a remote agent pulls, with a bound. See User Story 6 and FR-019 to FR-021.
-- **Q3.** A detached wake needs the config and the root of the project. The sender can be the MCP server or the mailroom service, not a shell in the session. How does the wake get them?
+- **Q3.** Answered by research R3 (2026-10-27): the wake reads the root from the `rookery-root` binding of the session, else from `ROOKERY_ROOT`. With neither, it logs `no-root` and the sweep covers the mail.
 - **Q4.** Answered 2026-10-27: a lock file for each agent with a non-blocking OS lock. See FR-005.
 - **Q5.** Answered 2026-10-27: one sweep for each session, started by `rookery up`. See FR-013 and FR-022.
 - **Q6.** Answered 2026-10-27 by Q5: the sweep is for each session. The default interval is 300 seconds, and Rookery refuses a smaller value outside tests.
-- **Q7.** Migration: what happens to a user who starts `postmaster.py --poll 0.5` by hand?
+- **Q7.** Answered by research R9 (2026-10-27): a `--poll` below 300 is raised to 300 with one notice, and the old command keeps working.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -195,9 +195,9 @@ The user runs `rookery up team.json`. The team file has no session name, so Rook
 - **FR-004**: The wake MUST use the existing wake rules of the postmaster. These are the push gate, the record of announced mail, the idle check, `busy-stale`, the herdr probe and the back-off. There MUST be one wake code path. The back-off record MUST last between wakes, in a file next to the record of announced mail. (D2, Q4)
 - **FR-005**: At most one wake for an agent MUST run at a time. A wake MUST take a lock for that agent without waiting. If another wake holds the lock, the new wake MUST exit and log `wake-busy`. Before the holder releases the lock, it MUST check the pending mail once more, so that mail that arrived during its run is not lost. The OS MUST release the lock when a wake ends or crashes. (Q4)
 - **FR-006**: A wake MUST NOT start for an agent with no pending mail that needs action. It MUST NOT start for a self-send, for mail in `legacy`, or for a closed session.
-- **FR-007**: The postmaster loop MUST become a slow sweep for one session. Its default interval MUST be 300 seconds. Rookery MUST refuse a smaller interval, except with an injected clock in tests. It MUST read only the database and call no model. (D2, Q5, Q6)
+- **FR-007**: The postmaster loop MUST become a slow sweep for one session. Its default interval MUST be 300 seconds. A smaller interval MUST be raised to 300 with one notice, except with an injected clock in tests. It MUST read only the database and call no model. (D2, Q5, Q6, Q7)
 - **FR-008**: The sweep MUST wake an agent whose mail needs action and got no wake. It MUST NOT wake an agent again for mail that a notice already announced.
-- **FR-009**: When the gate stores a mail that needs screening, Rookery MUST start one screening pass for that session, detached from the send. (D3)
+- **FR-009**: When screening is on for the session, and the gate stores a mail that needs screening, Rookery MUST start one screening pass for that session, detached from the send. Screening is off by default, so an update starts no model call that the user did not choose. (D3, research R6)
 - **FR-010**: At most one screening pass MUST run for a session at a time. A mail that arrives during a pass MUST still get a decision.
 - **FR-011**: The screener MUST NOT poll every 2 seconds by default. It MUST keep a slow sweep of 5 minutes or more as a safety net. (D3)
 - **FR-012**: Each step that changes a mail to `pending` MUST start the wake for the recipient: the gate when it stores the mail, the screener when it delivers a held mail, and the release commands. A mail that is not `pending` MUST NOT start a wake. (Q1)
@@ -205,7 +205,7 @@ The user runs `rookery up team.json`. The team file has no session name, so Rook
 - **FR-014**: Every wake decision MUST write one log line with the outcome and the reason, in the existing logs. Outcomes: `pushed`, `wake-failed`, `no-idle-state`, `no-wake-binding` and `wake-busy`.
 - **FR-015**: Core code MUST NOT name a pane tool. Pane commands MUST stay in the wake config and the plugins. (Principle IX)
 - **FR-016**: A path of this feature MUST NOT call a model. The number of wakes MUST grow with the mail, not with the number of agents times the number of agents. (Principle X)
-- **FR-017**: A user who still starts the postmaster with `--poll 0.5` MUST keep working, as Q7 decides.
+- **FR-017**: A user who still starts the postmaster with `--poll 0.5` MUST keep working. The postmaster raises the interval to 300 seconds and prints one notice. (Q7)
 - **FR-018**: The tests MUST NOT run real herdr or tmux, call a model, or open the live database.
 - **FR-019**: An agent whose mailroom is on a different machine MUST check the mailroom for its own pending mail when its turn ends and after it sends a mail. (Q2)
 - **FR-020**: After that check, the agent MUST check again every 5 minutes, at most 4 times. A new turn or send MUST restart the count. After the last check, nothing MUST run for that agent until its next turn or send. (Q2)
