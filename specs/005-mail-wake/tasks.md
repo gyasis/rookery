@@ -296,7 +296,7 @@ FR-006, FR-012, FR-014).
   trigger after check 4 gives 5 more checks from it. A second `--follow` while one runs spawns no second follower
   (SC-011). Needs T019 first. (R8)
   Verify: `python3 -m unittest test_wake_remote_follow test_wake_remote test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate test_gate_log test_held_quarantine test_escalated test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T021 [US6] Files: `cli_hook.py`, `rookery_mcp.py`, `test_wake_remote_triggers.py`. In `stop`, when
+- [x] T021 [US6] Files: `cli_hook.py`, `rookery_mcp.py`, `test_wake_remote_triggers.py`. In `stop`, when
   `ROOKERY_URL` exists, spawn `rookery check --follow`. Never raise and never print. In the MCP `send` tool, spawn
   the same after a remote send that succeeded. Write the test first (recorder). The Stop hook with `ROOKERY_URL`
   spawns one `check --follow` and no local wake. Without it, the hook spawns no `check`. An MCP remote send spawns

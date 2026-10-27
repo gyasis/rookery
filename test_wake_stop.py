@@ -78,7 +78,8 @@ class StopWake(WakeBase):
 
     def test_remote_url_spawns_no_local_wake(self):
         self.mail()
-        self.assertEqual(self.spawns(ROOKERY_URL="http://127.0.0.1:1"), [])
+        rec = self.spawns(ROOKERY_URL="http://127.0.0.1:1")
+        self.assertEqual([r for r in rec if r[0] == "wake"], [])    # T021: only the remote follower may start
 
     def test_switch_off_spawns_none(self):
         self.mail()

@@ -165,6 +165,18 @@ def _read(node):
 mcp = FastMCP("rookery")
 
 
+def _remote_follow():
+    """A remote send succeeded: start the bounded follower for this node. Never changes the result."""
+    try:
+        node = os.environ.get("ROOKERY_NODE")
+        if not node or os.environ.get("ROOKERY_WAKE") == "off":
+            return
+        import rookery_remote
+        rookery_remote.start_follow(node)
+    except Exception:
+        pass
+
+
 @mcp.tool()
 def send(to: str, body: str, ctx: Context, topic: str = "") -> str:
     """Send a message to another agent/node in the Rookery mesh.
@@ -173,6 +185,7 @@ def send(to: str, body: str, ctx: Context, topic: str = "") -> str:
     if URL:                                # remote sidecar: it runs the gate
         res = _send(node, to, body, topic or None)
         if res.get("outcome", "sent") == "sent":
+            _remote_follow()
             return f"sent #{res.get('id')}: {node} -> {to}"
         return f"{res['outcome']}: {res.get('reason')}"
     conn = R.connect()

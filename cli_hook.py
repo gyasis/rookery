@@ -54,12 +54,14 @@ def stop(args):
     """Stop hook (FR-005..009, FR-017, D1, D16). Never blocks, never prints."""
     root = None
     text = None
+    armed = False
     try:
         import turn_block
         import rookery_identity
 
         if _no_session_possible(turn_block, rookery_identity):
             return                          # no Rookery environment: write nothing (SC-010)
+        armed = True                        # every exit from here on ends with one remote trigger
         root = turn_block.project_root(args.project)
         hook_input, bad = _read_input()
         text = hook_input.get("last_assistant_message")
@@ -109,6 +111,22 @@ def stop(args):
         _safe_log(root, outcome="db-busy" if busy else "hook-error", reason=str(exc))
     except Exception as exc:                # D16: log and exit 0
         _safe_log(root, outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
+    finally:
+        if armed:
+            _remote_follow()
+
+
+def _remote_follow():
+    """FR-019/FR-021: the turn ended on a remote node (ROOKERY_URL), so a bounded follower checks the
+    mailroom. Once per Stop call. Never prints, never raises."""
+    try:
+        node = os.environ.get("ROOKERY_NODE")
+        if not os.environ.get("ROOKERY_URL") or not node or os.environ.get("ROOKERY_WAKE") == "off":
+            return
+        import rookery_remote
+        rookery_remote.start_follow(node)
+    except Exception:
+        pass
 
 
 def _tool_hook(args, fn_name, adapter):
