@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+Feature 005: the event-driven mail wake. An idle agent gets its mail at once. No process polls for it.
+
+### Added
+
+- The event wake. Each step that makes a mail `pending` starts one detached `rookery wake` for the recipient. The steps: the gate when it stores a mail, a release, an unquarantine, a requeue from the dead-letter queue, and a bounce. The screener is one more step, when it delivers a held mail. The send returns before the wake runs. A wake that fails never changes the send.
+- The Stop hook wakes an agent whose turn ends with mail that needs action and that no notice announced.
+- `rookery wake --session S --agent A [--root R] [--json]` runs one wake for one agent. It takes the lock `postmaster/lock/AGENT_ID.lock` without waiting. A second wake for the same agent logs `wake-busy` and exits. After a push, the holder reads the pending mail again, at most 3 rounds. Each wake writes one log line with its outcome. The outcomes: `pushed`, `nothing`, `busy`, `wake-busy`, `backoff-wait`, `wake-failed`, `no-idle-state`, `no-wake-binding`, `no-root`, `lock-failed` and `unsafe-name`. Exit 0 for every outcome, 2 for bad input, 3 for no session or agent, 4 for a busy database. The back-off record now lives in `postmaster/backoff/AGENT_ID.json`, so it lasts between wakes.
+- The session sweep: `rookery sweep --session S [--root R]`, or `postmaster.py --session S`. It is the safety net for a lost event. Each round it scans the outbox drop-box and wakes the agents of the session that have mail with no notice. It also runs one screening pass when screening is on, or when a mail waits as `held` for screening. Then it sleeps 300 seconds (`sweep_s` in `~/.rookery/config.json`, never below 300). It calls no model. It ends when the session ends, when a new database file replaces the old one, or when the project root is gone. One sweep runs for each session (`postmaster/lock/sweep-SESSION_ID.lock`). A second one logs `sweep-busy` and exits.
+- `rookery up` starts the sweep for its session after it builds the rows, also with `--no-launch`. The output has a `Sweep:` line, and `--json` has `"sweep"`: `started`, `running`, `off` or `failed`.
+- `rookery up --session NAME`. The flag wins over `session` in the team file. With no name from either, `rookery up` makes a name of three words and prints it: `Session: NAME (name made)`, or `"name_made": true` with `--json`. A second run with the same name resumes the session. It keeps the mail, the identities and the worktrees, and starts only the panes that are not alive.
+- Screening events. When screening is on for a session, the gate starts one detached `rookery screen run --session S --once` after it stores a mail. The pass takes `postmaster/lock/screen-SESSION_ID.lock`. A held lock prints `screen-busy`. After the pass it looks for mail with no decision, at most 3 rounds.
+- `screener.enabled` in `~/.rookery/config.json` (default `false`) turns screening on for every session. The team file key `screener: true` turns it on for one session: `rookery up` writes the session binding `screener-enabled`. Screening is off by default because a shadow `t1` check calls the model. An update must not start model calls that nobody chose. A mail that a live check holds for screening always gets the pass.
+- `rookery check [--follow] [--json]`: the remote check, for a machine with `ROOKERY_URL`, `ROOKERY_TOKEN` and `ROOKERY_NODE` set. It calls `GET /inbox?node=NODE` on the mailroom with the Bearer token. It refuses a redirect and reads at most 1 MB in 20 seconds. For mail that needs action, it types one notice into its own pane through the `wake` config. It records the announced IDs in `~/.rookery/remote/NODE.json`. A failed pane command sets a back-off from 30 to 600 seconds. `--follow` starts one detached follower for the node: 5 checks per trigger, 300 seconds apart, and it stops at the first notice. A trigger while the follower sleeps restarts its count and starts one detached check at once. The triggers: the Stop hook on a machine with `ROOKERY_URL`, and a successful send through the MCP tool. A remote agent with neither has no trigger.
+- `ROOKERY_WAKE=off` in the environment kills every event spawn. No wake, no screening pass, no sweep from `rookery up`, and no remote check from a hook or the MCP tool start. `rookery wake`, `rookery sweep` and `rookery check` still run when you call them.
+
+### Changed
+
+- The postmaster loop without `--nodes` sleeps 300 seconds between rounds. It raises a `--poll` below 300 to 300. The postmaster prints one `NOTE:` line and logs `poll-raised` once. Old start commands keep working. `--nodes` keeps its poll.
+- `rookery screen run` as a loop (without `--once`) sleeps 300 seconds between passes. The default was 2.
+- `rookery up` refuses a team file whose `screener` key is not `true` or `false`.
+- `postmaster.py`, `rookery_wake.py` and `rookery_remote.py` are in the zipapp.
+
+### Fixed
+
+- An idle agent got no notice, because no postmaster ran on the machine. The event wake and the sweep need no postmaster.
+- A file dropped in `outbox/` was never delivered when no postmaster ran. The session sweep delivers it within one interval (300 seconds or less).
+
 ## 0.7.0 - 2026-10-26
 
 This release holds features 001 to 004: `rookery init` and the turn block, the mail gate, `rookery up` and the screener chain.

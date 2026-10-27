@@ -25,6 +25,9 @@ is a periodic `rookery inbox` check (legacy: `mailctl inbox`). Then `rookery ack
 marks mail read. (tmux pane-injection exists for the rare
 "I want it instant" case, but it's a workaround, not the model.)
 
+In a 0.7 session, Rookery types one notice into the pane of an idle agent when mail
+needs action. See [How mail wakes an agent](#how-mail-wakes-an-agent).
+
 ## Cross-harness — the poll-and-act loop lives OUTSIDE the agent
 
 The goal is to make **different** coding agents (Claude, Codex, Gemini,
@@ -323,13 +326,13 @@ rookery session new --name alpha --bind herdr-workspace:<id>
 
 Then each new pane in that workspace joins `alpha`. A pane that was open before `rookery init` does not join.
 
-Start the postmaster one time, from the Rookery repository:
+You start no postmaster. When mail that needs action arrives, the gate wakes the idle recipient. The sweep of the session catches a lost event. See [How mail wakes an agent](#how-mail-wakes-an-agent). A session from `rookery session new` has no sweep until you start one:
 
 ```bash
-python3 postmaster.py
+rookery sweep --session alpha --root ~/.rookery/projects/<project>
 ```
 
-Without `--nodes`, it runs only the outbox scan and the idle wake.
+`python3 postmaster.py` without `--nodes` still works. It runs the outbox scan and the idle wake for every open session, once every 300 seconds.
 
 Note: do not run `rookery turn` for a turn in a Claude Code session that has the Rookery hooks installed. The Stop hook already sends the block of that turn, so `rookery turn` sends it a second time. Use `rookery turn` for agents that have no hooks, such as Codex.
 
@@ -356,9 +359,12 @@ To send one mail now, without a turn, run `rookery send TO "SAY" --task TASK --k
 
 Run `rookery up team.json`. Add `--no-launch` to build everything and start no agent. Add `--json` for one JSON object.
 
+Add `--session NAME` to name the session. The flag wins over `session` in the team file. With no name from either, `rookery up` makes a name of three words and prints it: `Session: NAME (name made)`. Run `rookery up team.json --session NAME` again to resume the session. It keeps the mail, the identities and the worktrees. It starts only the panes that are not alive, and no second sweep. `"screener": true` in the team file turns screening on for the session.
+
 What it builds:
 
 - A session, and an identity for each agent.
+- One sweep process for the session. It catches mail that got no wake. See [How mail wakes an agent](#how-mail-wakes-an-agent). The output has a `Sweep:` line: `started`, `running`, `off` or `failed`.
 - A folder for each agent, with generated files: `CLAUDE.md`, `AGENTS.md`, `CONTEXT.md`, and a persona and a scope card in `_config/`.
 - A git worktree for each writer, in `wt/<session>/<name>/<repo>/`. A reader has no worktree. A reader keeps the host project rules.
 - A port map for each agent, in `ROOKERY_PORTS`.
@@ -368,7 +374,7 @@ Rookery starts each pane with the steps in the configuration (`launch` and `aliv
 
 A step can use `{$NAME}`: Rookery fills it from the environment of the shell that runs `rookery up`. Put such a token in a list to make it optional. Rookery drops the whole list when the variable is not set. The `herdr-pane` default uses `["--workspace", "{$HERDR_WORKSPACE_ID}"]`, so herdr opens the tabs in the workspace where you ran `rookery up`. Outside herdr, Rookery drops the flag. If your `~/.rookery/config.json` has its own `launch` block, add this list to it yourself.
 
-First start: Claude Code shows a trust dialog in each new folder. A reader also shows an import dialog. You answer both one time in each new pane. Rookery does not edit `~/.claude.json`. The postmaster does not wake an agent until its first turn has started.
+First start: Claude Code shows a trust dialog in each new folder. A reader also shows an import dialog. You answer both one time in each new pane. Rookery does not edit `~/.claude.json`. Rookery does not wake an agent until its first turn has started.
 
 Mail: agents that `rookery up` starts use the CLI only: `rookery send`, `rookery inbox` and `rookery ack`.
 
@@ -397,16 +403,46 @@ Folder layout of the root:
 ├── wt/<session>/<name>/<repo>/   the worktree of a writer
 ├── postmaster/
 │   ├── outbox/                mail the postmaster takes
-│   └── pushed/                mail already pushed
+│   ├── pushed/                mail already pushed
+│   ├── backoff/               one file for each agent whose wake failed
+│   └── lock/                  the wake, sweep and screening locks
 └── logs/                      gate.jsonl and the other logs
 ```
 
+## How mail wakes an agent
+
+An agent sees new mail at a turn boundary. An idle agent sees nothing until something starts a turn. Rookery starts that turn with one notice in the pane of the agent: a line that starts with `[rookery] new mail for`. No process polls for it.
+
+**Events.** Each step that makes a mail `pending` starts one detached `rookery wake --session S --agent A` for the recipient. The steps: the gate when it stores a mail, a release, an unquarantine, a requeue from the dead-letter queue, and a bounce. The screener is one more step, when it delivers a held mail. The send returns before the wake runs. A wake that fails never changes the send. The Stop hook starts the same wake when a turn ends with mail that needs action and no notice announced it.
+
+The wake applies the rules of the postmaster. These are the push gate, the record of announced mail in `postmaster/pushed/`, the idle check, `busy-stale`, the herdr probe and the back-off. Only one wake runs for an agent at a time. It holds `postmaster/lock/AGENT_ID.lock`, and a second wake logs `wake-busy` and exits. After a push the holder reads the pending mail again, at most 3 rounds. Each wake writes one log line with its outcome. The outcomes: `pushed`, `nothing`, `busy`, `wake-busy`, `backoff-wait`, `wake-failed`, `no-idle-state`, `no-wake-binding`, `no-root`, `lock-failed` and `unsafe-name`. The back-off record is `postmaster/backoff/AGENT_ID.json`, so it lasts between wakes.
+
+The wake finds the project root in the `rookery-root` binding of the session, else in `ROOKERY_ROOT`, else in `--root`. With none, it logs `no-root`, and the sweep covers the mail.
+
+**The sweep.** An event can get lost: a person kills the wake, the machine sleeps, or the database is busy. One sweep for each session catches the mail. `rookery up` starts it. You can start it by hand: `rookery sweep --session S [--root R]`, or `postmaster.py --session S`. Each round it scans the outbox drop-box and wakes the agents of the session that have mail with no notice. It also runs one screening pass when screening is on, or when a mail waits as `held` for screening. Then it sleeps 300 seconds. Set `sweep_s` in `~/.rookery/config.json` for a longer interval. The sweep raises a smaller value to 300 with one `NOTE:` line. The sweep reads only the database and calls no model. It ends when the session ends, when a new database file replaces the old one, or when the project root is gone. One sweep runs for each session. A second one logs `sweep-busy` and exits.
+
+**The remote check.** The mailroom runs on one machine. An agent on another machine has `ROOKERY_URL`, `ROOKERY_TOKEN` and `ROOKERY_NODE` from `rookery join`. It pulls. `rookery check` calls `GET /inbox?node=NODE` with the Bearer token, applies the push rules, and types one notice into its own pane through the `wake` config. It records the announced IDs in `~/.rookery/remote/NODE.json`. The call refuses a redirect, reads at most 1 MB and waits at most 20 seconds. A failed pane command sets a back-off from 30 to 600 seconds. `rookery check --follow` starts one follower for the node: 5 checks per trigger, 300 seconds apart. It stops at the first notice. A trigger while it sleeps restarts the count and starts one check at once. The triggers are the Stop hook (on a machine with `ROOKERY_URL`) and a successful send through the MCP tool. An agent with no hooks and no MCP tool has no trigger. A remote check calls no model.
+
+**Screening.** Screening is off by default (`screener.enabled: false`). A shadow `t1` check calls the model, so an update must not start model calls that nobody chose. Set `screener.enabled` to `true` in `~/.rookery/config.json` for every session, or `"screener": true` in the team file for one session. Then the gate starts one `rookery screen run --session S --once` after it stores a mail, under `postmaster/lock/screen-SESSION_ID.lock`. The sweep runs one pass each round. A mail that a live check holds for screening always gets the pass.
+
+**Kill switch.** `ROOKERY_WAKE=off` in the environment stops every event spawn. No wake, no screening pass, no sweep from `rookery up`, and no remote check from a hook or the MCP tool start. `rookery wake`, `rookery sweep` and `rookery check` still run when you call them.
+
+**Cost.** No wake path calls a model. The number of wakes grows with the mail, not with the number of agents. An idle hour costs 12 sweep rounds and 0 model calls.
+
+**Operation.**
+
+- After a deploy, restart `rookery-mcp.service` and `rookery-mailroom.service`. Until they restart, a send through them starts no wake.
+- A sweep does not survive a reboot, or a logout that kills it. Run `rookery up TEAM_FILE --session NAME` again. It resumes the session and starts the sweep.
+- One sleeping sweep process runs for each open session, until `rookery session end` ends the session.
+- A session that `rookery init` or `rookery session new` made gets event wakes: the spawning side passes the project root. No sweep starts for it unless you run `rookery sweep --session NAME --root ROOT`.
+- The Stop hook starts the remote check only when `ROOKERY_URL` and `ROOKERY_NODE` are in the shell environment of the agent. The `env` block of the MCP server alone is not enough. A remote agent that only uses the MCP tool gets the trigger on each successful send.
+
 ## The screener: rookery screen
 
-The screener checks mail before an agent reads it. It is off the delivery path. You start it, as you start the postmaster:
+The screener checks mail before an agent reads it. It is off the delivery path. Screening is off by default (`screener.enabled: false`). Set `screener.enabled` to `true` in `~/.rookery/config.json`, or `"screener": true` in the team file. Then the gate starts one pass when mail arrives, and the sweep of the session runs one each round. See [How mail wakes an agent](#how-mail-wakes-an-agent). You can also run it by hand:
 
 ```bash
-rookery screen run            # loop; add --once for one pass
+rookery screen run            # loop, one pass every 300 seconds; add --once for one pass
 rookery screen status --json  # backend, model host, backlog
 ```
 
@@ -451,6 +487,7 @@ In live mode a gate anomaly escalates the mail to a person.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `enabled` | `false` | Screening on for every session. Off: no pass starts when mail arrives. A shadow `t1` check calls the model, so you choose this. |
 | `checks` | all `shadow` | Mode of each check. |
 | `bands.t1` | `null` | `{"accept": N, "review": N}`, numbers from 0 to 1. |
 | `base_url`, `model` | the model host, `tev1:4b` | The `t1` model. |
@@ -466,7 +503,7 @@ In live mode a gate anomaly escalates the mail to a person.
 
 **Bad config.** If `config.json` is invalid or unreadable, the T0 checks and the screening hold turn off. The gate logs it. The screener escalates mail that waits for screening.
 
-**Session names.** `rookery session new` with no name makes a name of three words, such as `calm-amber-heron`.
+**Session names.** `rookery session new` and `rookery up` with no name make a name of three words, such as `calm-amber-heron`.
 
 ## Federation — multiple mailrooms (`node@mailroom`)
 
@@ -585,7 +622,9 @@ is the dispatcher; see QUICKSTART Scenario 4 for the wiring.
 | `rookery.py` | shared lib: connect/init, nodes, mail, credentials |
 | `node_runner.py` | the own-loop node (engines: mock / `claude -p` / `codex exec` / `gemini -p`; `--lifecycle`, `--allowed-tools`) |
 | `sdk_node.py` | warm long-lived Claude session (Agent SDK) — `engine=claude-sdk`, kills cold start |
-| `postmaster.py` | mode B: central watcher; per-node engines (incl. `claude-sdk`), `--persistent`, `--max-warm` |
+| `postmaster.py` | the wake rules (`wake_one`) and the session sweep (`rookery sweep`); legacy mode B with `--nodes`: per-node engines (incl. `claude-sdk`), `--persistent`, `--max-warm` |
+| `rookery_wake.py` | `rookery wake`: one wake for one agent under a lock; the detached spawn and the event hook `after_pending` |
+| `rookery_remote.py` | `rookery check`: the remote check of the mailroom and its bounded follower |
 | `send_mail.py` | legacy: drop a message into the mailroom (use `rookery send`) |
 | `mesh_approve.py` | human side of the CIBA credential gate |
 | `security.py` | **swappable** SecurityPolicy: auth · authz · credential mint/resolve · inbound message inspection |

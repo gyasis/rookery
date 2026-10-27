@@ -384,7 +384,7 @@ To join a peer mailroom, use `rookery join URL`. This was `rookery up URL` in ea
 
 The screener starts in shadow mode. It writes decisions and changes no mail.
 
-1. Run `rookery screen run`. Add `--once` for one pass. The first run skips mail older than one day (`screener.max_age_s`).
+1. Screening is off by default. Set `screener.enabled` to `true` in `~/.rookery/config.json`, or `"screener": true` in the team file. Then the gate starts one pass when mail arrives, and the sweep of the session runs one each round. You can also run `rookery screen run` by hand: a loop with one pass every 300 seconds. Add `--once` for one pass. The first run skips mail older than one day (`screener.max_age_s`).
 2. Run `rookery screen status` to see the backend, the model host and the backlog.
 3. Run `rookery screen review` and `rookery peek`. Then run `rookery screen mark DECISION_ID right` or `wrong` for each decision.
 4. Run `rookery screen report` to see the agreement.

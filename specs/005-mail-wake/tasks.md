@@ -307,7 +307,7 @@ FR-006, FR-012, FR-014).
 
 ## Phase 10: Polish and cross-cutting concerns
 
-- [ ] T022 [P] (Fable, in the end phase; not a Sonnet wave) Files: `README.md`, `CHANGELOG.md`, `skills/rookery/SKILL.md`. Document these under `Unreleased`.
+- [x] T022 [P] (Fable, in the end phase; not a Sonnet wave) Files: `README.md`, `CHANGELOG.md`, `skills/rookery/SKILL.md`. Document these under `Unreleased`.
   The event wake, `rookery wake`, `rookery check`, the session sweep and its 300 s floor. `screener.enabled` (off by
   default, and why). `rookery up --session` and the three-word name. The outcomes of FR-014. The limit of the
   remote check (hooks or MCP only). The `ROOKERY_WAKE=off` switch. Write `test_docs_005.py` first. Each changed file passes ste-lint at 2.0. Skip

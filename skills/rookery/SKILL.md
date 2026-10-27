@@ -48,11 +48,15 @@ The mailroom (`rookery serve` or `mailroom_server.py`) is only for agents on oth
 
 ## Never poll
 
-Do not loop. Do not sleep. Do not schedule inbox checks.
+Do not loop. Do not sleep. Do not schedule inbox checks. Start nothing by hand.
 
-The postmaster pushes a line that starts with `[rookery] new mail for` into an idle agent when mail needs action. When you see it, read your mail as above.
+When mail that needs action arrives, Rookery types one line that starts with `[rookery] new mail for` into your pane. The same happens when your turn ends with such mail unread. When you see the line, read your mail as above. A sweep catches a lost notice within 300 seconds.
 
 Mail of kind `status`, and most mail of kind `answer`, waits for your next turn. Nothing is lost.
+
+`rookery wake --session S --agent A` runs one wake by hand. You do not need it.
+
+On a machine that joined a mailroom (it has `ROOKERY_URL`), the Stop hook and the MCP `send` tool run `rookery check` for you. It checks the mailroom and types the notice into your pane. Run `rookery check` yourself only when the user asks.
 
 ## Loop breaker
 
@@ -64,7 +68,7 @@ If a block comes back `loop-held`, stop. Wait for the human.
 
 Use these commands only when the user asks to build or end a team.
 
-- `rookery up TEAM_FILE` builds a team from a JSON file. Add `--no-launch` to start no agent.
+- `rookery up TEAM_FILE [--session NAME]` builds a team from a JSON file. With no session name, it makes one of three words and prints it. Run it again with `--session NAME` to resume the session. It starts the sweep of the session. Add `--no-launch` to start no agent.
 - `rookery join` joins a peer mailroom: `rookery join URL`. It was `rookery up URL` before.
 - `rookery finish NAME --message TEXT` commits and deletes the worktree of a writer, after three confirmations. It never deletes the branch.
 - `rookery gc` lists stale worktree rows. It deletes nothing.
@@ -76,7 +80,7 @@ An agent that `rookery up` starts uses the CLI only for mail: `rookery send`, `r
 
 Use these commands only when the user asks about the screener. The screener checks mail with rules and a small model. Every check starts in `shadow` mode. In shadow mode a check writes a decision and changes no mail.
 
-- `rookery screen run` screens mail that has no decision. Options: `--session S`, `--once`, `--poll N`. Nothing starts it for you. The first run skips mail older than `screener.max_age_s` (one day).
+- `rookery screen run` screens mail that has no decision. Options: `--session S`, `--once`, `--poll N` (default 300). Screening is off by default. With `screener.enabled` true in the config, or `screener: true` in the team file, the gate starts a pass when mail arrives, and the sweep runs one each round. The first run skips mail older than `screener.max_age_s` (one day).
 - `rookery screen status [--session S] [--json]` shows the backend, the model host and the backlog. It counts escalated mail from the inbox. `rookery screen escalated` lists escalated mail and shows no body.
 - `rookery screen review` lists decisions that have no call. `rookery screen mark DECISION_ID right|wrong|LABEL` says if a decision was right.
 - `rookery screen report` and `rookery screen export` show the agreement and write the compared decisions.
@@ -86,7 +90,7 @@ Use these commands only when the user asks about the screener. The screener chec
 
 A live check fails closed. If it cannot decide, the mail goes to a person, and the boss gets a notice. A held ask has a reason: `budget`, `duplicate`, or `screening`. A worker-gate anomaly does not hold the mail. It escalates the mail (status `escalated`). Do not retry a held ask. Wait for the boss.
 
-`rookery session new` with no name makes a name of three words.
+`rookery session new` and `rookery up` with no name make a name of three words.
 
 ## Legacy mesh (pre-0.7)
 
