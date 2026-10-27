@@ -34,7 +34,9 @@ before it builds a path. A back-off file that does not parse counts as no back-o
 | `sweep_s` | `300` | The sweep interval (top level, not under `wake`, whose keys are binding kinds). Rookery raises a value below 300 to 300 and gives one notice. |
 | `wake.*` (pane commands) | existing | Unchanged. The local and the remote wake use them. |
 
-Team file: `screener: true` turns screening on for one session. `session` becomes optional (FR-024).
+Team file: `screener: true` turns screening on for one session. `rookery up` stores it as a session binding of
+kind `screener-enabled` with value `1`, as it stores `rookery-root`. So the schema stays the same. `session`
+becomes optional (FR-024).
 
 ## State of one wake
 

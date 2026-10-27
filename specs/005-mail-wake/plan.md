@@ -85,7 +85,8 @@ specs/005-mail-wake/
 ### Source Code (repository root)
 
 ```text
-rookery_wake.py        # NEW: after_pending(), spawn(), the lock, the recheck, the remote check and follower
+rookery_wake.py        # NEW: after_pending(), spawn(), the lock, the recheck, rookery wake
+rookery_remote.py      # NEW: rookery check and the bounded follower (research R8)
 postmaster.py          # wake_one() split from wake_identities(); type_notice(); --session sweep; 300 s floor
 mail_gate.py           # after commit: after_pending(); screening event when screening is on
 rookery.py             # release(), unquarantine(), requeue_dlq(): after_pending() after commit
@@ -98,16 +99,14 @@ rookery_team.py        # session optional when --session or the default name giv
 rookery_cli.py         # subcommands: wake, check
 screener_config.py     # screener.enabled (default false)
 bootstrap.py           # bundle rookery_wake.py
-test_wake_event.py     # NEW: gate, release, unquarantine and Stop hook events; push gate; spawn never fails a send
-test_wake_lock.py      # NEW: one wake per agent, wake-busy, recheck, crash frees the lock
-test_wake_sweep.py     # NEW: session sweep, 300 s floor, poll-raised, exits on close, sweep-busy
-test_wake_remote.py    # NEW: remote check, follower bound of 5, restart on a new trigger, no double notice
-test_screen_event.py   # NEW: screening event only when on, one pass per session, recheck
-test_up_session.py     # NEW: --session, three-word name, resume, one sweep
+test_wake_*.py         # NEW: core, split, lock, event (gate, release, screener), detached, stop, sweep, cost, remote
+test_screen_event*.py  # NEW: screening event only when on, one pass per session, recheck
+test_up_session.py     # NEW: --session, three-word name, resume
+test_up_sweep.py       # NEW: up starts one sweep
 test_wake.py           # existing: still passes after the split (wake_one)
 ```
 
-**Structure Decision**: one new module, `rookery_wake.py`, holds the event entry and the remote check. Everything
+**Structure Decision**: two new modules. `rookery_wake.py` holds the event entry. `rookery_remote.py` holds the remote check, so that its tasks can run beside the wake tasks. Everything
 else is a small edit at the point where a mail becomes `pending` or where a process starts.
 
 ## Phases for tasks
