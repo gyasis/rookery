@@ -8,12 +8,15 @@ Runs one wake for one identity under the lock (research R4, R5). The event path 
 also run it.
 
 - `SESSION` is a session name or ID. `AGENT` is an identity name or ID in that session.
-- Output: one line, or with `--json` one object: `{"session", "agent_id", "outcome", "mail_id", "rounds"}`.
-  `outcome` is one of `pushed`, `nothing`, `wake-busy`, `wake-failed`, `no-idle-state`, `no-wake-binding`,
-  `no-root`, `busy`.
-- Exit 0 for every outcome except bad input (2), no such session or agent (3) and database busy (4). A wake that
+- Output: one line, or with `--json` one object: `{"session", "agent_id", "outcome", "mail_id", "rounds",
+  "capped"}`. `outcome` is one of `pushed`, `nothing`, `wake-busy`, `lock-failed`, `wake-failed`, `backoff-wait`,
+  `no-idle-state`, `no-wake-binding`, `no-root`, `busy`, `unsafe-name`. `capped` is true when the round limit left
+  mail for the sweep.
+- Exit 0 for every outcome except bad input (2), no such session or agent (3), database busy (4) and any other error
+  (1, one line, no traceback). A wake that
   could not type is not an error of the command: it is the outcome `wake-failed`.
-- The lock holder checks again only after `pushed` or `nothing`, at most 3 rounds.
+- The lock holder checks again after `pushed` or `nothing`. After any other outcome it runs one more round only when
+  newer mail arrived during the round. At most 3 rounds.
 - Writes only `postmaster/pushed/`, `postmaster/backoff/` and the log.
 
 ## `rookery check [--follow] [--json]`

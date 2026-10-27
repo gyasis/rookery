@@ -1,12 +1,14 @@
-"""rookery_wake -- spawn a detached `rookery wake`, take a per-agent lock, find a session's root, read the sweep interval.
+"""rookery_wake -- run one wake under a lock (`rookery wake`), spawn a detached `rookery wake`, take a per-agent lock, find a session's root, read the sweep interval.
 
 Standard library only. The event hooks and the sweep call these helpers (feature 005).
 """
 import fcntl
 import math
 import os
+import sqlite3
 import subprocess
 import sys
+import time
 
 import turn_block
 
@@ -79,3 +81,137 @@ def sweep_interval(config):
     if value < MIN_SWEEP_S:
         return MIN_SWEEP_S, True
     return value, False
+
+
+def _unpushed(conn, root, agent_id):
+    """Ids of the pending mail for agent_id that the push gate accepts and pushed/ does not list."""
+    import postmaster
+    done, last = postmaster._load_pushed(root, agent_id)
+    out = []
+    for r in conn.execute("SELECT id, sender, topic, body FROM inbox WHERE recipient=? "
+                          "AND status='pending' ORDER BY id", (agent_id,)).fetchall():
+        listed = r["id"] in done if done is not None else r["id"] <= last
+        if not listed and postmaster._needs_push(r, agent_id, conn):
+            out.append(r["id"])
+    return out
+
+
+def run_wake(conn, root, config, session_id, agent_id, rounds=3, run=subprocess.run, now=time.time) -> dict:
+    """One wake for one identity under ROOT/postmaster/lock/AGENT_ID.lock (research R4, R5).
+    Takes the lock for each round, calls postmaster.wake_one, releases, then looks again: another round
+    only after `pushed` or `nothing`, only while unpushed mail is there, at most `rounds` rounds.
+    A stop outcome (busy, backoff-wait, wake-failed, ...) still gets one more round when mail newer than the
+    round saw arrived meanwhile: a second wake that found the lock held left that mail to this one.
+    Returns {"session", "agent_id", "outcome", "mail_id", "rounds", "capped"}. `capped` is true when the
+    round limit left pushable mail for the sweep."""
+    import postmaster
+    result = {"session": session_id, "agent_id": agent_id, "outcome": "nothing", "mail_id": None, "rounds": 0,
+              "capped": False}
+    if root is None:
+        turn_block.log_event(None, "postmaster", outcome="no-root", session=session_id, agent_id=agent_id)
+        result["outcome"] = "no-root"
+        return result
+    if not turn_block.is_safe_name(agent_id):
+        result["outcome"] = "unsafe-name"
+        return result
+    lock_path = os.path.join(root, "postmaster", "lock", agent_id + ".lock")
+    cap = max(1, rounds)
+    more = False
+    while result["rounds"] < cap:
+        lock = try_lock(lock_path, log_root=root)
+        if lock is None:
+            if _lock_writable(lock_path):
+                turn_block.log_event(root, "postmaster", outcome="wake-busy", session=session_id, agent_id=agent_id)
+                result["outcome"] = "wake-busy"
+            else:
+                result["outcome"] = "lock-failed"   # try_lock logged the reason; nobody holds the lock
+            more = False
+            break
+        seen = max(_unpushed(conn, root, agent_id), default=0)
+        try:
+            ident = conn.execute(
+                "SELECT i.agent_id, i.name, i.session_id, s.name AS sname FROM identities i "
+                "JOIN rookery_sessions s ON s.session_id=i.session_id "
+                "WHERE i.agent_id=? AND i.session_id=? AND s.state='open'", (agent_id, session_id)).fetchone()
+            if ident is None:
+                result["outcome"] = "nothing"
+                break
+            result["rounds"] += 1
+            result["outcome"] = postmaster.wake_one(conn, root, config, ident, run=run, backoff=None, now=now)
+        finally:
+            lock.close()
+        ids = _unpushed(conn, root, agent_id)
+        more = bool(ids) and (result["outcome"] in ("pushed", "nothing") or max(ids) > seen)
+        if not more:
+            break
+    result["capped"] = more and result["rounds"] >= cap
+    ids = _unpushed(conn, root, agent_id)
+    if ids:
+        result["mail_id"] = ids[-1]
+    else:
+        row = conn.execute("SELECT MAX(id) AS m FROM inbox WHERE recipient=? AND status='pending'",
+                           (agent_id,)).fetchone()
+        result["mail_id"] = row["m"] if row else None
+    return result
+
+
+def _lock_writable(path):
+    """True when the lock file (or its folder, before the file exists) can be written: a None from
+    try_lock then means another holder, not a broken folder."""
+    if os.path.exists(path):
+        return os.access(path, os.W_OK)
+    folder = os.path.dirname(path)
+    return os.path.isdir(folder) and os.access(folder, os.W_OK)
+
+
+EXIT_BAD, EXIT_MISSING, EXIT_BUSY = 2, 3, 4
+
+
+def _fail(msg, code):
+    print(f"rookery: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def cmd_wake(args):
+    import json
+    import rookery
+    import rookery_identity
+    for what, val in (("--session", args.session), ("--agent", args.agent)):
+        if not isinstance(val, str) or not val or not (turn_block.is_safe_name(val)):
+            _fail(f"{what}: {val!r} is not a safe name", EXIT_BAD)
+    conn = None
+    try:
+        conn = rookery.connect(turn_block.db_path())
+        sess = rookery_identity.get_session(conn, args.session)
+        if sess is None:
+            _fail(f"no session {args.session!r}", EXIT_MISSING)
+        ident = rookery_identity.get_identity(conn, args.agent, sess["session_id"])
+        if ident is None:
+            _fail(f"no agent {args.agent!r} in session {args.session!r}", EXIT_MISSING)
+        config = rookery_identity.load_config(persist=False)
+        result = run_wake(conn, resolve_root(conn, sess["session_id"]), config,
+                          sess["session_id"], ident["agent_id"])
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "locked" in msg or "busy" in msg:
+            _fail(f"database busy: {exc}", EXIT_BUSY)
+        _fail(f"database error: {exc}", 1)
+    except SystemExit:
+        raise
+    except Exception as exc:                 # a bad config, a file error: one line, no traceback
+        _fail(f"wake failed: {exc}", 1)
+    finally:
+        if conn is not None:
+            conn.close()
+    if args.json:
+        print(json.dumps(result))
+    else:
+        print(f"wake {ident['name']}: {result['outcome']}")
+
+
+def add_parser(subparsers):
+    p = subparsers.add_parser("wake", help="Push a notice to one idle agent that has new mail.")
+    p.add_argument("--session", required=True, help="Session name or ID.")
+    p.add_argument("--agent", required=True, help="Identity name or ID in that session.")
+    p.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    p.set_defaults(func=cmd_wake)

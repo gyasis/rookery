@@ -25,6 +25,7 @@ import cli_hook
 import cli_init
 import cli_workspace
 import cli_screen
+import rookery_wake
 
 # ---------------------------------------------------------------------------
 # Argument parser
@@ -119,6 +120,9 @@ def build_parser():
     # --- screen ---
     cli_screen.add_parser(sub)
     cli_screen.add_thread_parser(sub)
+
+    # --- wake ---
+    rookery_wake.add_parser(sub)
 
     # --- known-hosts ---
     p_kh = sub.add_parser(

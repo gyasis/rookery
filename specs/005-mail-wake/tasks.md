@@ -117,7 +117,7 @@ FR-006, FR-012, FR-014).
 **Independent test**: store an ask for an idle identity bound to the fake herdr; one push appears in
 `$HERDR_RECORD`; a `status` mail adds none.
 
-- [ ] T005 [US1] Files: `rookery_wake.py`, `rookery_cli.py`, `test_wake_lock.py`. Add `run_wake(conn, root,
+- [x] T005 [US1] Files: `rookery_wake.py`, `rookery_cli.py`, `test_wake_lock.py`. Add `run_wake(conn, root,
   config, session_id, agent_id, rounds=3)`. Take `ROOT/postmaster/lock/AGENT_ID.lock` with `try_lock`. If busy,
   log `wake-busy` and return it. Else call `postmaster.wake_one` for the identity and release the lock. Then read
   the pending mail again. Repeat when mail that `_needs_push` and `pushed/` does not list is there, up to `rounds`. Repeat only after the
@@ -307,7 +307,7 @@ FR-006, FR-012, FR-014).
 
 ## Phase 10: Polish and cross-cutting concerns
 
-- [ ] T022 [P] Files: `README.md`, `CHANGELOG.md`, `skills/rookery/SKILL.md`. Document these under `Unreleased`.
+- [ ] T022 [P] (Fable, in the end phase; not a Sonnet wave) Files: `README.md`, `CHANGELOG.md`, `skills/rookery/SKILL.md`. Document these under `Unreleased`.
   The event wake, `rookery wake`, `rookery check`, the session sweep and its 300 s floor. `screener.enabled` (off by
   default, and why). `rookery up --session` and the three-word name. The outcomes of FR-014. The limit of the
   remote check (hooks or MCP only). The `ROOKERY_WAKE=off` switch. Write `test_docs_005.py` first. Each changed file passes ste-lint at 2.0. Skip
@@ -324,7 +324,9 @@ FR-006, FR-012, FR-014).
 
 These steps have no checkbox, so dev-kid does not schedule them.
 
-- Adversarial audit of the whole branch with Fable, the one Fable use of this spec (user rule 2026-10-27). Wave audits use Sonnet or Opus. Fix every confirmed finding with a test.
+- End phase with Fable, its only use in this spec (user rule 2026-10-27): (1) one adversarial audit of the whole branch;
+  (2) the documentation: Fable carries out T022 and checks, edits and ste-lints every doc the feature touches. Wave work
+  and wave audits use Sonnet or Opus. Fix every confirmed finding with a test.
 - Live test per [quickstart.md](quickstart.md) in a scratch herdr workspace with a scratch database:
   `rookery up --no-launch`, fake panes, no agent, no model. Report SC-001, SC-002, SC-005 and SC-007 as measured.
 - Risk register: add R19 (a wake event lost, or a wake typed twice) in `okf/risks/register.md`, mitigation "lock
