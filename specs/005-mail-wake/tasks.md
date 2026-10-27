@@ -188,7 +188,7 @@ FR-006, FR-012, FR-014).
 **Goal**: FR-007, FR-008, FR-016, FR-017, FR-022.
 **Independent test**: one sweep round with an injected clock wakes an agent whose event was lost.
 
-- [ ] T012 [US3] Files: `postmaster.py`, `rookery_cli.py`, `test_wake_sweep.py`. Add `run_session_sweep(root,
+- [x] T012 [US3] Files: `postmaster.py`, `rookery_cli.py`, `test_wake_sweep.py`. Add `run_session_sweep(root,
   config, session, sleep=time.sleep, now=time.time)` to `postmaster.py`. Expose it as `postmaster.py --session S` and
   as the subcommand `rookery sweep --session S [--root ROOT]` (`rookery_cli.py`). `rookery up` starts the subcommand,
   so that the sweep works from the zipapp. Take

@@ -154,6 +154,9 @@ def run_wake(conn, root, config, session_id, agent_id, rounds=3, run=subprocess.
     if not turn_block.is_safe_name(agent_id):
         result["outcome"] = "unsafe-name"
         return result
+    if not os.path.isdir(root):            # the project folder is gone: recreate nothing under it
+        result["outcome"] = "no-root"
+        return result
     lock_path = os.path.join(root, "postmaster", "lock", agent_id + ".lock")
     cap = max(1, rounds)
     more = False

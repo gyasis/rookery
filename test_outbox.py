@@ -23,7 +23,7 @@ import turn_block as TB
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, "fixtures", "turns")
 ENV_KEYS = ("ROOKERY_DB", "ROOKERY_ROOT", "HOME", "ROOKERY_URL", "ROOKERY_HOLD",
-            "ROOKERY_SESSION", "ROOKERY_NODE")
+            "ROOKERY_SESSION", "ROOKERY_NODE", "ROOKERY_WAKE")
 INTERRUPTED = "interrupted: check the mailroom before you send again"
 
 
@@ -50,6 +50,7 @@ class Base(unittest.TestCase):
         os.environ["HOME"] = self.tmp.name
         os.environ["ROOKERY_DB"] = os.path.join(self.tmp.name, "t.db")
         os.environ["ROOKERY_ROOT"] = self.root
+        os.environ["ROOKERY_WAKE"] = "off"   # no real detached wake child from non-wake tests
         self.conn = TB.open_db()
         self.alpha = RI.new_session(self.conn, name="alpha")
         self.me = RI.new_identity(self.conn, self.alpha["session_id"], "me")

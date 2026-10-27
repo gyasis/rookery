@@ -25,6 +25,7 @@ import cli_hook
 import cli_init
 import cli_workspace
 import cli_screen
+import postmaster
 import rookery_wake
 
 # ---------------------------------------------------------------------------
@@ -123,6 +124,7 @@ def build_parser():
 
     # --- wake ---
     rookery_wake.add_parser(sub)
+    postmaster.add_sweep_parser(sub)
 
     # --- known-hosts ---
     p_kh = sub.add_parser(

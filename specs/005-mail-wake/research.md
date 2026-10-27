@@ -158,6 +158,13 @@ keeps working (FR-017). The v1 node mode (`--nodes`) is legacy and keeps its pol
 warm node processes and calls no model on an empty poll. Tests use an injected clock and sleep function, not a
 small `--poll`.
 
+**The outbox drop-box (found in the wave 8 audit).** The old loop also ran the outbox scan, which turns a
+file that an agent drops in its `outbox/` folder into mail. The scan now runs once in each round of the session
+sweep, and once in each round of the old loop. So the sweep delivers a dropped file, or a block that the Stop hook
+put back, within one sweep interval (300 seconds or less). A faster scan would be a poll, which Principle X and the user rule
+forbid. A scan at turn end gains little, because the scan skips a file younger than 2 seconds. Today no postmaster
+runs on this machine, so a dropped file is never delivered; 300 seconds is an improvement.
+
 **Spec change.** FR-007 said "refuse a smaller interval". Refusing would break an old start command, which
 conflicts with FR-017. FR-007 now says "raise to 300 with a notice".
 

@@ -5,6 +5,7 @@
 
 The fake backend answers (no model); rookery_wake.spawn is replaced by a recorder that reads the DB at spawn time.
 """
+import os
 import unittest.mock as mock
 
 import rookery_wake
@@ -15,6 +16,7 @@ import test_screen_live as L
 class Wake(L.Live):
     def setUp(self):
         super().setUp()
+        os.environ.pop("ROOKERY_WAKE", None)   # Live turns the wake off; this class tests it
         self.spawned = []
 
         def rec(args, log_root=None):

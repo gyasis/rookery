@@ -17,6 +17,7 @@ from test_gate import GateBase
 class GateWake(GateBase):
     def setUp(self):
         super().setUp()
+        os.environ.pop("ROOKERY_WAKE", None)   # GateBase turns the wake off; this class tests it
         self.calls = []
         self.boom = False
         self._spawn = W.spawn

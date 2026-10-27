@@ -28,6 +28,7 @@ import mail_gate
 import plugins
 import rookery as R
 import rookery_identity
+import rookery_wake
 import turn_block
 
 _MENTION = re.compile(r"@([A-Za-z0-9_-]+)")
@@ -341,7 +342,7 @@ def wake_one(conn, root, config, ident, run=subprocess.run, skip_logged=None, ba
 
 
 def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, backoff=None,
-                    now=time.time, nopush=None, probe_state=None):
+                    now=time.time, nopush=None, probe_state=None, session_id=None):
     """Push a notice into each idle identity (open session) with pending mail not yet announced
     in <root>/postmaster/pushed/<agent_id>.json (D10, FR-018, FR-028). The file holds the pending
     ids already announced, so mail released from held/quarantined (an older id) is pushed too.
@@ -351,7 +352,8 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
     `wake-failed` is logged once per (agent, newest new id, error) and that agent is not retried
     for 30 s, doubling to 600 s (backoff: a dict kept by the caller, else a file per agent).
     no-idle-state / no-wake-binding are logged once per (agent, newest new mail id) via
-    skip_logged. Returns the number of identities pushed."""
+    skip_logged. session_id (optional) limits the step to the identities of that session.
+    Returns the number of identities pushed."""
     skip_logged = {} if skip_logged is None else skip_logged
     probe_state = {} if probe_state is None else probe_state   # busy streaks + herdr listing cache
     nopush = {} if nopush is None else nopush    # agent_id -> ids judged "no push"; kept in memory
@@ -359,7 +361,8 @@ def wake_identities(conn, root, config, run=subprocess.run, skip_logged=None, ba
     ids = conn.execute(
         "SELECT i.agent_id, i.name, i.session_id, s.name AS sname FROM identities i "
         "JOIN rookery_sessions s ON s.session_id=i.session_id WHERE s.state='open' "
-        "ORDER BY i.created_at, i.rowid").fetchall()
+        + ("" if session_id is None else "AND i.session_id=? ")
+        + "ORDER BY i.created_at, i.rowid", () if session_id is None else (session_id,)).fetchall()
     for ident in ids:
         if wake_one(conn, root, config, ident, run, skip_logged, backoff, now, nopush,
                     probe_state) == "pushed":
@@ -514,6 +517,110 @@ def run_identities_only(root, poll):
     finally:
         wake_conn.close()
         log("offline")
+
+
+POLL_MIN = 300      # feature 005: a periodic check runs at most every 5 minutes
+
+
+def _identity_poll(given):
+    """(seconds, raised) for the identities-only mode. None gives 300; below 300 is raised to 300."""
+    if given is None:
+        return POLL_MIN, False
+    if given < POLL_MIN:
+        return POLL_MIN, True
+    return given, False
+
+
+def _note_poll_raised(root, was):
+    sys.stderr.write(f"NOTE: --poll raised to {POLL_MIN} s (feature 005: a periodic check runs at "
+                     "most every 5 minutes)\n")
+    try:
+        turn_block.log_event(root, "postmaster", outcome="poll-raised", reason=f"poll {was} raised to {POLL_MIN}")
+    except Exception:
+        pass
+
+
+def run_session_sweep(root, config, session, sleep=time.sleep, now=time.time, rounds=None):
+    """Periodic safety net for ONE session (feature 005, R7): wake the identities of that session
+    that have mail the event wake missed, then sleep sweep_interval. Returns 0, or 3 when the
+    session does not exist. One sweep per session (a lock file); a second one logs sweep-busy."""
+    conn = turn_block.open_db()
+    lock = None
+    try:
+        sess = rookery_identity.get_session(conn, session)
+        if sess is None:
+            sys.stderr.write(f"rookery: no session {session!r}\n")
+            return 3
+        sid = sess["session_id"]
+        lock = rookery_wake.try_lock(os.path.join(root, "postmaster", "lock", f"sweep-{sid}.lock"),
+                                     log_root=root)
+        if lock is None:
+            turn_block.log_event(root, "postmaster", outcome="sweep-busy", session=sess["name"])
+            return 0
+        if rounds is None and os.environ.get("ROOKERY_SWEEP_ROUNDS"):
+            try:
+                rounds = int(os.environ["ROOKERY_SWEEP_ROUNDS"])
+            except ValueError:
+                rounds = None
+        skip_logged, nopush, probe_state = {}, {}, {}
+        done, noted = 0, False
+        while True:
+            row = conn.execute("SELECT state FROM rookery_sessions WHERE session_id=?", (sid,)).fetchone()
+            if row is None or row[0] != "open":
+                turn_block.log_event(root, "postmaster", outcome="sweep-end", session=sess["name"])
+                return 0
+            cfg = config
+            try:
+                cfg = rookery_identity.load_config(persist=False)
+            except Exception:
+                pass                      # keep the last good config
+            interval, raised = rookery_wake.sweep_interval(cfg)
+            if raised and not noted:
+                noted = True
+                _note_poll_raised(root, cfg.get("sweep_s") if isinstance(cfg, dict) else None)
+            try:                          # the outbox drop-box rides the sweep (a root-wide scan lock)
+                turn_block.scan_outbox(conn, root)
+            except Exception as exc:
+                turn_block.log_event(root, "postmaster", outcome="outbox-error", reason=str(exc))
+            try:
+                wake_identities(conn, root, cfg, skip_logged=skip_logged, backoff=None,
+                                nopush=nopush, probe_state=probe_state, session_id=sid)
+            except Exception as exc:      # never kill the loop; retried next round
+                turn_block.log_event(root, "postmaster", outcome="wake-step-error", reason=str(exc))
+            done += 1
+            if rounds is not None and done >= rounds:
+                return 0
+            sleep(interval)
+    except KeyboardInterrupt:              # SIGTERM in main() raises this: a clean stop, no traceback
+        return 0
+    finally:
+        if lock is not None:
+            lock.close()
+        conn.close()
+
+
+def cmd_sweep(args):
+    conn = turn_block.open_db()
+    try:
+        sess = rookery_identity.get_session(conn, args.session)
+        root = args.root or (rookery_wake.resolve_root(conn, sess["session_id"]) if sess else None)
+    finally:
+        conn.close()
+    if sess is None:
+        sys.stderr.write(f"rookery: no session {args.session!r}\n")
+        return 3
+    if not root:
+        sys.stderr.write("rookery: no project root (pass --root or set ROOKERY_ROOT)\n")
+        return 2
+    return run_session_sweep(os.path.abspath(root), rookery_identity.load_config(persist=False),
+                             args.session)
+
+
+def add_sweep_parser(subparsers):
+    p = subparsers.add_parser("sweep", help="Periodic safety-net wake for one session.")
+    p.add_argument("--session", required=True, help="Session name or ID.")
+    p.add_argument("--root", default=None, help="Project root (default: the session's rookery-root).")
+    p.set_defaults(func=lambda a: sys.exit(cmd_sweep(a)))
 
 
 def _grant_mail(conn, request_row):
@@ -735,8 +842,29 @@ def main():
                     help="project root for the identity wake step (default: ROOKERY_ROOT, else "
                          "--project, else the current folder name)")
     ap.add_argument("--project", default=None, help="project name (root = ~/.rookery/projects/NAME)")
-    ap.add_argument("--poll", type=float, default=0.5)
+    ap.add_argument("--poll", type=float, default=None,
+                    help="seconds between loops (default 0.5 with --nodes; 300 otherwise, never below 300)")
+    ap.add_argument("--session", default=None,
+                    help="run the periodic sweep for this one session (name or ID)")
     a = ap.parse_args()
+    if a.session:
+        conn = turn_block.open_db()
+        try:
+            sess = rookery_identity.get_session(conn, a.session)
+            root = a.root or (rookery_wake.resolve_root(conn, sess["session_id"]) if sess else None)
+        finally:
+            conn.close()
+        if sess is None:
+            sys.stderr.write(f"postmaster: no session {a.session!r}\n")
+            sys.exit(3)
+        if not root:
+            try:
+                root = turn_block.project_root(a.project or os.path.basename(os.getcwd()))
+            except ValueError:
+                sys.stderr.write("postmaster: no resolvable project root; pass --root\n")
+                sys.exit(2)
+        sys.exit(run_session_sweep(os.path.abspath(root),
+                                   rookery_identity.load_config(persist=False), a.session))
     node_engine = {}
     for entry in a.nodes.split(","):
         entry = entry.strip()
@@ -757,7 +885,13 @@ def main():
         sys.stderr.write("postmaster: no --nodes and no resolvable project root (set ROOKERY_ROOT, "
                          "or pass --root/--project); nothing to do, exiting.\n")
         sys.exit(2)
-    run(node_engine, persistent_set, a.max_warm, a.idle_timeout, a.poll,
+    if node_engine:
+        poll = 0.5 if a.poll is None else a.poll
+    else:
+        poll, raised = _identity_poll(a.poll)
+        if raised:
+            _note_poll_raised(root, a.poll)
+    run(node_engine, persistent_set, a.max_warm, a.idle_timeout, poll,
         allowed_tools=a.allowed_tools, model=a.model, mcp=a.mcp,
         notify_events=a.notify_events, root=root)
 
