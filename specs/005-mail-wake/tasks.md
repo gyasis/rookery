@@ -313,7 +313,7 @@ FR-006, FR-012, FR-014).
   remote check (hooks or MCP only). The `ROOKERY_WAKE=off` switch. Write `test_docs_005.py` first. Each changed file passes ste-lint at 2.0. Skip
   with a reason when `ste-lint` is missing. Each file names `rookery wake`, `rookery check` and `screener.enabled`.
   Verify: `python3 -m unittest test_docs_005`
-- [ ] T023 Files: `test_wake_full.py`. Run the whole suite. Run a compile test under Python 3.10:
+- [x] T023 Files: `test_wake_full.py`. Run the whole suite. Run a compile test under Python 3.10:
   `/usr/bin/python3 -m py_compile` on every changed module. Build the zipapp. Run `python3 ARCHIVE wake --help`
   and `python3 ARCHIVE check --help` from it. The test file holds the zipapp test. Needs T001 to T022 first.
   Verify: `python3 -m unittest discover -p 'test_*.py' && /usr/bin/python3 -m py_compile rookery_wake.py rookery_remote.py postmaster.py mail_gate.py rookery.py screener.py cli_screen.py cli_hook.py rookery_mcp.py cli_workspace.py rookery_team.py rookery_cli.py screener_config.py`
