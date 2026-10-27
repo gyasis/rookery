@@ -163,6 +163,13 @@ class WakeCliTest(WakeBase):
     def test_unknown_agent(self):
         self.assertEqual(self.cli("--session", "alpha", "--agent", "nobody").returncode, 3)
 
+    def test_ids_as_the_event_path_passes_them(self):
+        # after_pending spawns `wake --session <session_id> --agent <agent_id>`
+        self.mail()
+        p = self.cli("--session", self.sid, "--agent", self.lc["agent_id"], "--json")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(p.stdout)["outcome"], "pushed")
+
     def test_bad_config_is_one_line_exit_1(self):
         os.makedirs(os.path.join(os.environ["HOME"], ".rookery"), exist_ok=True)
         with open(os.path.join(os.environ["HOME"], ".rookery", "config.json"), "w") as fh:

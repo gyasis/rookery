@@ -129,7 +129,7 @@ FR-006, FR-012, FR-014).
   stand-in that stores a mail during the first push. That mail gets a second push in round 2. The loop stops at 3
   rounds. After `wake-failed`, no second round runs and the log has one `wake-failed` line. The CLI prints the JSON fields and the exit codes. Needs T002, T004 first. (R4, R5)
   Verify: `python3 -m unittest test_wake_lock test_wake_core test_wake_split test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate test_gate_log test_held_quarantine test_escalated test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T006 [US1] Files: `rookery_wake.py`, `test_wake_event.py`. Add `after_pending(conn, msg_ids)`. For each ID,
+- [x] T006 [US1] Files: `rookery_wake.py`, `test_wake_event.py`. Add `after_pending(conn, msg_ids)`. For each ID,
   read the row. Skip rows that are not `pending`, are in `legacy`, are in a session that is not `open`, are a
   self-send, or that `postmaster._needs_push` rejects. Group by recipient. Call `spawn(["wake", "--session", sid,
   "--agent", aid])` once per recipient. Never raise: catch everything and log `wake-spawn-failed` with the error.

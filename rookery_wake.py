@@ -96,6 +96,41 @@ def _unpushed(conn, root, agent_id):
     return out
 
 
+def after_pending(conn, msg_ids, log_root=None) -> int:
+    """Spawn one detached `rookery wake` per (session, recipient) that has a pending mail in msg_ids
+    that the push gate accepts. Skips a missing row, a non-pending one, `legacy` or no session, a session
+    that is not open, a self-send and a mail that _needs_push rejects. Never raises: a failure logs one
+    `wake-spawn-failed` line. Returns the number of wakes spawned."""
+    try:
+        import postmaster
+        groups = {}
+        for mid in msg_ids:
+            row = conn.execute("SELECT id, sender, recipient, topic, body, status, session_id FROM inbox "
+                               "WHERE id=?", (mid,)).fetchone()
+            if row is None or row["status"] != "pending" or row["sender"] == row["recipient"]:
+                continue
+            sid = row["session_id"]
+            if not sid or sid == "legacy":
+                continue
+            sess = conn.execute("SELECT state FROM rookery_sessions WHERE session_id=?", (sid,)).fetchone()
+            if sess is None or sess["state"] != "open":
+                continue
+            if not postmaster._needs_push(row, row["recipient"], conn):
+                continue
+            groups[(sid, row["recipient"])] = True
+        spawned = 0
+        for sid, agent in groups:
+            if spawn(["wake", "--session", sid, "--agent", agent], log_root=log_root):
+                spawned += 1
+        return spawned
+    except Exception as exc:
+        try:
+            turn_block.log_event(log_root, "postmaster", outcome="wake-spawn-failed", reason=str(exc))
+        except Exception:
+            pass   # logging must never raise
+        return 0
+
+
 def run_wake(conn, root, config, session_id, agent_id, rounds=3, run=subprocess.run, now=time.time) -> dict:
     """One wake for one identity under ROOT/postmaster/lock/AGENT_ID.lock (research R4, R5).
     Takes the lock for each round, calls postmaster.wake_one, releases, then looks again: another round
