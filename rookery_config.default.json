@@ -144,6 +144,7 @@
   ]
  },
  "screener": {
+  "enabled": false,
   "checks": {
    "injection": "shadow",
    "duplicate": "shadow",

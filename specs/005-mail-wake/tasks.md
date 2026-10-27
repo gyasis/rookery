@@ -56,14 +56,14 @@ code. No task leaves a failing test.
 
 **Purpose**: the config keys and the bundle entry that later tasks read.
 
-- [ ] T001 [P] Files: `screener_config.py`, `test_screener_enabled.py`. Add `enabled` (default `False`) to the
+- [x] T001 [P] Files: `screener_config.py`, `test_screener_enabled.py`. Add `enabled` (default `False`) to the
   defaults of the `screener` block. Add `screening_on(conn, config, session_id)`. It returns true when
   `screener.enabled` is true. It also returns true when the session has a binding of kind `screener-enabled` with
   value `1` (owner type `session`). Write the test first. No config gives false. `enabled: true` gives true. The
   session binding gives true for that session only. `check()` refuses a value that is not a bool in config, like
   the other keys. (R6)
   Verify: `python3 -m unittest test_screener_enabled test_screen_config test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate test_gate_log test_held_quarantine test_escalated test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T002 [P] Files: `rookery_wake.py`, `test_wake_core.py`. Create `rookery_wake.py` with these functions.
+- [x] T002 [P] Files: `rookery_wake.py`, `test_wake_core.py`. Create `rookery_wake.py` with these functions.
   `program_argv()` names the folder or zip archive that holds `rookery_cli.py`. It returns `[sys.executable,
   "<dir>/rookery_cli.py"]` or `[sys.executable, "<archive>"]`. `spawn(args, log_root=None)` runs `subprocess.Popen`
   of `program_argv() + args` with `start_new_session=True`, `stdin/stdout/stderr=DEVNULL` and `close_fds=True`. It
@@ -81,7 +81,7 @@ code. No task leaves a failing test.
   child process that holds the lock frees it when it dies. Test `resolve_root` in all three cases. Test
   `sweep_interval` for 0.5, 300 and 600. (R2, R3, R4, R7)
   Verify: `python3 -m unittest test_wake_core test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate test_gate_log test_held_quarantine test_escalated test_screen_run test_screen_cli test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T003 [P] Files: `bootstrap.py`, `rookery_remote.py`. Create `rookery_remote.py` with only its docstring
+- [x] T003 [P] Files: `bootstrap.py`, `rookery_remote.py`. Create `rookery_remote.py` with only its docstring
   (the remote check, research R8; T019 fills it). Add `postmaster.py`, `rookery_wake.py` and `rookery_remote.py`
   to `_PY_MODULES` after `cli_screen.py`. The installed zipapp needs `postmaster.py`, because `rookery wake` and
   `rookery sweep` import `postmaster.wake_one`. All modules that `postmaster.py` imports at the top are already in the
@@ -324,7 +324,7 @@ FR-006, FR-012, FR-014).
 
 These steps have no checkbox, so dev-kid does not schedule them.
 
-- Adversarial audit of the whole branch with Opus hunters (user rule 2026-10-27: no Fable). Fix every confirmed finding with a test.
+- Adversarial audit of the whole branch with Fable, the one Fable use of this spec (user rule 2026-10-27). Wave audits use Sonnet or Opus. Fix every confirmed finding with a test.
 - Live test per [quickstart.md](quickstart.md) in a scratch herdr workspace with a scratch database:
   `rookery up --no-launch`, fake panes, no agent, no model. Report SC-001, SC-002, SC-005 and SC-007 as measured.
 - Risk register: add R19 (a wake event lost, or a wake typed twice) in `okf/risks/register.md`, mitigation "lock

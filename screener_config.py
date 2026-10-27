@@ -18,6 +18,7 @@ MODES = ("shadow", "live", "off")
 REVIEW_MODES = ("pre", "post")
 
 DEFAULTS = {
+    "enabled": False,
     "checks": {name: "shadow" for name in CHECKS},
     "bands": {"t1": None},
     "base_url": "http://192.168.0.159:8799/llm/ollama",
@@ -86,6 +87,8 @@ def _obj(value, key):
 
 def check(cfg) -> None:
     """Raise ValueError that names the key when a value is not valid."""
+    if not isinstance(cfg.get("enabled", False), bool):
+        raise ValueError(f"screener.enabled: must be true or false, got {cfg['enabled']!r}")
     for key in ("checks", "bands", "t2", "hunch", "review_mode"):
         _obj(cfg.get(key, {}), f"screener.{key}")
     checks = cfg.get("checks", {})
@@ -143,6 +146,23 @@ def check(cfg) -> None:
     _obj(agents, "screener.review_mode.agents")
     for agent, mode in agents.items():
         _mode(mode, f"screener.review_mode.agents.{agent}", REVIEW_MODES)
+
+
+def screening_on(conn, config, session_id) -> bool:
+    """True when screening is on for this session: screener.enabled is true, or the session holds a
+    `screener-enabled` binding with value 1. A bad config counts as off; this never raises on it."""
+    if isinstance(config, dict) and "screener" in config:
+        block = config["screener"]                   # the full config
+    elif isinstance(config, dict) and "checks" in config:
+        block = config                               # the screener block (it always has checks)
+    else:
+        block = None                                 # anything else counts as off
+    if isinstance(block, dict) and block.get("enabled") is True:
+        return True
+    row = conn.execute(
+        "SELECT 1 FROM bindings WHERE session_id=? AND owner_type='session' AND owner_id=? "
+        "AND kind='screener-enabled' AND value='1'", (session_id, session_id)).fetchone()
+    return row is not None
 
 
 def set_mode(name, mode) -> None:
