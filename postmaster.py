@@ -550,7 +550,9 @@ def _sweep_screen(conn, root, cfg, sid):
     lock = None
     try:
         import screener_config
-        if not screener_config.screening_on(conn, cfg, sid):
+        held = conn.execute("SELECT 1 FROM inbox WHERE session_id=? AND status='held' AND reason='screening' "
+                            "LIMIT 1", (sid,)).fetchone()   # held for screening: t1 is live, so it must be screened
+        if held is None and not screener_config.screening_on(conn, cfg, sid):
             return
         lock = rookery_wake.try_lock(os.path.join(root, "postmaster", "lock", f"screen-{sid}.lock"),
                                      log_root=root)

@@ -222,7 +222,7 @@ FR-006, FR-012, FR-014).
   decides the mail. A held lock gives `screen-busy`. A mail stored during the pass gets a decision in round 2. The
   loop stops at 3 rounds. Needs T002 first. (R6)
   Verify: `python3 -m unittest test_screen_event test_screen_cli test_screen_run test_turn_block test_send test_hooks test_outbox test_wake test_identity test_gate test_gate_log test_held_quarantine test_escalated test_up_build test_up_idempotent test_up_launch test_team_file test_mcp_gate test_mailroom_gate`
-- [ ] T015 [US4] Files: `mail_gate.py`, `test_screen_event_gate.py`. After the store in `_submit`, call
+- [x] T015 [US4] Files: `mail_gate.py`, `test_screen_event_gate.py`. After the store in `_submit`, call
   `rookery_wake.spawn(["screen", "run", "--session", sid, "--once"])`. Do this for every stored
   mail when `screener_config.screening_on(conn, config, sid)` is true. `screener.run` picks the mail with no decision
   by itself. With screening off, spawn

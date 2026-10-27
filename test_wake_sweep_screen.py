@@ -74,6 +74,22 @@ class TestSweepScreen(SweepScreen):
         self.assertEqual(self.sweep(1), 0)
         self.assertEqual(self.model_calls(), 1)
 
+    def test_held_for_screening_is_screened_even_when_not_enabled(self):
+        import rookery as R
+        os.environ["ROOKERY_WAKE"] = "off"
+        try:
+            body = json.dumps({"to": self.lc["name"], "task": "TASK-7", "kind": "ask",
+                               "say": "CASE-DELIVER read it", "status": "in-progress"},
+                              separators=(",", ":"), sort_keys=True)
+            mid = R.send(self.conn, self.me["agent_id"], self.lc["agent_id"], body, topic="TASK-7",
+                         session_id=self.sid, hold=True)
+            self.conn.execute("UPDATE inbox SET reason='screening' WHERE id=?", (mid,))
+            self.conn.commit()
+        finally:
+            os.environ.pop("ROOKERY_WAKE")
+        self.assertEqual(self.sweep(1), 0)
+        self.assertGreaterEqual(self.model_calls(), 1)
+
     def test_off_makes_no_call(self):
         self.undecided()
         self.assertEqual(self.sweep(2), 0)

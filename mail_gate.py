@@ -7,6 +7,7 @@ for Rookery's own mail. Standard library only. `rookery_identity` is imported in
 """
 import difflib
 import json
+import os
 import re
 import sqlite3
 
@@ -174,6 +175,32 @@ def _wake(conn, msg_ids, root):
         pass
 
 
+def _screen_event(conn, msg_id, root):
+    """Spawn one detached `rookery screen run --session S --once` after the commit of a stored mail that
+    needs a decision (pending, or held for screening) when screening is on for its session (feature 005
+    T015, FR-009). Never raises and never changes the send result."""
+    if not msg_id or os.environ.get("ROOKERY_WAKE") == "off":   # the operator kill switch covers every event spawn
+        return
+    try:
+        import rookery_identity, rookery_wake, screener_config   # inside: import cycles and startup cost
+        row = conn.execute("SELECT status, reason, session_id FROM inbox WHERE id=?", (msg_id,)).fetchone()
+        if row is None:
+            return
+        status, reason, sid = row[0], row[1], row[2]
+        if not (status == "pending" or (status == "held" and reason == "screening")):
+            return
+        if not sid or sid == LEGACY:
+            return
+        sess = conn.execute("SELECT state FROM rookery_sessions WHERE session_id=?", (sid,)).fetchone()
+        if sess is None or sess[0] != "open":
+            return
+        # a mail held for screening exists only because a person set t1 live: not screening it leaves it stuck
+        if status == "held" or screener_config.screening_on(conn, rookery_identity.load_config(persist=False), sid):
+            rookery_wake.spawn(["screen", "run", "--session", sid, "--once"], log_root=root)
+    except Exception:
+        pass
+
+
 def _result(outcome, reason=None, warning=None, msg_id=None, bounce_id=None):
     return {"outcome": outcome, "reason": reason, "warning": warning,
             "msg_id": msg_id, "bounce_id": bounce_id}
@@ -200,6 +227,7 @@ def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
                   else _result("send-failed", f"{type(exc).__name__}: {exc}", warning))
     _log(root, path, principal, sender, asked_sender, to, sid, result, decided_by)
     _wake(conn, [result.get("msg_id"), result.get("bounce_id")], root)   # after the commit; the send is already done
+    _screen_event(conn, result.get("msg_id"), root)
     return result
 
 
