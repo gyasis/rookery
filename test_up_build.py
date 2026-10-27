@@ -46,6 +46,7 @@ class UpBuild(unittest.TestCase):
         self.team = os.path.join(t, "team.json")
         self.write_team(TEAM)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("ROOKERY_")}
+        self.env["ROOKERY_WAKE"] = "off"   # no real detached sweep from non-sweep tests
         self.env.update(HOME=self.home, ROOKERY_DB=self.db, ROOKERY_ROOT=self.root)
 
     def tearDown(self):

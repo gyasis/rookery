@@ -259,7 +259,7 @@ FR-006, FR-012, FR-014).
 **Goal**: FR-013, SC-009.
 **Independent test**: `rookery up --no-launch` starts one sweep; a second run does not start another.
 
-- [ ] T018 [US5] Files: `cli_workspace.py`, `test_up_sweep.py`. After `_build_rows`, start the sweep with
+- [x] T018 [US5] Files: `cli_workspace.py`, `test_up_sweep.py`. After `_build_rows`, start the sweep with
   `rookery_wake.spawn(["sweep", "--session", SID, "--root", ROOT])`. `spawn` uses `program_argv`, so this works from a
   checkout and from the zipapp. Write the `screener-enabled` session binding when the team file has `screener: true`.
   Add `sweep` (`started` or `running`) to `--json`. It reads `running` when `try_lock` on the sweep lock fails.

@@ -107,6 +107,8 @@ def load(path, config=None, session=None, make_name=None) -> dict:
         b = team["ask_budget"]
         if not isinstance(b, int) or isinstance(b, bool) or b < 1:
             err(None, None, "The ask_budget must be a positive whole number.")
+    if "screener" in team and not isinstance(team["screener"], bool):
+        err(None, None, "The screener must be true or false.")
     agents = team.get("agents")
     if agents is None:
         err(None, None, "The team file has no agents list.")
