@@ -16,6 +16,7 @@ import sys
 
 EXIT_BAD, EXIT_BUSY = 2, 4
 ROOT_BINDING = "rookery-root"
+SCREENER_BINDING = "screener-enabled"
 URL_MSG = "`rookery up` now builds a team. To join a peer, use `rookery join URL`."
 
 
@@ -325,6 +326,17 @@ def _build_rows(conn, team, host, root, config):
                                             ROOT_BINDING, root, ri._now_iso()))
                 if not new_session:
                     notes.append(f"adopted session {session['name']}")
+        # The team file is the source of truth for the screener switch of this session:
+        # screener true holds one binding; false or absent removes it.
+        sid = session["session_id"]
+        if team.get("screener") is True:
+            if conn.execute("SELECT 1 FROM bindings WHERE session_id=? AND owner_type='session' "
+                            "AND kind=?", (sid, SCREENER_BINDING)).fetchone() is None:
+                conn.execute("INSERT INTO bindings(session_id, owner_type, owner_id, kind, value, created_at) "
+                             "VALUES(?,?,?,?,?,?)", (sid, "session", sid, SCREENER_BINDING, "1", ri._now_iso()))
+        else:
+            conn.execute("DELETE FROM bindings WHERE session_id=? AND owner_type='session' AND kind=?",
+                         (sid, SCREENER_BINDING))
         conn.execute("DELETE FROM session_context WHERE session_id=?", (session["session_id"],))
         conn.execute("INSERT INTO session_context(session_id, task, acceptance, ask_budget, updated_at) "
                      "VALUES(?,?,?,?,?)", (session["session_id"], team.get("task"),
@@ -384,6 +396,43 @@ def _build_rows(conn, team, host, root, config):
     return session, rows, notes
 
 
+NAME_TRIES = 5
+
+
+def _fresh_name(make=None, tries=NAME_TRIES):
+    """A made session name that no session (any state) has yet; _Bad after `tries` clashes."""
+    import rookery_identity as ri
+    import rookery_names
+    import turn_block
+    make = make or rookery_names.make_name
+    conn = turn_block.open_db()
+    try:
+        turn_block.ensure_up_tables(conn)
+        for _ in range(tries):
+            name = make()
+            if ri.get_session(conn, name) is None:
+                return name
+    finally:
+        conn.close()
+    raise _Bad(f"Rookery made {tries} session names and every one is taken. "
+               "Run it again, or choose a name with --session NAME.")
+
+
+def _start_sweep(root, sid):
+    """started | running | off | failed. The sweep is not an agent: it starts with --no-launch too."""
+    import rookery_wake
+    if os.environ.get("ROOKERY_WAKE") == "off":
+        return "off"
+    probe = rookery_wake.try_lock(os.path.join(root, "postmaster", "lock", f"sweep-{sid}.lock"), root)
+    if probe is None:
+        return "running"
+    probe.close()   # a brief race with the child is fine: the child refuses a second sweep (sweep-busy)
+    if rookery_wake.spawn(["sweep", "--session", sid, "--root", root], log_root=root):
+        return "started"
+    sys.stderr.write("NOTE: the session sweep did not start.\n")
+    return "failed"
+
+
 def _up(args):
     import cli_init
     import rookery_identity
@@ -394,8 +443,17 @@ def _up(args):
 
     if args.team_file.startswith(("http://", "https://")):
         raise _Bad(URL_MSG)
+    made = []
+
+    def _make():
+        made.append(True)
+        return _fresh_name()
     try:
-        team = rookery_team.load(args.team_file, _up_config(rookery_identity.load_config(persist=False)))
+        team = rookery_team.load(args.team_file, _up_config(rookery_identity.load_config(persist=False)),
+                                 session=getattr(args, "session", None), make_name=_make)
+        if team.get("session_overridden"):
+            sys.stderr.write(f"NOTE: --session {team['session']} replaces the session "
+                             f"{team['session_overridden']} of the team file.\n")
     except rookery_team.TeamError as e:
         _report_team_errors(args, e.errors)
     host, project = host_repo(os.getcwd())
@@ -499,13 +557,16 @@ def _up(args):
                 raise _Bad(f"{e}. Rookery saved the agents. Fix the folder, then run rookery up again.")
     except cli_init.InitError as e:
         raise _Bad(str(e))
+    sweep = _start_sweep(root, session["session_id"])
     if args.json:
         agents = [{k: v for k, v in r.items() if k not in ("_state", "_pane")} for r in report]
         ok = all(r["launch"] in ("started", "running") for r in report) or (
             args.no_launch and not any(r["launch"].startswith("not started") for r in report))
         print(json.dumps({"ok": ok, "root": root, "session_id": session["session_id"],
-                          "agents": agents, "notes": notes, "errors": []}))
+                          "session_name": session["name"], "name_made": bool(made),
+                          "sweep": sweep, "agents": agents, "notes": notes, "errors": []}))
     else:
+        print(f"Session: {session['name']}" + (" (name made)" if made else ""))
         for n in notes:
             print(n)
         for r in report:
@@ -513,6 +574,7 @@ def _up(args):
             print(f"{r['name']}: {r['_state']}" + (f"; {r['launch']}" if show else ""))
             if r.get("_pane"):
                 print(FIRST_START.format(pane=r["_pane"]))
+        print(f"Sweep: {sweep}")
         print(f"Root: {root}")
         print(f"ROOKERY.md: {md}")
 
@@ -621,6 +683,7 @@ def add_parser(subparsers):
     p = subparsers.add_parser("up", help="Build a team from a team file.")
     p.add_argument("team_file", metavar="TEAM_FILE", help="Path to a JSON team file.")
     p.add_argument("--no-launch", action="store_true", help="Build everything and run no agent.")
+    p.add_argument("--session", help="Session name. Wins over the name in the team file.")
     p.add_argument("--json", action="store_true", help="Print one JSON object.")
     p.set_defaults(func=cmd_up)
     f = subparsers.add_parser("finish", help="Commit, push and remove a writer's worktree.")

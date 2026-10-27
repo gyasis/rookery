@@ -33,7 +33,8 @@ CLI = os.path.join(HERE, "rookery_cli.py")
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self._saved = {k: os.environ.get(k) for k in ("ROOKERY_DB", "ROOKERY_ROOT", "HOME")}
+        self._saved = {k: os.environ.get(k) for k in ("ROOKERY_DB", "ROOKERY_ROOT", "HOME", "ROOKERY_WAKE")}
+        os.environ["ROOKERY_WAKE"] = "off"   # no real detached wake child from non-wake tests
         self.tmp = tempfile.TemporaryDirectory()
         self.root = os.path.join(self.tmp.name, "root")
         os.makedirs(self.root)
@@ -68,6 +69,7 @@ class Base(unittest.TestCase):
             env["ROOKERY_SESSION"] = "alpha"
         if node:
             env["ROOKERY_NODE"] = self.me["agent_id"]
+        env["ROOKERY_WAKE"] = "off"
         env.update(extra)
         return env
 

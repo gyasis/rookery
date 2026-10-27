@@ -1,0 +1,92 @@
+# CLI contract: Event-driven mail wake
+
+Exit codes follow the Rookery rule: 0 done, 1 refused or failed, 2 bad input, 3 no session, 4 database busy.
+
+## `rookery wake --session SESSION --agent AGENT [--root ROOT] [--json]`
+
+Runs one wake for one identity under the lock (research R4, R5). The event path starts it detached. A person can
+also run it.
+
+- `SESSION` is a session name or ID. `AGENT` is an identity name or ID in that session.
+- `--root ROOT` names the project folder. Without it, the wake reads the `rookery-root` binding of the session,
+  else `ROOKERY_ROOT`. The spawning side (the gate, the Stop hook) passes `--root` when the session has no binding
+  and no `ROOKERY_ROOT`, but the sender knows a real project folder. With no root from any of these, the outcome is
+  `no-root`.
+- Output: one line, or with `--json` one object: `{"session", "agent_id", "outcome", "mail_id", "rounds",
+  "capped"}`. `outcome` is one of `pushed`, `nothing`, `wake-busy`, `lock-failed`, `wake-failed`, `backoff-wait`,
+  `no-idle-state`, `no-wake-binding`, `no-root`, `busy`, `unsafe-name`. `capped` is true when the round limit left
+  mail for the sweep.
+- Exit 0 for every outcome except bad input (2), no such session or agent (3), database busy (4) and any other error
+  (1, one line, no traceback). A wake that
+  could not type is not an error of the command: it is the outcome `wake-failed`.
+- The lock holder checks again after `pushed` or `nothing`. After any other outcome it runs one more round only when
+  newer mail arrived during the round. At most 3 rounds.
+- Writes only `postmaster/pushed/`, `postmaster/backoff/` and the log.
+
+## `rookery check [--follow] [--json]`
+
+For a machine with `ROOKERY_URL`, `ROOKERY_TOKEN` and `ROOKERY_NODE` set (research R8).
+
+- With no flag: one check. `GET ROOKERY_URL/inbox?node=ROOKERY_NODE` with the Bearer token. It refuses a
+  redirect and reads at most 1 MB in 20 seconds. It types a notice into its own pane for mail that the push gate
+  pushes and that `NODE.json` does not list. A failed pane command sets a back-off from 30 to 600 seconds.
+- Output of one check with `--json`: `{"node", "outcome", "count"}`, plus `"reason"` when the outcome has one,
+  and `"retry_in"` after `wake-failed`. `outcome` is one of `pushed`, `nothing`, `check-failed`, `check-busy`
+  (another check holds `NODE.check.lock`), `backoff-wait`, `wake-failed`, `no-wake-binding`, `bad-node`.
+- `--follow`: write `NODE.follow`, then start the detached follower and return at once. Output with `--json`:
+  `{"node", "outcome"}`. `outcome` is one of `follower-started`, `follower-running`, `follower-failed`, `bad-node`.
+- The follower holds `NODE.lock`. It checks at once, then every 300 seconds, at most 5 checks per trigger, and
+  stops at the first notice. Before each check it reads `NODE.follow`: a newer start restarts its count. A trigger
+  that finds the follower asleep also starts one detached single check, so that the trigger counts at once.
+- Exit 2 when `ROOKERY_URL` or `ROOKERY_NODE` is missing, or when `ROOKERY_NODE` is not a safe name. A mailroom
+  that does not answer is the outcome `check-failed`, exit 0, so that a hook never fails.
+
+## `rookery up TEAM_FILE [--session NAME] [--no-launch] [--json]`
+
+Changed (research R10, R7):
+
+- `--session NAME` wins over `session` in the team file.
+- With no name from either, `up` makes a three-word name and prints it.
+- An open session with that name resumes, as today: the same session, identities and worktrees, and only panes
+  that are not alive start.
+- After `up` builds the rows, it starts `rookery sweep` for the session detached. When a sweep already runs, the new one
+  exits with `sweep-busy`.
+- New fields in `--json`: `"session_name"`, `"name_made": true|false`, `"sweep"`. `"sweep"` is `started`,
+  `running` (another sweep holds the lock), `off` (`ROOKERY_WAKE=off`) or `failed`. On `failed`, the spawn did not
+  start, and `up` prints one `NOTE:` line. The text output has the lines `Session: NAME` (with `(name made)` when `up` made it) and
+  `Sweep: STATE`.
+
+## `rookery sweep --session SESSION [--root ROOT]` and `postmaster.py --session SESSION [--root ROOT] [--poll S]`
+
+The sweep of one session (research R7, R9). Both entries run `postmaster.run_session_sweep`. `rookery up` starts the
+subcommand, because it also works from the zipapp.
+
+- Each round: the outbox scan, then `wake_identities` for the identities of the session, then one screening pass.
+  The pass is `screener.run(sessions=[SESSION], once=True)`. It runs when screening is on, or when a mail of the
+  session is `held` for screening.
+- The interval is the optional top-level key `sweep_s` in `~/.rookery/config.json`, default 300. The sweep raises
+  a value below 300 to 300. One `NOTE:` line goes to stderr, and the log gets `poll-raised`. `--poll` of
+  `postmaster.py` applies to the mode with no `--session`.
+- Exits 0 when the session is no longer `open` (log `sweep-end`). Exits 0 when a new database file replaced the
+  old one (log `sweep-end` with reason `db-replaced`), or when the project root is gone. Exits 0 with `sweep-busy`
+  when another sweep holds the lock. Exits 3 when the session does not exist.
+- With no `--session` and no `--nodes`: one sweep for every open session, with the same 300 second floor
+  (old start commands, FR-017).
+- `--nodes` (v1 mode) keeps its old behavior.
+
+## `rookery screen run --session SESSION --once`
+
+The screening event entry (research R6).
+
+- Takes `postmaster/lock/screen-SESSION_ID.lock` without waiting. If another pass holds it, exit 0 with
+  `screen-busy`.
+- Runs `screener.run(sessions=[SESSION], once=True)`, releases the lock, checks again for mail with no decision,
+  at most 3 rounds.
+- `rookery screen run` with no `--once`: a loop as today, default `--poll` 300.
+
+## Hooks
+
+- **Stop hook**: after `_write_idle`, the hook looks at the pending mail of the agent. Mail that the push gate
+  pushes and `pushed/` does not list starts `rookery wake` detached. With `ROOKERY_URL`, the hook starts
+  `rookery check --follow` instead. The hook still never blocks and never prints.
+- **MCP `send` with `ROOKERY_URL`**: after a send that succeeded, start `rookery check --follow`.

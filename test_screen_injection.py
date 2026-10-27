@@ -42,6 +42,7 @@ NORMAL = (
 class Injection(WakeBase):
     def setUp(self):
         super().setUp()
+        os.environ["ROOKERY_WAKE"] = "off"   # not a wake test; WakeBase restores os.environ
         os.makedirs(os.path.join(self.tmp.name, ".rookery"), exist_ok=True)
 
     def set_mode(self, mode):

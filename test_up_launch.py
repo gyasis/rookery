@@ -44,6 +44,7 @@ class UpLaunch(unittest.TestCase):
         self.team = os.path.join(t, "team.json")
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("ROOKERY_") and k != "HERDR_WORKSPACE_ID"}
         self.env.update(HOME=self.home, ROOKERY_DB=self.db, ROOKERY_ROOT=self.root)
+        self.env["ROOKERY_WAKE"] = "off"   # no real detached sweep from non-sweep tests
         self.log = os.path.join(self.home, "tmux.log")
         self.rec = os.path.join(self.home, "herdr.log")
         self.env.update(PATH=FIXBIN + os.pathsep + self.env["PATH"],

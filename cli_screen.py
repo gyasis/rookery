@@ -54,10 +54,63 @@ def cmd_run(args):
     print(f"screener backend={screener.backend_path()} python={sys.executable} base_url={cfg['base_url']} "
           f"model={cfg['model']} {modes}", flush=True)
     try:
-        code = screener.run(sessions=[args.session] if args.session else None, once=args.once, poll=args.poll)
+        if args.session and args.once:
+            code = _event_pass(screener, args.session)
+        else:
+            code = screener.run(sessions=[args.session] if args.session else None, once=args.once, poll=args.poll)
     except KeyboardInterrupt:
         sys.exit(130)
     sys.exit(code)
+
+
+EVENT_ROUNDS = 3   # passes of one screening event (research R6)
+
+
+def _undecided(screener, sid):
+    """True when the session still has mail that screener.queue would take (the selection `run` itself uses).
+    False when t1 is off (no pass can decide it) or the config or database cannot be read: no useless round."""
+    import screener_config
+    try:
+        cfg = screener_config.load()
+        if cfg["checks"].get("t1") == "off":
+            return False
+        conn = screener.rookery.connect(screener.turn_block.db_path())
+        try:
+            now = screener.rookery.now()
+            return bool(screener.queue(conn, sid, now - cfg["lease_s"], limit=1, oldest=now - cfg["max_age_s"]))
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def _event_pass(screener, session):
+    """One screening event for one session (FR-010): a pass under the lock `screen-SESSION_ID.lock`, then a
+    look for mail stored meanwhile, at most EVENT_ROUNDS rounds. A held lock prints `screen-busy`, returns 0.
+    Lock folder: ROOT/postmaster/lock/ when the session has a root (binding or ROOKERY_ROOT); else
+    ~/.rookery/locks/, so a pass is never run without a lock."""
+    import rookery_wake
+    conn = screener.rookery.connect(screener.turn_block.db_path())
+    try:
+        sid = screener.open_sessions(conn, [session])[0][0]
+        root = rookery_wake.resolve_root(conn, sid)
+    finally:
+        conn.close()
+    folder = os.path.join(root, "postmaster", "lock") if root else os.path.join(os.path.expanduser("~"), ".rookery", "locks")
+    path = os.path.join(folder, f"screen-{sid}.lock")
+    code = 0
+    for rnd in range(EVENT_ROUNDS):
+        fh = rookery_wake.try_lock(path, log_root=root)
+        if fh is None:
+            print(f"screen-busy session={sid}", flush=True)
+            return code
+        try:
+            code = screener.run(sessions=[session], once=True)
+        finally:
+            fh.close()   # closing the file releases the flock
+        if code != 0 or (rnd + 1 < EVENT_ROUNDS and not _undecided(screener, sid)):
+            break                # a failed pass (no backend, bad config) is not retried here; the sweep retries
+    return code
 
 
 def cmd_thread_close(args):
@@ -503,7 +556,8 @@ def add_parser(subparsers):
     r = sub.add_parser("run", help="Screen the mail that has no decision yet.")
     r.add_argument("--session", help="Screen only this session (name or ID).")
     r.add_argument("--once", action="store_true", help="Do one pass and exit.")
-    r.add_argument("--poll", type=float, default=2.0, help="Seconds between passes (default 2).")
+    r.add_argument("--poll", type=float, default=300.0,
+                   help="Seconds between passes of the loop, without --once (default 300).")
     r.set_defaults(func=cmd_run)
     s = sub.add_parser("status", help="Show the backend, the host and the backlog.")
     s.add_argument("--session", help="Show only this session (name or ID).")

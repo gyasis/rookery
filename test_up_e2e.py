@@ -45,6 +45,7 @@ class UpE2E(unittest.TestCase):
             json.dump(cfg, fh)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("ROOKERY_", "FAKEAGENT_"))}
+        self.env["ROOKERY_WAKE"] = "off"   # no real detached sweep from non-sweep tests
         self.env.update(HOME=self.home, ROOKERY_DB=self.db, ROOKERY_ROOT=self.root,
                         ROOKERY_FIXTURE_LOG=self.log)
 

@@ -66,6 +66,10 @@ _PY_MODULES = [
     "screener_t0.py",
     "screener.py",
     "cli_screen.py",
+    # spec 005: the event wake, the session sweep and the remote check
+    "postmaster.py",
+    "rookery_wake.py",
+    "rookery_remote.py",
 ]
 
 

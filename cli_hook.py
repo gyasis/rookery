@@ -54,10 +54,14 @@ def stop(args):
     """Stop hook (FR-005..009, FR-017, D1, D16). Never blocks, never prints."""
     root = None
     text = None
+    armed = False
     try:
         import turn_block
         import rookery_identity
 
+        # a joined machine has no local DB and no session: arm the remote trigger before that gate
+        armed = bool(os.environ.get("ROOKERY_URL") and os.environ.get("ROOKERY_NODE")
+                     and os.environ.get("ROOKERY_WAKE") != "off")
         if _no_session_possible(turn_block, rookery_identity):
             return                          # no Rookery environment: write nothing (SC-010)
         root = turn_block.project_root(args.project)
@@ -83,6 +87,7 @@ def stop(args):
                     outcome="no-message-field",
                     reason="Stop JSON has no last_assistant_message")
                 _write_idle(turn_block, root, session, identity)
+                _wake_self(conn, root, session, identity)
                 return
             if identity is None:
                 _keep_unresolved(turn_block, root, session, text)
@@ -91,6 +96,7 @@ def stop(args):
                    "adapter": "stop"}
             turn_block.dispatch_text(conn, text, ctx)
             _write_idle(turn_block, root, session, identity)
+            _wake_self(conn, root, session, identity)
         finally:
             conn.close()
     except sqlite3.OperationalError as exc:
@@ -107,6 +113,25 @@ def stop(args):
         _safe_log(root, outcome="db-busy" if busy else "hook-error", reason=str(exc))
     except Exception as exc:                # D16: log and exit 0
         _safe_log(root, outcome="hook-error", reason=f"{type(exc).__name__}: {exc}")
+    finally:
+        if armed:
+            _remote_follow()
+
+
+def _remote_follow():
+    """FR-019/FR-021: the turn ended on a remote node (ROOKERY_URL), so a bounded follower checks the
+    mailroom. Once per Stop call. Never prints, never raises."""
+    try:
+        node = os.environ.get("ROOKERY_NODE")
+        if not os.environ.get("ROOKERY_URL") or not node or os.environ.get("ROOKERY_WAKE") == "off":
+            return
+        import turn_block
+        if not turn_block.is_safe_name(node):
+            return
+        import rookery_remote
+        rookery_remote.start_follow(node)
+    except Exception:
+        pass
 
 
 def _tool_hook(args, fn_name, adapter):
@@ -178,6 +203,21 @@ def _write_idle(turn_block, root, session, identity):
     except Exception as exc:
         _safe_log(root, event="idle-write-failed", session=session["session_id"],
                   agent_id=identity["agent_id"], reason=f"{type(exc).__name__}: {exc}")
+
+
+def _wake_self(conn, root, session, identity):
+    """FR-003: the turn ended, so mail that arrived during it is announced now. One detached
+    `rookery wake` when unpushed pushable mail waits for this agent. Never prints, never raises."""
+    try:
+        if identity is None or os.environ.get("ROOKERY_URL") or os.environ.get("ROOKERY_WAKE") == "off":
+            return
+        import rookery_wake
+        if rookery_wake._unpushed(conn, root, identity["agent_id"]):
+            rookery_wake.spawn(["wake", "--session", session["session_id"],
+                                "--agent", identity["agent_id"]]
+                               + rookery_wake.root_args(conn, session["session_id"], root), log_root=root)
+    except Exception:
+        pass
 
 
 def _safe_log(root, **fields):
