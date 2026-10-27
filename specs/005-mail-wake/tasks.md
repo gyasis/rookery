@@ -171,7 +171,7 @@ FR-006, FR-012, FR-014).
 **Goal**: FR-003.
 **Independent test**: store an ask for a busy identity, run the Stop hook, see one wake.
 
-- [ ] T011 [US2] Files: `cli_hook.py`, `test_wake_stop.py`. In `stop`, after each `_write_idle` and only when
+- [x] T011 [US2] Files: `cli_hook.py`, `test_wake_stop.py`. In `stop`, after each `_write_idle` and only when
   `ROOKERY_URL` is not set, read the pending mail of the identity. When one row passes `_needs_push` and
   `postmaster/pushed/AGENT_ID.json` does not list it, call `rookery_wake.spawn(["wake", ...])`. Wrap it so that the
   hook never raises and never prints. Write the test first (recorder for `spawn`). An unread ask spawns one wake.

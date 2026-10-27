@@ -83,6 +83,7 @@ def stop(args):
                     outcome="no-message-field",
                     reason="Stop JSON has no last_assistant_message")
                 _write_idle(turn_block, root, session, identity)
+                _wake_self(conn, root, session, identity)
                 return
             if identity is None:
                 _keep_unresolved(turn_block, root, session, text)
@@ -91,6 +92,7 @@ def stop(args):
                    "adapter": "stop"}
             turn_block.dispatch_text(conn, text, ctx)
             _write_idle(turn_block, root, session, identity)
+            _wake_self(conn, root, session, identity)
         finally:
             conn.close()
     except sqlite3.OperationalError as exc:
@@ -178,6 +180,20 @@ def _write_idle(turn_block, root, session, identity):
     except Exception as exc:
         _safe_log(root, event="idle-write-failed", session=session["session_id"],
                   agent_id=identity["agent_id"], reason=f"{type(exc).__name__}: {exc}")
+
+
+def _wake_self(conn, root, session, identity):
+    """FR-003: the turn ended, so mail that arrived during it is announced now. One detached
+    `rookery wake` when unpushed pushable mail waits for this agent. Never prints, never raises."""
+    try:
+        if identity is None or os.environ.get("ROOKERY_URL") or os.environ.get("ROOKERY_WAKE") == "off":
+            return
+        import rookery_wake
+        if rookery_wake._unpushed(conn, root, identity["agent_id"]):
+            rookery_wake.spawn(["wake", "--session", session["session_id"],
+                                "--agent", identity["agent_id"]], log_root=root)
+    except Exception:
+        pass
 
 
 def _safe_log(root, **fields):
