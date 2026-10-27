@@ -31,7 +31,7 @@ the `commit=False` callers.
 **Decision.** `after_pending` reads the recipient of each ID and asks the push gate (`postmaster._needs_push`).
 For each recipient that needs a wake, it starts one detached process, `rookery wake --session SID --agent AID`.
 It uses `subprocess.Popen` with `start_new_session=True`, `stdin`, `stdout` and `stderr` set to `DEVNULL`, and
-`close_fds=True`. It never waits for the child. Any error in this step is caught and logged as `wake-spawn-failed`,
+`close_fds=True`. It never waits for the child. It keeps the child handles in a module list and calls `poll()` on them at each call, so a long-running parent (the MCP or mailroom service) reaps ended children and collects no zombies. Any error in this step is caught and logged as `wake-spawn-failed`,
 and the send goes on.
 
 The command finds its own program: the folder or the zip archive that holds `rookery_cli.py`. From a checkout it
@@ -115,7 +115,7 @@ keeps the cost of today.
 the identities of that session. When screening is on, it also calls `screener.run(sessions=[SID], once=True)`. It
 sleeps 300 seconds between rounds. It exits when the session is no longer `open`. It takes
 `ROOT/postmaster/lock/sweep-SID.lock`. A second sweep for the same session logs `sweep-busy` and exits.
-`rookery up` starts the sweep detached, the same way as R2, after it built the rows. When the sweep already runs,
+`rookery up` starts the sweep detached as `rookery sweep --session SID --root ROOT`, the same way as R2, after it built the rows. It uses a subcommand, not a file path, because the installed zipapp holds the modules inside one archive. The bundle did not include `postmaster.py` before this feature, so T003 adds it. When the sweep already runs,
 the lock makes the second start exit at once (FR-013).
 
 The sleep uses short steps so that `SIGTERM` ends it soon, as `screener.run` does today. A sleeping process uses no
@@ -135,7 +135,7 @@ mailroom.
 **Decision.** A new command, `rookery check`, for a machine with `ROOKERY_URL` set. It calls `GET /inbox` with the
 token, for `ROOKERY_NODE`. It applies the push gate to the rows. An `answer` counts as a push here, because the
 remote side cannot see the open asks. When a row needs a push, it types one notice into its own pane through the
-wake config. The pane comes from the same environment-to-binding config that local identity resolution uses. It
+wake config. The pane comes from the `identity_binding_sources` config key, which local identity resolution also reads. It
 records the announced IDs in `~/.rookery/remote/NODE.json`, so that a check never types twice for one mail.
 
 The bound: `rookery check --follow` starts one detached follower. The follower checks at once, then every 300

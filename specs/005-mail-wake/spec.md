@@ -204,7 +204,7 @@ The user runs `rookery up team.json`. The team file has no session name, so Rook
 - **FR-013**: `rookery up` MUST start the sweep for the session, so that the user starts nothing by hand. When `rookery up` runs again for the same session, it MUST NOT start a second sweep. A lock for each session MUST guard this. (Q5)
 - **FR-014**: Every wake decision MUST write one log line with the outcome and the reason, in the existing logs. Outcomes: `pushed`, `wake-failed`, `no-idle-state`, `no-wake-binding` and `wake-busy`.
 - **FR-015**: Core code MUST NOT name a pane tool. Pane commands MUST stay in the wake config and the plugins. (Principle IX)
-- **FR-016**: A path of this feature MUST NOT call a model. The number of wakes MUST grow with the mail, not with the number of agents times the number of agents. (Principle X)
+- **FR-016**: The wake, the sweep and the remote check MUST NOT call a model. The screening event runs only when screening is on, and the bounds of spec 004 apply to it. The number of wakes MUST grow with the mail, not with the number of agents times the number of agents. (Principle X)
 - **FR-017**: A user who still starts the postmaster with `--poll 0.5` MUST keep working. The postmaster raises the interval to 300 seconds and prints one notice. (Q7)
 - **FR-018**: The tests MUST NOT run real herdr or tmux, call a model, or open the live database.
 - **FR-019**: An agent whose mailroom is on a different machine MUST check the mailroom for its own pending mail when its turn ends and after it sends a mail. (Q2)

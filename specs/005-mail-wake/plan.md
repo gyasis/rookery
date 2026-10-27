@@ -50,7 +50,7 @@ Gates from `.specify/memory/constitution.md` (v1.3.0):
       trigger. A harness without hooks still gets the gate event and the sweep (spec assumption).
 - [x] **IV. Code decides; models advise** — PASS. No model call in this feature. The push gate decides in code.
 - [x] **V. Simple and surgical** — PASS. No new dependency. `wake_one` is a split of existing code, not a rewrite.
-- [x] **VI. Observable and frugal** — PASS. Every outcome writes one log line (FR-014): `pushed`, `wake-failed`,
+- [x] **VI. Observable and frugal** — PASS. `spawn` reaps its ended children, so a long-running service collects no zombies. Every outcome writes one log line (FR-014): `pushed`, `wake-failed`,
       `wake-busy`, `no-root`, `wake-spawn-failed`, `sweep-busy`, `poll-raised`, `check-failed`. `rookery wake
       --json` prints the outcome. No auto-restart: a dead sweep stays dead until the next `rookery up`.
 - [x] **VII. Agents' world out of the human's** — PASS. All new files are under `ROOKERY_ROOT` or
@@ -59,7 +59,7 @@ Gates from `.specify/memory/constitution.md` (v1.3.0):
       tasks pass ste-lint at 2.0. The tasks include the lint.
 - [x] **IX. Rookery native** — PASS. Pane commands stay in the `wake` config. Core names no pane tool and no
       harness (FR-015, FR-026).
-- [x] **X. No token spend without a need** — PASS. Idle: no model call, and only the sweep sleeps. Cost grows with
+- [x] **X. No token spend without a need** — PASS. The wake, the sweep and the remote check call no model. Idle: only the sweep sleeps. Cost grows with
       mail. Bounds: 3 lock rounds, 5 remote checks, the back-off. Screening is off by default (R6), so an update
       adds no model call.
 - [x] **Security** — PASS. The notice carries no mail body (as today). The remote check sends the token that
@@ -96,9 +96,9 @@ cli_hook.py            # Stop hook: local wake for self, or the remote follower 
 rookery_mcp.py         # after a remote send: the remote follower
 cli_workspace.py       # up: --session, three-word default, start the sweep of the session
 rookery_team.py        # session optional when --session or the default name gives one
-rookery_cli.py         # subcommands: wake, check
+rookery_cli.py         # subcommands: wake, sweep, check
 screener_config.py     # screener.enabled (default false)
-bootstrap.py           # bundle rookery_wake.py
+bootstrap.py           # bundle postmaster.py, rookery_wake.py, rookery_remote.py (the zipapp lacked postmaster.py)
 test_wake_*.py         # NEW: core, split, lock, event (gate, release, screener), detached, stop, sweep, cost, remote
 test_screen_event*.py  # NEW: screening event only when on, one pass per session, recheck
 test_up_session.py     # NEW: --session, three-word name, resume

@@ -13,6 +13,7 @@ also run it.
   `no-root`, `busy`.
 - Exit 0 for every outcome except bad input (2), no such session or agent (3) and database busy (4). A wake that
   could not type is not an error of the command: it is the outcome `wake-failed`.
+- The lock holder checks again only after `pushed` or `nothing`, at most 3 rounds.
 - Writes only `postmaster/pushed/`, `postmaster/backoff/` and the log.
 
 ## `rookery check [--follow] [--json]`
@@ -36,13 +37,14 @@ Changed (research R10, R7):
 - With no name from either, `up` makes a three-word name and prints it.
 - An open session with that name resumes, as today: the same session, identities and worktrees, and only panes
   that are not alive start.
-- After `up` builds the rows, it starts the sweep of the session detached. When a sweep already runs, the new one
+- After `up` builds the rows, it starts `rookery sweep` for the session detached. When a sweep already runs, the new one
   exits with `sweep-busy`.
 - New fields in `--json`: `"session_name"`, `"name_made": true|false`, `"sweep": "started"|"running"`.
 
-## `postmaster.py --session SESSION [--root ROOT] [--poll S]`
+## `rookery sweep --session SESSION [--root ROOT]` and `postmaster.py --session SESSION [--root ROOT] [--poll S]`
 
-The sweep of one session (research R7, R9).
+The sweep of one session (research R7, R9). Both entries run `postmaster.run_session_sweep`. `rookery up` starts the
+subcommand, because it also works from the zipapp.
 
 - Each round: `wake_identities` for the identities of the session, then, when screening is on,
   `screener.run(sessions=[SESSION], once=True)`.
