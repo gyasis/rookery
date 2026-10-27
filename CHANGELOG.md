@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-10-27
 
 Feature 005: the event-driven mail wake. An idle agent gets its mail at once. No process polls for it.
 
