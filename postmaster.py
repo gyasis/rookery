@@ -101,8 +101,10 @@ def _pane_field(s):
     return _PANE_UNSAFE.sub("", turn_block.notice_field(s)).strip() or "?"
 
 
-def _notice(conn, ident, rows):
+def _notice(conn, ident, rows, with_env=False):
     """Push text: names the sender(s) and task(s), points at `rookery inbox`, no body.
+    with_env (feature 006 FR-005): the command names ROOKERY_SESSION and ROOKERY_NODE, for an
+    agent whose process was started without them.
     Every field keeps only safe-name characters (_pane_field), at most 5 senders and 5 tasks are named,
     and the whole text is capped at 400 characters: it is typed into a live pane as one argv."""
     senders, tasks, names = [], [], {}
@@ -120,7 +122,11 @@ def _notice(conn, ident, rows):
     head = (f"[rookery] new mail for {_pane_field(ident['name'])} from "
             f"{turn_block.notice_list(senders)} about "
             f"{turn_block.notice_list(tasks) or 'no task'}")
-    return turn_block.cap_notice(head, ". Read it with: rookery inbox")
+    cmd = "rookery inbox"
+    if with_env:
+        cmd = (f"ROOKERY_SESSION={_pane_field(ident['sname'])} "
+               f"ROOKERY_NODE={_pane_field(ident['name'])} rookery inbox")
+    return turn_block.cap_notice(head, ". Read it with: " + cmd)
 
 
 BACKOFF_START, BACKOFF_MAX = 30, 600
@@ -128,6 +134,32 @@ BACKOFF_START, BACKOFF_MAX = 30, 600
 
 # Mail of these block kinds waits for the recipient's next turn: it never wakes an idle agent (FR-038).
 NO_PUSH_KINDS = ("status",)       # "answer" pushes only for an open ask (_needs_push)
+
+
+def _herdr_state(conn, config, ident, probe_state, now_ts):
+    """Feature 006 FR-001: the turn state of a hookless identity, read from herdr.
+    (idle | busy | pane-gone | no-idle-state, reason or None). herdr idle/done is idle, working is busy.
+    No answer for the pane while herdr lists other agents is pane-gone (FR-006).
+    Off when config herdr_probe is false (FR-003)."""
+    if not (config or {}).get("herdr_probe", True):
+        return "no-idle-state", "herdr:off"
+    row = conn.execute(
+        "SELECT value FROM bindings WHERE session_id=? AND owner_type='identity' "
+        "AND owner_id=? AND kind='herdr-pane' ORDER BY created_at, rowid LIMIT 1",
+        (ident["session_id"], ident["agent_id"])).fetchone()
+    if row is None:
+        return "no-idle-state", "herdr:no-binding"
+    cache = probe_state.setdefault("cache", {})
+    cache["now"] = now_ts
+    got = plugins.probe_status("herdr-pane", row["value"], cache)
+    if got in ("idle", "done"):
+        return "idle", None
+    if got == "working":
+        return "busy", None
+    listing = cache.get("agents") or []
+    if got is None and listing and not any(a.get("pane_id") == row["value"] for a in listing):
+        return "pane-gone", None
+    return "no-idle-state", f"herdr:{got or 'none'}"
 
 
 def _kind_of(body):
@@ -275,19 +307,29 @@ def wake_one(conn, root, config, ident, run=subprocess.run, skip_logged=None, ba
     newest = rows[-1]["id"]
     log_f = dict(session=ident["sname"], agent_id=aid, name=ident["name"])
 
-    def skip(reason):
+    def skip(reason, why=None):
         if skip_logged.get((aid, reason), 0) < newest:
             skip_logged[(aid, reason)] = newest
-            turn_block.log_event(root, "postmaster", outcome=reason, mail_id=newest, **log_f)
+            extra = {"reason": why} if why else {}
+            turn_block.log_event(root, "postmaster", outcome=reason, mail_id=newest, **extra, **log_f)
 
     if not (turn_block.is_safe_name(ident["sname"]) and turn_block.is_safe_name(ident["name"])):
         skip("unsafe-name")
         return "unsafe-name"
     tpath = os.path.join(root, "agents", ident["sname"], ident["name"], "state", "turn.json")
+    source = "turn"
     try:
         with open(tpath) as fh:
             tdoc = json.load(fh)
         state = tdoc.get("state")
+    except FileNotFoundError:             # feature 006: a harness with no turn hook writes no turn.json
+        state, why = _herdr_state(conn, config, ident, probe_state, now())
+        if state in ("no-idle-state", "pane-gone"):
+            skip(state, why)
+            return state
+        if state != "idle":
+            return "busy"
+        source, tdoc = "herdr", {}
     except (OSError, ValueError, AttributeError):
         skip("no-idle-state")
         return "no-idle-state"
@@ -310,7 +352,12 @@ def wake_one(conn, root, config, ident, run=subprocess.run, skip_logged=None, ba
     bo = backoff.get(aid) if backoff is not None else _backoff_load(root, aid)
     if bo and now() < bo["until"] and bo["newest"] == newest:
         return "backoff-wait"              # a recent wake failed: wait before typing again
-    text = _notice(conn, ident, rows)
+    if (config or {}).get("draft_wait", True):
+        draft = plugins.probe_input(kind, value)
+        if draft:                          # feature 006: the human is typing; the next round tries again
+            skip("draft-in-box", f"{len(draft)} chars")
+            return "draft-in-box"
+    text = _notice(conn, ident, rows, with_env=source == "herdr")
     err = type_notice(entry, value, text, run)
     if err:
         # a file record for an older mail is stale: start again at 30 s (the in-memory dict keeps its old rule)
@@ -336,7 +383,7 @@ def wake_one(conn, root, config, ident, run=subprocess.run, skip_logged=None, ba
         _backoff_clear(root, aid)
     announced = done_ids | {r["id"] for r in rows}       # status/answer ids stay un-announced
     _write_pushed(root, aid, pending_ids, [i for i in pending_ids if i in announced])
-    turn_block.log_event(root, "postmaster", outcome="pushed", kind=kind,
+    turn_block.log_event(root, "postmaster", outcome="pushed", kind=kind, source=source,
                          mail_id=newest, count=len(rows), **log_f)
     return "pushed"
 
@@ -540,11 +587,12 @@ def _identity_poll(given):
     return given, False
 
 
-def _note_poll_raised(root, was):
-    sys.stderr.write(f"NOTE: --poll raised to {POLL_MIN} s (feature 005: a periodic check runs at "
-                     "most every 5 minutes)\n")
+def _note_poll_raised(root, was, floor=POLL_MIN, what="--poll"):
+    why = ("feature 006: the session watcher runs at most once a minute" if what == "sweep"
+           else "feature 005: a periodic check runs at most every 5 minutes")
+    sys.stderr.write(f"NOTE: {what} raised to {floor} s ({why})\n")
     try:
-        turn_block.log_event(root, "postmaster", outcome="poll-raised", reason=f"poll {was} raised to {POLL_MIN}")
+        turn_block.log_event(root, "postmaster", outcome="poll-raised", reason=f"{what} {was} raised to {floor}")
     except Exception:
         pass
 
@@ -577,6 +625,41 @@ def _sweep_screen(conn, root, cfg, sid):
             lock.close()
 
 
+SESSION_CHECK_S = 5      # feature 006 FR-008: the watcher reads its session state this often
+
+
+def _session_sweep_s(conn, sid):
+    """The session's sweep-s binding (set by `rookery up --sweep` or team sweep_s) as a number, else None."""
+    row = conn.execute("SELECT value FROM bindings WHERE session_id=? AND owner_type='session' "
+                       "AND kind='sweep-s' ORDER BY created_at DESC, rowid DESC LIMIT 1", (sid,)).fetchone()
+    try:
+        return float(row[0]) if row is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _sweep_should_end(conn, root, sess, db_id):
+    """True (after logging) when the sweep must stop: the project folder is gone (no log), the DB file
+    was deleted or replaced (a rollback: this connection is stale), or the session is not open."""
+    if not os.path.isdir(root):           # the project folder is gone: recreate nothing, log nothing
+        return True
+    try:
+        st = os.stat(turn_block.db_path())
+        now_id = (st.st_ino, st.st_dev)
+    except OSError:
+        now_id = None
+    if now_id != db_id:
+        turn_block.log_event(root, "postmaster", outcome="sweep-end", session=sess["name"],
+                             reason="db-replaced")
+        return True
+    row = conn.execute("SELECT state FROM rookery_sessions WHERE session_id=?",
+                       (sess["session_id"],)).fetchone()
+    if row is None or row[0] != "open":
+        turn_block.log_event(root, "postmaster", outcome="sweep-end", session=sess["name"])
+        return True
+    return False
+
+
 def run_session_sweep(root, config, session, sleep=time.sleep, now=time.time, rounds=None):
     """Periodic safety net for ONE session (feature 005, R7): wake the identities of that session
     that have mail the event wake missed, then sleep sweep_interval. Returns 0, or 3 when the
@@ -607,30 +690,19 @@ def run_session_sweep(root, config, session, sleep=time.sleep, now=time.time, ro
         except OSError:
             db_id = None
         while True:
-            if not os.path.isdir(root):   # the project folder is gone: recreate nothing, log nothing
-                return 0
-            try:
-                st = os.stat(turn_block.db_path())
-                now_id = (st.st_ino, st.st_dev)
-            except OSError:
-                now_id = None
-            if now_id != db_id:           # DB deleted or replaced (a rollback): this connection is stale
-                turn_block.log_event(root, "postmaster", outcome="sweep-end", session=sess["name"],
-                                     reason="db-replaced")
-                return 0
-            row = conn.execute("SELECT state FROM rookery_sessions WHERE session_id=?", (sid,)).fetchone()
-            if row is None or row[0] != "open":
-                turn_block.log_event(root, "postmaster", outcome="sweep-end", session=sess["name"])
+            if _sweep_should_end(conn, root, sess, db_id):
                 return 0
             cfg = config
             try:
                 cfg = rookery_identity.load_config(persist=False)
             except Exception:
                 pass                      # keep the last good config
-            interval, raised = rookery_wake.sweep_interval(cfg)
+            override = _session_sweep_s(conn, sid)
+            interval, raised = rookery_wake.sweep_interval(cfg, override)
             if raised and not noted:
                 noted = True
-                _note_poll_raised(root, cfg.get("sweep_s") if isinstance(cfg, dict) else None)
+                was = override if override is not None else (cfg.get("sweep_s") if isinstance(cfg, dict) else None)
+                _note_poll_raised(root, was, rookery_wake.MIN_SWEEP_S, "sweep")
             try:                          # the outbox drop-box rides the sweep (a root-wide scan lock)
                 turn_block.scan_outbox(conn, root)
             except Exception as exc:
@@ -644,7 +716,13 @@ def run_session_sweep(root, config, session, sleep=time.sleep, now=time.time, ro
             done += 1
             if rounds is not None and done >= rounds:
                 return 0
-            sleep(interval)
+            waited = 0.0
+            while waited < interval:      # 006 FR-008: notice `session end` within SESSION_CHECK_S, not one round
+                step = min(SESSION_CHECK_S, interval - waited)
+                sleep(step)
+                waited += step
+                if _sweep_should_end(conn, root, sess, db_id):
+                    return 0
     except KeyboardInterrupt:              # SIGTERM in main() raises this: a clean stop, no traceback
         return 0
     finally:

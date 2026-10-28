@@ -61,8 +61,9 @@ class TestIdleHour(CostBase):
         rc = PM.run_session_sweep(self.root, self.config, "alpha", sleep=sleep, now=lambda: clock[0])
         self.assertEqual(rc, 0)
         self.assertGreaterEqual(clock[0], 3600)
-        self.assertLessEqual(len(sleeps), 12)       # at most 12 rounds in one hour (SC-003)
-        self.assertTrue(all(s >= 300 for s in sleeps), sleeps)
+        # 006: a round every 120 s (30 in one hour); between rounds, a session read every 5 s
+        self.assertLessEqual(len(sleeps), 3600 // PM.SESSION_CHECK_S)
+        self.assertTrue(all(0 < s <= PM.SESSION_CHECK_S for s in sleeps), sleeps)
         self.assertEqual(self.model_calls(), 0)      # no mail, no model call (FR-016)
         self.assertEqual(self.spawned, [])           # no mail, no wake
         self.assertEqual(self.calls(), [])           # no pane command either

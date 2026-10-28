@@ -50,7 +50,7 @@ The mailroom (`rookery serve` or `mailroom_server.py`) is only for agents on oth
 
 Do not loop. Do not sleep. Do not schedule inbox checks. Start nothing by hand.
 
-When mail that needs action arrives, Rookery types one line that starts with `[rookery] new mail for` into your pane. The same happens when your turn ends with such mail unread. When you see the line, read your mail as above. A sweep catches a lost notice within 300 seconds.
+When mail that needs action arrives, Rookery types one line that starts with `[rookery] new mail for` into your pane. The same happens when your turn ends with such mail unread. When you see the line, read your mail as above. A sweep catches a lost notice within 120 seconds by default. If the notice gives a command with `ROOKERY_SESSION=` and `ROOKERY_NODE=`, run that command as it is.
 
 Mail of kind `status`, and most mail of kind `answer`, waits for your next turn. Nothing is lost.
 

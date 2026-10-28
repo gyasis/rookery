@@ -81,11 +81,13 @@ def _up_config(config):
     import rookery_identity
     merged = dict(config)
     missing = [k for k in _LAUNCH_KEYS if k not in merged]
-    if missing:
-        default = json.loads(rookery_identity._read_default_config())
-        for k in missing:
-            if k in default:
-                merged[k] = default[k]
+    default = json.loads(rookery_identity._read_default_config())
+    for k in missing:
+        if k in default:
+            merged[k] = default[k]
+    if isinstance(merged.get("harness"), dict) and isinstance(default.get("harness"), dict):
+        # feature 006: a user harness table from before kimi still gets the new harness entries
+        merged["harness"] = dict(default["harness"], **merged["harness"])
     return merged
 
 
@@ -418,6 +420,58 @@ def _fresh_name(make=None, tries=NAME_TRIES):
                "Run it again, or choose a name with --session NAME.")
 
 
+def _sweep_seconds(text):
+    """argparse type for --sweep: a finite positive number (FR-015: anything else exits 2)."""
+    import argparse
+    import math
+    try:
+        v = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds")
+    if not math.isfinite(v) or v <= 0:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a positive number of seconds")
+    return v
+
+
+def _sweep_to_store(flag, team_value, stored):
+    """The interval to write, or None to keep what the session has (FR-014). The flag always wins.
+    The team value is written only when the session has no value yet, so a resume keeps it."""
+    if flag is not None:
+        return flag
+    if stored is None:
+        return team_value
+    return None
+
+
+def _stored_sweep_s(sid):
+    import postmaster
+    import turn_block
+    conn = turn_block.open_db()
+    try:
+        return postmaster._session_sweep_s(conn, sid)
+    finally:
+        conn.close()
+
+
+def _set_sweep_s(sid, value):
+    """Store the watcher interval on the session (feature 006 FR-014). A resume with no flag keeps it.
+    Returns the notes to print: one when the value is raised to MIN_SWEEP_S (FR-015)."""
+    import rookery_identity
+    import rookery_wake
+    import turn_block
+    notes = []
+    if value < rookery_wake.MIN_SWEEP_S:
+        notes.append(f"NOTE: sweep {value:g} s raised to {rookery_wake.MIN_SWEEP_S} s "
+                     "(the session watcher runs at most once a minute)")
+        value = rookery_wake.MIN_SWEEP_S
+    conn = turn_block.open_db()
+    try:
+        rookery_identity.set_session_binding(conn, sid, "sweep-s", f"{value:g}")
+    finally:
+        conn.close()
+    return notes
+
+
 def _start_sweep(root, sid):
     """started | running | off | failed. The sweep is not an agent: it starts with --no-launch too."""
     import rookery_wake
@@ -557,6 +611,10 @@ def _up(args):
                 raise _Bad(f"{e}. Rookery saved the agents. Fix the folder, then run rookery up again.")
     except cli_init.InitError as e:
         raise _Bad(str(e))
+    sweep_s = _sweep_to_store(getattr(args, "sweep", None), team.get("sweep_s"),
+                              _stored_sweep_s(session["session_id"]))
+    if sweep_s is not None:
+        notes.extend(_set_sweep_s(session["session_id"], sweep_s))
     sweep = _start_sweep(root, session["session_id"])
     if args.json:
         agents = [{k: v for k, v in r.items() if k not in ("_state", "_pane")} for r in report]
@@ -684,6 +742,9 @@ def add_parser(subparsers):
     p.add_argument("team_file", metavar="TEAM_FILE", help="Path to a JSON team file.")
     p.add_argument("--no-launch", action="store_true", help="Build everything and run no agent.")
     p.add_argument("--session", help="Session name. Wins over the name in the team file.")
+    p.add_argument("--sweep", type=_sweep_seconds, metavar="SECONDS",
+                   help="Seconds between the session watcher's rounds (default 120, at least 60). "
+                        "Wins over sweep_s in the team file and the config.")
     p.add_argument("--json", action="store_true", help="Print one JSON object.")
     p.set_defaults(func=cmd_up)
     f = subparsers.add_parser("finish", help="Commit, push and remove a writer's worktree.")

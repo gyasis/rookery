@@ -175,12 +175,20 @@ class ResolveRoot(Base):
 
 class SweepInterval(Base):
     def test_values(self):
-        self.assertEqual(W.sweep_interval({"sweep_s": 0.5}), (300, True))
+        # feature 006 D5/FR-013: default 120 s, never below 60 s
+        self.assertEqual(W.sweep_interval({"sweep_s": 0.5}), (60, True))
+        self.assertEqual(W.sweep_interval({"sweep_s": 60}), (60, False))
         self.assertEqual(W.sweep_interval({"sweep_s": 300}), (300, False))
         self.assertEqual(W.sweep_interval({"sweep_s": 600}), (600, False))
-        self.assertEqual(W.sweep_interval({}), (300, False))
-        self.assertEqual(W.sweep_interval({"sweep_s": "x"}), (300, False))
-        self.assertEqual(W.sweep_interval({"sweep_s": True}), (300, False))
+        self.assertEqual(W.sweep_interval({}), (120, False))
+        self.assertEqual(W.sweep_interval({"sweep_s": "x"}), (120, False))
+        self.assertEqual(W.sweep_interval({"sweep_s": True}), (120, False))
+
+    def test_session_override_wins(self):
+        # feature 006 FR-014: the session's sweep-s binding wins over config sweep_s
+        self.assertEqual(W.sweep_interval({"sweep_s": 600}, 90), (90, False))
+        self.assertEqual(W.sweep_interval({"sweep_s": 600}, 10), (60, True))
+        self.assertEqual(W.sweep_interval("x", 90), (90, False))
 
 
 if __name__ == "__main__":
@@ -189,10 +197,10 @@ if __name__ == "__main__":
 
 class Audit(Base):
     def test_sweep_interval_refuses_nan_inf_and_non_dict(self):
-        self.assertEqual(W.sweep_interval({"sweep_s": float("nan")}), (300, True))
-        self.assertEqual(W.sweep_interval({"sweep_s": float("inf")}), (300, True))
-        self.assertEqual(W.sweep_interval("x"), (300, False))
-        self.assertEqual(W.sweep_interval([1]), (300, False))
+        self.assertEqual(W.sweep_interval({"sweep_s": float("nan")}), (120, True))
+        self.assertEqual(W.sweep_interval({"sweep_s": float("inf")}), (120, True))
+        self.assertEqual(W.sweep_interval("x"), (120, False))
+        self.assertEqual(W.sweep_interval([1]), (120, False))
 
     def test_try_lock_logs_when_it_cannot_open(self):
         ro = os.path.join(self.tmp.name, "ro")

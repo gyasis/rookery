@@ -46,7 +46,8 @@ class TestSweep(SweepBase):
         self.lost_mail()
         self.assertEqual(self.sweep(2), 0)
         self.assertEqual(len(self.calls()), 1)
-        self.assertEqual(self.sleeps, [300])      # slept between the rounds, not after the last
+        self.assertEqual(sum(self.sleeps), 120)   # slept between the rounds, not after the last
+        self.assertTrue(all(s <= PM.SESSION_CHECK_S for s in self.sleeps), self.sleeps)
 
     def test_closed_session_ends_loop(self):
         RI.end_session(self.conn, "alpha")
@@ -61,7 +62,7 @@ class TestSweep(SweepBase):
             self.sleeps.append(s)
             RI.end_session(self.conn, "alpha")
         self.assertEqual(PM.run_session_sweep(self.root, self.config, "alpha", sleep=sleep, rounds=9), 0)
-        self.assertEqual(self.sleeps, [300])
+        self.assertEqual(self.sleeps, [PM.SESSION_CHECK_S])   # 006 FR-008: ends within one step
         self.assertTrue(self.has_log("sweep-end"))
 
     def test_held_lock_is_sweep_busy(self):
@@ -79,15 +80,16 @@ class TestSweep(SweepBase):
     def test_missing_session_returns_3(self):
         self.assertEqual(self.sweep(1, session="nope"), 3)
 
-    def test_default_sleep_300(self):
+    def test_default_sleep_120(self):
         self.sweep(3)
-        self.assertEqual(self.sleeps, [300, 300])
+        self.assertEqual(sum(self.sleeps), 240)    # 006 D5: two waits of 120 s, in steps of 5 s
+        self.assertEqual(len(self.sleeps), 48)
         self.assertFalse(self.has_log("poll-raised"))
 
     def test_low_sweep_s_raised_with_one_log(self):
         self.write_config(sweep_s=0.5)
         self.sweep(3)
-        self.assertEqual(self.sleeps, [300, 300])
+        self.assertEqual(sum(self.sleeps), 120)    # raised to 60 s (006 FR-015), two waits
         n = sum(1 for x in self.log_lines() if x.get("outcome") == "poll-raised")
         self.assertEqual(n, 1)
 

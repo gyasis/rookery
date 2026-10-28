@@ -87,7 +87,7 @@ class TestSweepEnv(SweepBase):
             os.replace(bak, db)
             # the copy is the ended state; a stale connection would not notice the swap
         self.assertEqual(PM.run_session_sweep(self.root, self.config, "alpha", sleep=sleep, rounds=9), 0)
-        self.assertEqual(self.sleeps, [300])
+        self.assertEqual(self.sleeps, [PM.SESSION_CHECK_S])   # 006 FR-008: caught after one step, not one round
         self.assertTrue(self.has_log("db-replaced"), self.log_lines())
 
     def test_root_deleted_ends_sweep_without_recreating(self):
@@ -97,7 +97,7 @@ class TestSweepEnv(SweepBase):
             self.sleeps.append(s)
             shutil.rmtree(self.root)
         self.assertEqual(PM.run_session_sweep(self.root, self.config, "alpha", sleep=sleep, rounds=9), 0)
-        self.assertEqual(self.sleeps, [300])
+        self.assertEqual(self.sleeps, [PM.SESSION_CHECK_S])
         self.assertFalse(os.path.exists(self.root))
 
 

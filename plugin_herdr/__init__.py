@@ -22,6 +22,7 @@ injector is the human's on-ramp and the terminal-node watcher's delivery path �
 never how two agents talk. Rookery keeps owning the messaging; herdr only
 renders it and hands the human a keyboard.
 """
+import re
 import time
 
 import plugins
@@ -65,6 +66,62 @@ def _probe(pane: str, cache: dict | None = None) -> str | None:
         if a.get("pane_id") == pane:
             return a.get("agent_status")
     return None
+
+
+# Feature 006: the input line of each agent kind, as herdr names the kind. The LAST match on the
+# screen is the input box (sent prompts above it use the same mark). Dim text (a placeholder) is
+# dropped first. A kind with no entry here (pi, omp) is not checked: the wake types as before.
+INPUT_LINES = {
+    "claude": re.compile(r"^\s*\u276f\s?(.*)$"),         # ❯
+    "codex": re.compile(r"^\s*\u203a\s?(.*)$"),          # ›
+    "kimi": re.compile(r"^\s*\u2502 >(.*?)\u2502?\s*$"),  # │ > ... │
+}
+_SGR = re.compile(r"\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _undimmed(text: str) -> str:
+    """Screen text with escape codes removed and dim (SGR 2) runs dropped."""
+    out, dim, pos = [], False, 0
+    for m in _SGR.finditer(text):
+        if not dim:
+            out.append(text[pos:m.start()])
+        pos = m.end()
+        if m.group(1) is not None:
+            codes = (m.group(1) or "0").split(";")
+            i = 0
+            while i < len(codes):
+                if codes[i] in ("38", "48", "58"):        # a color: 5;n or 2;r;g;b follows
+                    i += 3 if codes[i + 1:i + 2] == ["5"] else 5
+                    continue
+                if codes[i] == "2":
+                    dim = True
+                elif codes[i] in ("0", "", "22"):
+                    dim = False
+                i += 1
+    if not dim:
+        out.append(text[pos:])
+    return "".join(out)
+
+
+def _input(pane: str) -> str | None:
+    """The text in the input box of the agent in `pane`: "" when empty, None when unknown
+    (herdr off, a kind with no INPUT_LINES entry, or no input line on the screen)."""
+    if not H.enabled():
+        return None
+    doc = H._run_json(["agent", "get", pane], timeout=2)
+    kind = (((doc or {}).get("result") or {}).get("agent") or {}).get("agent")
+    pattern = INPUT_LINES.get(kind)
+    if pattern is None:
+        return None
+    screen = H._run(["pane", "read", pane, "--source", "visible", "--format", "ansi"], timeout=2)
+    if screen is None:
+        return None
+    found = None
+    for line in _undimmed(screen).splitlines():
+        m = pattern.match(line)
+        if m:
+            found = m.group(1).strip()
+    return found
 
 
 def _commands(subparsers) -> None:
@@ -162,4 +219,5 @@ def register() -> None:
     plugins.injector("herdr", _send, check=_check)
     plugins.sink(_sink)
     plugins.status_probe("herdr-pane", _probe)
+    plugins.input_probe("herdr-pane", _input)
     plugins.command(_commands)
