@@ -133,7 +133,7 @@ class TestSweepScreen(SweepScreen):
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0], {"sessions": [self.sid], "once": True})
         self.assertTrue(self.has_log("screen-step-error"), self.log_lines())
-        self.assertEqual(self.sleeps, [300])
+        self.assertEqual(sum(self.sleeps), 120)
 
 
 if __name__ == "__main__":

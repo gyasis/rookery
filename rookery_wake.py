@@ -13,7 +13,8 @@ import time
 
 import turn_block
 
-MIN_SWEEP_S = 300
+DEFAULT_SWEEP_S = 120   # feature 006 D5: the session watcher checks every 2 minutes by default
+MIN_SWEEP_S = 60        # feature 006 FR-015: a lower value is raised to this
 _children: list = []   # handles of spawned children, polled at each spawn so none stays a zombie
 _children_lock = threading.Lock()   # the mailroom serves requests on threads
 
@@ -83,15 +84,18 @@ def root_args(conn, session_id, log_root):
     return []
 
 
-def sweep_interval(config):
-    """(seconds, raised). sweep_s defaults to 300 and is never below 300."""
-    if not isinstance(config, dict):
-        return MIN_SWEEP_S, False
-    value = config.get("sweep_s")
+def sweep_interval(config, override=None):
+    """(seconds, raised). `override` (the session's sweep-s binding) wins over config sweep_s.
+    The default is DEFAULT_SWEEP_S; a value below MIN_SWEEP_S is raised to it."""
+    value = override
+    if value is None:
+        if not isinstance(config, dict):
+            return DEFAULT_SWEEP_S, False
+        value = config.get("sweep_s")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return MIN_SWEEP_S, False
+        return DEFAULT_SWEEP_S, False
     if not math.isfinite(value):   # json.load accepts NaN and Infinity; time.sleep refuses both
-        return MIN_SWEEP_S, True
+        return DEFAULT_SWEEP_S, True
     if value < MIN_SWEEP_S:
         return MIN_SWEEP_S, True
     return value, False

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+Feature 006: the hookless wake. An agent with no Rookery turn hook (Kimi, Codex, an agent started by hand) now gets the mail notice through herdr.
+
+### Added
+
+- The herdr fallback in the wake step. When an agent has no `state/turn.json`, the wake asks herdr for the state of its first `herdr-pane` binding. `idle` and `done` get the notice. `working` waits. Every other state, and no answer, logs `no-idle-state` with the herdr state as `reason`. A pane where herdr shows no agent logs `pane-gone`. The log line of a push has `source`: `turn` or `herdr`. Set `herdr_probe` to `false` to turn the fallback off.
+- After the herdr fallback, the notice gives the full command: `ROOKERY_SESSION=S ROOKERY_NODE=NAME rookery inbox`. An agent that started without these variables can read its mail with no restart.
+- `rookery up --sweep SECONDS` and the team file key `sweep_s` set the interval of the session watcher (the sweep). The session keeps the value in the binding `sweep-s`. A resume with no flag keeps it, also when the team file has a different `sweep_s`.
+- `rookery session end` tells you if a watcher ran for the session. With `--json`, the field `watcher` is `running`, `none` or `unknown`.
+- The wake waits while the input box of the pane has text. Before it types the notice into a `herdr-pane`, it reads the input line of the agent. If the line has text, it logs `draft-in-box` with the length of the text (never the text) and types nothing. The next round tries again. This check covers Claude, Codex and Kimi. For other agents, and when the input line is not on the screen, the wake types as before. Set `draft_wait` to `false` to turn the check off.
+- The harness `kimi` for `rookery up`. Kimi reads the generated `AGENTS.md`. A `harness` table in `~/.rookery/config.json` keeps its entries and gets the new default entries that it does not have. Codex still waits for R19.
+
+### Changed
+
+- The sweep interval is 120 seconds by default (it was 300). A value below 60 goes up to 60 with one `NOTE:` line.
+- Between rounds, the sweep reads the state of its session every 5 seconds. It stops within 5 seconds of `rookery session end`, not at the end of its round. It also stops within 5 seconds when the database file or the project root goes away.
+
 ## 0.8.0 - 2026-10-27
 
 Feature 005: the event-driven mail wake. An idle agent gets its mail at once. No process polls for it.

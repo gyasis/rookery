@@ -1,11 +1,12 @@
 """rookery_team — read and check a team file for `rookery up` (FR-004, FR-009, FR-019, FR-021, D4, D17)."""
 import json
+import math
 import os
 import subprocess
 
 import rookery_identity
 
-HARNESSES = ("claude", "pi", "omp")
+HARNESSES = ("claude", "pi", "omp", "kimi")   # kimi: feature 006 FR-012 (reads AGENTS.md)
 ROLES = ("reader", "writer", "boss")  # a boss reads: no claims, no repo (D14, FR-029)
 
 
@@ -109,6 +110,10 @@ def load(path, config=None, session=None, make_name=None) -> dict:
             err(None, None, "The ask_budget must be a positive whole number.")
     if "screener" in team and not isinstance(team["screener"], bool):
         err(None, None, "The screener must be true or false.")
+    if "sweep_s" in team:                 # feature 006 FR-014: the session watcher interval
+        v = team["sweep_s"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+            err(None, None, "The sweep_s must be a positive number of seconds.")
     agents = team.get("agents")
     if agents is None:
         err(None, None, "The team file has no agents list.")
@@ -144,7 +149,7 @@ def load(path, config=None, session=None, make_name=None) -> dict:
         if harness == "codex":
             problems.append("Codex waits for R19.")
         elif harness not in HARNESSES:
-            problems.append("The harness must be claude, pi or omp.")
+            problems.append("The harness must be claude, pi, omp or kimi.")
         role = a.get("role")
         if role not in ROLES:
             problems.append("The role must be reader, writer or boss.")

@@ -162,14 +162,34 @@ def cmd_session_list(args):
     _run(args, go)
 
 
+def _watcher_state(conn, sid):
+    """running | none | unknown: is a session watcher (the sweep) holding its lock? (feature 006 FR-011)"""
+    import rookery_wake
+    root = rookery_wake.resolve_root(conn, sid)
+    if not root:
+        return "unknown"
+    path = os.path.join(root, "postmaster", "lock", f"sweep-{sid}.lock")
+    if not os.path.isfile(path):          # a watcher that ever ran made it; never create files here
+        return "none"
+    lock = rookery_wake.try_lock(path)
+    if lock is None:
+        return "running"
+    lock.close()
+    return "none"
+
+
 def cmd_session_end(args):
     import rookery_identity as ri
 
     def go(conn):
         _need_session(conn, args.session)
         s = _row(ri.end_session(conn, args.session))
-        _out(args, {"session_id": s["session_id"], "name": s["name"], "state": s["state"]},
-             f"Rookery session {s['name']} ({s['session_id']}) ended.")
+        watcher = _watcher_state(conn, s["session_id"])
+        tail = {"running": " Its watcher stops after its current round, within seconds.",
+                "none": " It had no watcher."}.get(watcher, "")
+        _out(args, {"session_id": s["session_id"], "name": s["name"], "state": s["state"],
+                    "watcher": watcher},
+             f"Rookery session {s['name']} ({s['session_id']}) ended." + tail)
 
     _run(args, go)
 

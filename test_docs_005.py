@@ -52,11 +52,12 @@ class DocsNameTheCommands(unittest.TestCase):
                 self.assertIn(name, text, f"{rel} does not name {name!r}")
 
     def test_changelog_has_unreleased_above_0_7_0(self):
+        # Feature 005 shipped as 0.8.0 (release commit 1776094 renamed its Unreleased section).
         with open(os.path.join(HERE, "CHANGELOG.md"), encoding="utf-8") as fh:
             text = fh.read()
-        self.assertIn("## Unreleased", text)
-        self.assertLess(text.index("## Unreleased"), text.index("## 0.7.0"))
-        section = _section(text, "## Unreleased", "## 0.7.0")
+        self.assertIn("## 0.8.0", text)
+        self.assertLess(text.index("## 0.8.0"), text.index("## 0.7.0"))
+        section = _section(text, "## 0.8.0", "## 0.7.0")
         for name in NAMES + ("rookery sweep", "rookery up --session", "ROOKERY_WAKE=off", "300"):
             self.assertIn(name, section, f"the Unreleased section does not name {name!r}")
 
@@ -81,7 +82,7 @@ class DocsPassSteLint(unittest.TestCase):
 
     def test_changelog_unreleased_section_passes_on_its_own(self):
         with open(os.path.join(HERE, "CHANGELOG.md"), encoding="utf-8") as fh:
-            section = _section(fh.read(), "## Unreleased", "## 0.7.0")
+            section = _section(fh.read(), "## 0.8.0", "## 0.7.0")   # 005 shipped as 0.8.0
         self.assertTrue(section)
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "unreleased.md")

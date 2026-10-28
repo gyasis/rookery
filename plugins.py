@@ -9,7 +9,7 @@ dependency only ever points ONE way:
 Core never imports a plugin by name. Plugins import core and attach themselves
 here. Deleting every plugin file leaves a working messenger.
 
-Four extension points, deliberately few:
+Five extension points, deliberately few:
 
     injector(name, send, check=None)  a way to type into a pane
                                       send(target, text) -> bool
@@ -24,6 +24,10 @@ Four extension points, deliberately few:
                                       binding of `kind` is idle (the postmaster may
                                       correct a stale `busy` turn state with it)
                                       fn(value[, cache]) -> "idle" | "working" | ... | None
+    input_probe(kind, fn)             the text in the input box of the agent behind a
+                                      binding of `kind` (the postmaster waits while it
+                                      is not empty)
+                                      fn(value) -> str ("" = empty) | None (unknown)
 
 Plugins are DISCOVERED, not named: any `plugin_*` module or package beside this
 file is tried. Loading is best-effort and quiet — one that is broken, or whose
@@ -45,6 +49,7 @@ _INJECTORS: dict[str, dict] = {}
 _SINKS: list = []
 _COMMANDS: list = []
 _PROBES: dict[str, list] = {}
+_INPUTS: dict[str, list] = {}
 _loaded = False
 
 
@@ -67,6 +72,11 @@ def command(fn) -> None:
 def status_probe(kind: str, fn) -> None:
     """Contribute a status probe for bindings of `kind` (e.g. 'herdr-pane')."""
     _PROBES.setdefault(kind, []).append(fn)
+
+
+def input_probe(kind: str, fn) -> None:
+    """Contribute an input-box probe for bindings of `kind`."""
+    _INPUTS.setdefault(kind, []).append(fn)
 
 
 # --- loading (called BY core) ----------------------------------------------
@@ -171,5 +181,19 @@ def probe_status(kind: str, value: str, cache: dict | None = None) -> str | None
         except Exception:
             continue
         if got:
+            return got
+    return None
+
+
+def probe_input(kind: str, value: str) -> str | None:
+    """The text in the input box behind binding `kind`=`value`: "" when empty, None when no probe
+    can tell. The first probe that answers wins. A probe that fails gives None."""
+    load()
+    for fn in _INPUTS.get(kind, ()):
+        try:
+            got = fn(value)
+        except Exception:
+            continue
+        if got is not None:
             return got
     return None

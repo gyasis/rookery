@@ -204,6 +204,15 @@ def get_session(conn, name_or_id):
             or _one(conn, "SELECT * FROM rookery_sessions WHERE name=?", (name_or_id,)))
 
 
+def set_session_binding(conn, session_id, kind, value) -> None:
+    """Replace the session's binding of one kind (feature 006: sweep-s). Commits."""
+    conn.execute("DELETE FROM bindings WHERE session_id=? AND owner_type='session' AND kind=?",
+                 (session_id, kind))
+    conn.execute("INSERT INTO bindings(session_id, owner_type, owner_id, kind, value, created_at) "
+                 "VALUES(?,?,?,?,?,?)", (session_id, "session", session_id, kind, value, _now_iso()))
+    conn.commit()
+
+
 def end_session(conn, name_or_id) -> dict:
     """Set state=ended and ended_at; delete nothing. Return the updated row dict.
     Ending an ended session keeps its first ended_at. ValueError if not found."""

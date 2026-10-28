@@ -93,7 +93,8 @@ class WakeBase(unittest.TestCase):
             return []
         with open(self.record) as fh:
             rows = [json.loads(x) for x in fh if x.strip()]
-        return [r for r in rows if r[:2] != ["agent", "list"]]   # status probes are not pushes
+        return [r for r in rows if r[:2] not in (["agent", "list"], ["agent", "get"], ["pane", "read"])]
+        # status and input-box probes are not pushes
 
     def probes(self):
         if not os.path.exists(self.record):
