@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 - 2026-10-29
 
 Feature 006: the hookless wake. An agent with no Rookery turn hook (Kimi, Codex, an agent started by hand) now gets the mail notice through herdr.
 
