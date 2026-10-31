@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""rookery-wizard — ask questions, write a team file, check it, and print the `rookery up` command to type.
+
+It teaches the command: every question names the team-file key or the flag it sets. It never runs
+`rookery up` and never touches the Rookery database. The check imports the team loader from the
+installed zipapp (~/.local/bin/rookery) and writes nothing.
+
+    rookery-wizard               # interactive: build a team file and the command
+    rookery-wizard --check FILE  # only check a team file you wrote by hand
+"""
+import json
+import os
+import re
+import sys
+
+ZIPAPP = os.path.expanduser("~/.local/bin/rookery")
+HARNESSES = ("claude", "pi", "omp", "kimi")
+ROLES = {"reader": "reads and reports; no worktree, edits nothing",
+         "writer": "gets its own git worktree and branch; needs a task_id",
+         "boss": "reads, plans and sends asks; no claims, no repo"}
+BINDINGS = {"herdr-pane": "a new herdr tab in the workspace where you run `rookery up`",
+            "tmux-pane": "a new tmux window"}
+SAFE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+B, D, G, Y, R, X = "\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[31m", "\033[0m"
+if not sys.stdout.isatty():
+    B = D = G = Y = R = X = ""
+
+
+def teach(key, text):
+    print(f"\n{B}{key}{X}  {D}{text}{X}")
+
+
+def ask(prompt, default=None, check=None, allow_blank=False):
+    while True:
+        shown = f" [{default}]" if default not in (None, "") else ""
+        try:
+            v = input(f"  {prompt}{shown}: ").strip()
+        except EOFError:
+            print()
+            sys.exit(1)
+        if not v and default is not None:
+            v = default
+        if not v and allow_blank:
+            return ""
+        if not v:
+            print(f"  {Y}an answer is needed{X}")
+            continue
+        problem = check(v) if check else None
+        if problem:
+            print(f"  {Y}{problem}{X}")
+            continue
+        return v
+
+
+def choose(prompt, options, default):
+    for k, why in options.items() if isinstance(options, dict) else ((o, "") for o in options):
+        print(f"    {G}{k}{X}  {D}{why}{X}" if why else f"    {G}{k}{X}")
+    return ask(prompt, default, lambda v: None if v in options else f"pick one of: {', '.join(options)}")
+
+
+def yes(prompt, default=False):
+    v = ask(prompt + " (y/n)", "y" if default else "n",
+            lambda v: None if v.lower() in ("y", "n", "yes", "no") else "answer y or n")
+    return v.lower().startswith("y")
+
+
+def safe_name(v):
+    return None if SAFE.match(v) and v not in (".", "..") else "use 1-64 characters from A-Z a-z 0-9 . _ -"
+
+
+def listed(prompt):
+    out = []
+    while True:
+        v = ask(f"{prompt} (blank line ends)", allow_blank=True)
+        if not v:
+            return out
+        out.append(v)
+
+
+def check_file(path, session=None):
+    """Run Rookery's own team checks. Returns (ok, lines). Writes nothing."""
+    if not os.path.exists(ZIPAPP):
+        return False, [f"{ZIPAPP} not found: install Rookery first"]
+    sys.path.insert(0, ZIPAPP)
+    try:
+        import rookery_identity
+        import rookery_team
+        team = rookery_team.load(path, rookery_identity.load_config(persist=False), session=session,
+                                 make_name=lambda: "made-at-up-time")
+    except rookery_team.TeamError as e:
+        return False, [f"agent {x['index']} ({x['name']}): {x['problem']}" if x["index"] is not None
+                       else x["problem"] for x in e.errors]
+    except Exception as e:
+        return False, [f"{type(e).__name__}: {e}"]
+    rows = [f"session {team['session']}, {len(team['agents'])} agent(s)"]
+    for a in team["agents"]:
+        rows.append(f"  {a['name']}: {a['harness']} {a['role']} via {a['binding']}"
+                    + (f", task {a['task_id']}" if a.get("task_id") else ""))
+    return True, rows
+
+
+def report(ok, rows):
+    print(f"\n{G}✓ Rookery accepts this team file{X}" if ok else f"\n{R}✗ Rookery would refuse this team file:{X}")
+    for r in rows:
+        print(f"  {r}")
+
+
+def main():
+    if sys.argv[1:2] == ["--check"]:
+        if len(sys.argv) != 3:
+            sys.exit("usage: rookery-wizard --check TEAM_FILE")
+        ok, rows = check_file(sys.argv[2])
+        report(ok, rows)
+        sys.exit(0 if ok else 1)
+    if sys.argv[1:]:
+        sys.exit(__doc__)
+
+    print(f"{B}Rookery team wizard{X}  {D}builds a team file and the `rookery up` command; runs nothing{X}")
+    print(f"{D}The shape you are learning:  rookery up TEAM_FILE [--session NAME] [--sweep SECONDS] [--no-launch] [--json]{X}")
+    print(f"{D}Run it from the project folder (the Rookery root). That folder needs `rookery init` once.{X}")
+    team = {}
+
+    teach('"session"  /  --session NAME', "the session name. Blank = Rookery makes a three-word name at up time. "
+          "The same name again later RESUMES the session (mail, identities and worktrees are kept).")
+    session = ask("session name", allow_blank=True,
+                  check=lambda v: "legacy is Rookery's own session" if v == "legacy" else safe_name(v))
+    put_in_file = bool(session) and yes("put the name in the file too? (n = only on the command line)", True)
+    if put_in_file:
+        team["session"] = session
+
+    teach('"task"', "one line: what the whole team works on. Every agent sees it.")
+    task = ask("task", allow_blank=True)
+    if task:
+        team["task"] = task
+    teach('"acceptance"', "the checks that mean done, one per line.")
+    acc = listed("acceptance check")
+    if acc:
+        team["acceptance"] = acc
+
+    agents = []
+    teach('"agents"', "one entry per agent. Each gets its own folder, identity and pane.")
+    while True:
+        print(f"\n{B}agent {len(agents) + 1}{X}")
+        a = {}
+        taken = {x["name"].casefold() for x in agents}
+        a["name"] = ask("name", check=lambda v: safe_name(v) or ("that name is taken" if v.casefold() in taken else None))
+        teach('"harness"', "which agent program runs in the pane (codex is not supported by `up` yet).")
+        a["harness"] = choose("harness", HARNESSES, "claude")
+        teach('"role"', "what the agent may do.")
+        a["role"] = choose("role", ROLES, "reader" if agents else "boss")
+        if a["role"] == "writer":
+            teach('"task_id"', "a short id; the branch becomes <session>/<name>/<task_id>.")
+            a["task_id"] = ask("task_id", "T1", safe_name)
+            teach('"repo"', "path to the git repo it edits, relative to the team file. Blank = the current repo.")
+            repo = ask("repo", allow_blank=True)
+            if repo:
+                a["repo"] = repo
+            teach('"claims"', "globs of the files only this writer edits, e.g. auth/*.py. Blank = none.")
+            claims = listed("claim glob")
+            if claims:
+                a["claims"] = claims
+        teach('"persona"', "one or two sentences of who this agent is. Blank = none.")
+        persona = ask("persona", allow_blank=True)
+        if persona:
+            a["persona"] = persona
+        teach('"binding"', "where the pane opens.")
+        binding = choose("binding", BINDINGS, "herdr-pane")
+        if binding != "herdr-pane":     # herdr-pane is the default: leave it out to keep the file short
+            a["binding"] = binding
+        agents.append(a)
+        if not yes("add another agent?", len(agents) < 2):
+            break
+    team["agents"] = agents
+
+    teach('"screener"', "screen mail with the T1 model before delivery. Off unless you say so (it calls a model).")
+    if yes("turn screening on for this session?", False):
+        team["screener"] = True
+
+    teach("--sweep SECONDS", "seconds between the session watcher's rounds: the safety net for missed wakes. "
+          "Default 120, at least 60. Blank = default.")
+    sweep = ask("sweep seconds", allow_blank=True,
+                check=lambda v: None if v.isdigit() and int(v) >= 60 else "a whole number, 60 or more")
+
+    default_path = f"team-{session}.json" if session else "team.json"
+    teach("TEAM_FILE", "where to save the file (relative to this folder).")
+    while True:
+        path = ask("file", default_path)
+        if not os.path.exists(path) or yes(f"{path} exists. Overwrite it?", False):
+            break
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(team, fh, indent=2)
+        fh.write("\n")
+    print(f"\n{B}{path}{X}")
+    print(json.dumps(team, indent=2))
+
+    ok, rows = check_file(path, session=session or None)
+    report(ok, rows)
+
+    flags = [path]
+    notes = [(path, "the team file (positional, always first)")]
+    if session and not put_in_file:
+        flags += ["--session", session]
+        notes.append((f"--session {session}", "names the session; wins over the file"))
+    elif session:
+        notes.append(("(no --session)", f"the file already names it {session}; add --session to override"))
+    else:
+        notes.append(("(no --session)", "Rookery makes a three-word name and prints it: write it down to resume"))
+    if sweep:
+        flags += ["--sweep", sweep]
+        notes.append((f"--sweep {sweep}", "the watcher interval for this session"))
+    cmd = "rookery up " + " ".join(flags)
+
+    print(f"\n{B}Step 1 — dry build{X}  {D}folders, worktrees, ROOKERY.md; starts no agent{X}")
+    print(f"  {G}{cmd} --no-launch{X}")
+    print(f"{B}Step 2 — launch{X}  {D}starts each agent in its pane; the same command resumes later{X}")
+    print(f"  {G}{cmd}{X}")
+    print(f"\n{B}What each part does{X}")
+    for part, why in notes + [("--no-launch", "build only (step 1)"), ("--json", "one JSON object instead of text")]:
+        print(f"  {part:<28} {D}{why}{X}")
+    print(f"\n{D}Afterwards: rookery session list · rookery session show NAME · rookery session end NAME{X}")
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)
