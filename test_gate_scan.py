@@ -14,8 +14,8 @@ SKIP_FILES = {"gate_matrix.py", Path(__file__).name}
 
 SEND_OK = {"mail_gate.py", "rookery.py"}
 QUARANTINE_OK = {"mail_gate.py", "rookery.py", "mail_screen.py", "cli_screen.py", "screener.py"}
-SYSTEM_SEND_OK = {"postmaster.py", "relay.py", "rookery.py", "mail_gate.py", "screener_t0.py"}
-RECIPIENT_UPDATE_OK = {"relay.py"}
+SYSTEM_SEND_OK = {"postmaster.py", "rookery.py", "mail_gate.py", "screener_t0.py"}
+RECIPIENT_UPDATE_OK = set()
 INSERT_OK = {"rookery.py"}
 ESCALATE_OK = {"rookery.py", "screener.py", "cli_screen.py", "mail_screen.py"}
 # rookery._decide moves any held mail to any state. Real callers: the gate parks a mail whose worker gates fire
@@ -40,7 +40,7 @@ _WATCHED = {
     ("rookery", "quarantine"): ("calls rookery.quarantine; only the gate and mail_screen may", QUARANTINE_OK),
     ("rookery", "escalate"): ("calls rookery.escalate; only rookery, the screener and its CLI may", ESCALATE_OK),
     ("rookery", "_decide"): ("calls rookery._decide; only rookery, the screener and the gate may", DECIDE_OK),
-    ("mail_gate", "system_send"): ("calls mail_gate.system_send; only postmaster and relay may", SYSTEM_SEND_OK),
+    ("mail_gate", "system_send"): ("calls mail_gate.system_send; only postmaster may", SYSTEM_SEND_OK),
 }
 
 
@@ -107,7 +107,7 @@ def scan_source(path_name, source):
             if _INSERT_RE.search(node.value) and not allowed(INSERT_OK):
                 bad(node, "inserts into the inbox directly; only rookery.py may")
             if _RECIPIENT_RE.search(node.value) and not allowed(RECIPIENT_UPDATE_OK):
-                bad(node, "re-addresses inbox rows; only relay.py may")
+                bad(node, "re-addresses inbox rows; no file may")
     if not in_pkg:
         out += _feature_rules(path_name, base, source, tree)
     return sorted(set(out))
@@ -248,7 +248,7 @@ class ScanSyntheticTests(unittest.TestCase):
         self.assertCaught("x.py", "import mail_gate\nmail_gate.system_send(c, 'a', 'b', 'x', session_id='s')\n", "system_send")
         self.assertCaught("x.py", "from mail_gate import system_send as ss\n", "imports mail_gate.system_send")
 
-    def test_recipient_update_outside_relay(self):
+    def test_recipient_update(self):
         self.assertCaught("x.py", "c.execute('UPDATE inbox SET recipient=? WHERE id=?')\n", "re-addresses")
 
     def test_herdr_import_in_gate(self):
@@ -257,7 +257,7 @@ class ScanSyntheticTests(unittest.TestCase):
         self.assertCaught("mail_gate.py", "import herdr_client\n", "herdr")
 
     def test_package_file_is_not_root_file(self):
-        self.assertCaught("plugin_herdr/relay.py", "import mail_gate\nmail_gate.system_send()\n", "system_send")
+        self.assertCaught("plugin_herdr/postmaster.py", "import mail_gate\nmail_gate.system_send()\n", "system_send")
 
     def test_escalate_and_decide_wrong_file(self):
         self.assertCaught("x.py", "import rookery\nrookery.escalate(c, 1, 'me', 'r')\n", "rookery.escalate")
@@ -306,8 +306,7 @@ class ScanSyntheticTests(unittest.TestCase):
 
     def test_allowed_files_pass(self):
         self.assertEqual(scan_source("mail_gate.py", "import rookery\nrookery.send(c)\nrookery.quarantine(c)\n"), [])
-        self.assertEqual(scan_source("relay.py", "import mail_gate\nmail_gate.system_send(c)\n"
-                                     "c.execute('UPDATE inbox SET recipient=?')\n"), [])
+        self.assertEqual(scan_source("postmaster.py", "import mail_gate\nmail_gate.system_send(c)\n"), [])
         self.assertEqual(scan_source("mail_screen.py", "import rookery as R\nR.quarantine(c)\n"), [])
         self.assertEqual(scan_source("rookery.py", "q='INSERT INTO inbox(a)'\n"), [])
 

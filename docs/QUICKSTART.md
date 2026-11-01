@@ -1,13 +1,10 @@
 # Rookery Quickstart
 
-Rookery is a local-first agent-communication mesh. Nodes (headless Claude,
-Codex, raw-API daemons, terminal sessions) exchange durable mail through a
-SQLite mailroom. A central postmaster wakes sleeping nodes when mail arrives,
-so idle agents cost nothing. The DB is the audit log — plain SQL, queryable
-at any time.
+Rookery gives coding agents durable mail. Agents in one Rookery session send each other mail
+through a SQLite mailroom, and Rookery wakes an idle agent when mail needs action. Every sender
+needs a session. The DB is the audit log — plain SQL, queryable at any time.
 
-Prerequisites: Python 3 stdlib only for the core. Log in to `claude` / `codex`
-only for paid demos. All three scenarios below run free by default.
+Prerequisites: Python 3 stdlib only for the core.
 
 ---
 
@@ -25,11 +22,10 @@ git clone https://github.com/gyasis/rookery.git ~/Documents/code/rookery
 cd ~/Documents/code/rookery
 # build the self-contained zipapp onto your PATH (XDG: ~/.local/bin):
 python3 -c "import bootstrap; bootstrap.build_pyz('$HOME/.local/bin/rookery')"
-rookery --help          # serve · up · approve · known-hosts
+rookery --help
 ```
 
-`build_pyz` bundles every module for **both** roles (mailroom server and
-peer client). It reads its SQL schema from inside the archive. A machine
+`build_pyz` bundles every module. It reads its SQL schema from inside the archive. A machine
 installed this way can serve a mesh with only the single file on PATH.
 
 ### Option B — one-liner from a running host (zero git)
@@ -45,113 +41,40 @@ rookery join http://<host>:<port>                        # then join
 ### Dependencies
 
 - **Core:** Python 3 standard library only — nothing to `pip install`.
-- **Security tier (Scenario 3 — TLS, signed cards, hardened policy):**
+- **Security tier (TLS, signed cards, hardened policy):**
   `pip install cryptography` (the one non-stdlib dependency).
 
-### The two roles at a glance
+---
 
-| Role  | Command            | Owns the SQLite mailroom? | How many per mesh |
-|-------|--------------------|---------------------------|-------------------|
-| Host  | `rookery serve`    | **yes** (the audit log)   | exactly **1**     |
-| Peer  | `rookery join <url>` | no — talks to the host    | many              |
+## Same machine: a session
 
-Peers never share the DB file; they reach the host's HTTP sidecar over TCP.
-Pick **one** machine to `serve`. All others run `up`.
+```bash
+cd ~/Documents/code/<project>
+rookery init                       # project section + hooks
+rookery session new --name alpha   # one session
+ROOKERY_SESSION=alpha ROOKERY_NODE=architect claude   # one agent in each pane
+ROOKERY_SESSION=alpha ROOKERY_NODE=reviewer claude
+```
+
+The agents send mail with a `rookery` block at the end of a turn, or with
+`rookery send reviewer "please review" --task T1`. They read with `rookery inbox` and
+`rookery ack ID ...`. A send with no session exits 3 and stores nothing. Run
+`rookery identity show` to see the session and identity Rookery finds.
+
+To start a whole team in panes, see [Bring up a team](#bring-up-a-team).
 
 ---
 
-## Scenario 1 — Same machine: two agents
+## A mailroom for other machines
 
-The postmaster (mode B) manages both nodes. Agents are fully asleep between
-turns; the postmaster is their alarm clock.
+A remote node reads its mail through a mailroom on the session machine. It cannot send: the
+mailroom has no session for a remote sender, so `/send` answers 403 `no-session`.
 
-```bash
-cd ~/Documents/code/rookery
-./cleanup.sh
-python3 postmaster.py \
-  --nodes architect,triage --engine mock \
-  --persistent architect --idle-timeout 3 --poll 0.5 &
+The mailroom binds `127.0.0.1` by default and needs no token there. A public `--host` (such as
+`0.0.0.0`) needs `--allow-public` and a token (`--token` or `$ROOKERY_TOKEN`). A bearer token
+authenticates but does NOT encrypt. On an untrusted network, add TLS.
 
-./monitor.sh   # second pane: live view of inbox / nodes / credentials
-```
-
-Drop the first task:
-
-```bash
-rookery send architect $'Task: summarize repo X.\nMAILTO:triage:please send the test logs\nNEEDCRED:aws-prod'
-```
-
-`send_mail.py` is legacy. The old form is
-`python3 send_mail.py --to architect --from human --body "..."`.
-
-`architect` wakes, mails `triage`, then exits waiting on the credential.
-Confirm no process is alive: `pgrep -af "node-id architect"`. Approve:
-
-```bash
-python3 mesh_approve.py   # lists pending requests
-REQ=$(sqlite3 rookery.db "SELECT id FROM credential_requests WHERE status='pending' LIMIT 1")
-python3 mesh_approve.py --id "$REQ" --approve
-```
-
-`architect` is re-woken by the grant and finishes. Inspect the transcript:
-
-```bash
-sqlite3 -header -column rookery.db \
-  'SELECT id,sender,recipient,substr(body,1,60) body,delivered FROM inbox ORDER BY id;'
-```
-
-For real models, swap `--engine mock` → `--nodes architect=claude,reviewer=codex`
-(log in to both CLIs first; it runs in ~30–120 s; `demo_real.sh` automates it).
-
----
-
-## Scenario 2 — Same network: two machines on the LAN
-
-The mailroom sidecar runs on a Linux machine (`<linux-host>`). A Mac Studio
-(`<mac-host>`, user `<mac-user>`) joins as a remote node. SQLite stays on one
-machine. Peers talk to the sidecar over TCP, never via a network share.
-Replace `<linux-host>` / `<mac-host>` / `<mac-user>` with your own LAN values.
-
-Start rules: the sidecar binds `127.0.0.1` by default and needs no token there. A
-public `--host` (such as `0.0.0.0`) needs `--allow-public` and a token
-(`--token` or `$ROOKERY_TOKEN`).
-
-**On `<linux-host>`:**
-
-```bash
-cd ~/Documents/code/rookery && ./cleanup.sh
-export ROOKERY_TOKEN="$(openssl rand -hex 32)"
-python3 mailroom_server.py --host 0.0.0.0 --allow-public --port 8765 &
-curl -s http://<linux-host>:8765/health
-```
-
-**On `<mac-host>` (Mac Studio):**
-
-```bash
-# mailctl.py is legacy; the current commands are rookery send, inbox and ack.
-export ROOKERY_TOKEN="<same-token>"
-scp <mac-user>@<linux-host>:~/Documents/code/rookery/mailctl.py .
-python3 mailctl.py loop --url http://<linux-host>:8765 --node macbot --poll 1
-```
-
-**Back on the Linux machine — send mail, then check the DB:**
-
-```bash
-# Current: rookery send macbot "hello from the Linux box"
-# Legacy (send_mail.py):
-python3 send_mail.py --to macbot --from human --body "hello from the Linux box"
-sqlite3 -header -column ~/Documents/code/rookery/rookery.db \
-  "SELECT id,sender,recipient,substr(body,1,50) body,status FROM inbox ORDER BY id;"
-```
-
-The Mac node replies with the legacy `mailctl.py send --url http://<linux-host>:8765 --to human --from macbot --body "..."` (the current command is `rookery send`).
-
-A bearer token (`--token`) authenticates but does NOT encrypt. On a trusted
-LAN that is acceptable; for an untrusted segment use the TLS sidecar below.
-
----
-
-## Scenario 3 — Internet: full security stack
+### Security stack
 
 TLS, bearer token, signed agent card, and hardened per-node-identity policy.
 
@@ -185,7 +108,7 @@ pip install cryptography        # only non-stdlib dep
 python3 gen_card_key.py         # writes rookery-card-key.pem (mode 600, gitignored)
 ```
 
-**Step 4 — Start the hardened sidecar:**
+**Step 4 — Start the hardened mailroom:**
 
 ```bash
 export ROOKERY_TOKEN="$(openssl rand -hex 32)"
@@ -203,53 +126,25 @@ python3 mailroom_server.py \
 TLS + token = auth AND encryption. A token alone does not encrypt. Use
 TLS or a tunnel for the open internet.
 
-**Step 5 — Remote node joins:**
-
-```bash
-# On the remote machine:
-export ROOKERY_TOKEN="<this-principal's-token-from-node_identity.json>"
-python3 mailctl.py loop \
-  --url https://<your-public-hostname>:8765 \
-  --node architect --token "$ROOKERY_TOKEN"
-# Self-signed cert: also set ROOKERY_INSECURE_TLS=1
-```
-
-**Step 6 — Verify the signed card:**
+**Step 5 — Verify the signed card:**
 
 ```bash
 python3 verify_card.py https://<your-public-hostname>:8765
 # signature: VALID  (exit 0) — or INVALID (exit 1) if tampered / unsigned
 ```
 
-To run the full security suite locally:
+`./demo_signed_card.sh` runs the signed card check locally.
+
+### A remote node joins: `rookery join`
+
+On the mailroom machine A:
 
 ```bash
-./demo_tls.sh          # HTTPS + token; 401 without token
-./demo_signed_card.sh  # Ed25519 card; tampered card fails
-./demo_hardened.sh     # per-node identity + ACL; guest denied reviewer
-```
-
----
-
-## Scenario 4 — Bring a Claude Code session into the mesh (one command)
-
-You own two machines. Machine A is always on. Machine B is a dedicated
-"Claude computer" where you sit at the keyboard inside a Claude Code session.
-The mailroom lives on A. B's coding agent joins as a node. The mesh **wakes it**
-(no polling) and one command configures it.
-
-**On machine A — `rookery serve`.** Starts the sidecar with the interactive
-approval prompt and announces presence on the LAN:
-
-```bash
-cd ~/Documents/code/rookery
 python3 rookery_cli.py serve --host 0.0.0.0 --allow-public --port 8765 \
   --token "$ROOKERY_TOKEN" --card-key rookery-card-key.pem
-# (the Ed25519 card key is created once via `python3 gen_card_key.py`)
 ```
 
-**On machine B — install once, then `rookery join`.** One curl pipes the
-installer that drops `~/.local/bin/rookery`; one command joins the mesh:
+On the remote machine B, install once, then join:
 
 ```bash
 curl -sSL http://<A-host>:8765/bootstrap | python3 -
@@ -263,15 +158,7 @@ rookery join https://<A-host>:8765
 free Bonjour Print Services installed). When mDNS is unavailable or blocked,
 it falls back to **UDP broadcast** on port 8888.
 
-What you'll see on B:
-
-```
-Discovered mailroom at http://<linux-host>:8765
-Waiting for approval on the mailroom. Your code:
-  → plum-basil-plum
-```
-
-What A's terminal flashes:
+B prints a 3-word code. A asks you to approve the join and shows the same code:
 
 ```
 [ROOKERY] Peer wants to join the mesh.
@@ -281,86 +168,51 @@ What A's terminal flashes:
   Does the joining machine show this code? Approve? [y/N]
 ```
 
-You hit `y` on A; B receives the minted per-node bearer + A's card pubkey,
-**TOFU-pins** it to `~/.rookery/known_hosts`, and merges the `rookery` MCP
-server entry into `~/.claude.json` (with a `.bak.<epoch>`). B then prints
-the wake-loop instruction.
+You hit `y` on A. B receives a per-node bearer token and A's card pubkey. It **TOFU-pins** the
+pubkey to `~/.rookery/known_hosts`, writes the token to `~/.rookery/remote/<node>.token`
+(mode 600) and prints the lines to set:
 
-Restart Claude Code on B and send ONE setup message that puts the agent into
-the wake-loop:
-
-```text
-> You are node `peer-blade-15` in a Rookery mesh. Use the rookery MCP
-> server. Loop: call rookery.await_message(timeout=300). When it
-> returns mail, act on it and call await_message again. Use
-> rookery.send(to, body) for replies.
+```bash
+export ROOKERY_URL=https://<A-host>:8765
+export ROOKERY_NODE=peer-blade-15
+export ROOKERY_TOKEN="$(cat ~/.rookery/remote/peer-blade-15.token)"
+rookery check            # read the mail for peer-blade-15
 ```
 
-That's the whole flow: one install + one `rookery join`. Mesh wakes the agent
-from here on; no polling, no hand-edits.
+On A, mail goes to the remote node from a session: make an identity of that name in the
+session, then run `rookery send peer-blade-15 "SAY" --task T1`.
 
 **Trust model.** The slug is the human-verifiable handshake — if A's prompt
 shows a different slug than B's, deny. After approval the served card pubkey
 is TOFU-pinned. A later pubkey change fires an SSH-style key-changed
-warning, and `rookery join` refuses to touch `~/.claude.json`.
+warning, and `rookery join` stops.
 
 **Approve from your phone (out-of-band notifications).** If you are not at
 A's terminal when B knocks, you get a push notification on your
-phone or desktop. Then you can approve from anywhere. Set
-`ROOKERY_NOTIFY_METHOD` to one of: `none` (default — silent), `ntfy`,
+phone or desktop. Set `ROOKERY_NOTIFY_METHOD` to one of: `none` (default — silent), `ntfy`,
 `pushover`, or `webhook`. For ntfy: also set `ROOKERY_NTFY_TOPIC=<your-topic>`
 (uses ntfy.sh, which is free and needs no signup). For Pushover: set both
 `ROOKERY_PUSHOVER_TOKEN=<app-token>` and `ROOKERY_PUSHOVER_USER=<user-key>`.
 For a generic webhook: set `ROOKERY_NOTIFY_WEBHOOK_URL=<your-url>` plus the
 optional `ROOKERY_NOTIFY_WEBHOOK_TOKEN=<bearer>` for authenticated endpoints.
-The notification carries the 3-word slug and a clickable link to the
+The notification carries the 3-word slug and a link to the
 in-browser approval form. Notifier failures **never** block the join. They
 log to stderr and nothing else happens.
 
-```bash
-export ROOKERY_NOTIFY_METHOD=ntfy
-export ROOKERY_NTFY_TOPIC=my-rookery-12fa9c   # pick something hard to guess
-python3 rookery_cli.py serve --host 0.0.0.0 --allow-public --port 8765 \
-  --token "$ROOKERY_TOKEN" --card-key rookery-card-key.pem
-# now subscribe on your phone: open https://ntfy.sh/my-rookery-12fa9c in the ntfy app
-```
+**Approval form (`GET /approve`).** The link in the notification opens
+`https://<A>:8765/approve?request_id=<rid>`. The page shows the join details with
+**Approve** and **Deny** buttons and a bearer-token field. Its POST goes to the auth-gated
+`/approve` endpoint, so only an admin with the token can approve or deny.
 
-**Mobile-friendly approval form (`GET /approve`).** The link in the ntfy or
-Pushover notification opens `https://<A>:8765/approve?request_id=<rid>` in
-a browser. That page is a self-contained HTML form. It shows the join details
-(node id, slug, pubkey fingerprint, age) with **Approve** and
-**Deny** buttons and a bearer-token input field. The form's POST goes back
-to `/approve` (the JSON endpoint), which is auth-gated — only an admin with
-the correct bearer token can actually approve or deny. The `GET` form itself
-is intentionally public: the `request_id` is a random UUID, treat it like a
-TOTP. If you are not the admin, the form shows the join details but
-your POST fails without the token.
-
-**Managing trusted peers (`rookery known-hosts`).** After B joins, A's
-Ed25519 card pubkey is TOFU-pinned on B at `~/.rookery/known_hosts`. You
-can inspect and clean up that pin store at any time:
+**Trusted peers (`rookery known-hosts`).**
 
 ```bash
 rookery known-hosts list
-# http://<linux-host>:8765  E0lfBFvAegB3tm33...  (mailroom-home, added 2026-05-30)
-
-rookery known-hosts forget http://<linux-host>:8765
-# Remove 'http://<linux-host>:8765' (pubkey E0lfBFvA..., added 2026-05-30)? [y/N]: y
-# Removed 'http://<linux-host>:8765'.
+rookery known-hosts forget http://<linux-host>:8765    # asks first; --yes skips the prompt
 ```
 
-`rookery known-hosts forget <host>` prompts for confirmation; pass `--yes`
-to skip the prompt. Removing a stale or compromised entry means the next
-`rookery join` to that URL will TOFU-pin the fresh key instead of comparing
-against the old one.
-
-**Headless A.** If A's sidecar runs in a detached tmux / systemd unit
-(no interactive terminal), SSH in. Run `rookery approve` to clear the
-pending queue from the command line.
-
-**The old manual flow** (`rookery_join.py --mode mcp`, hand-paste the
-JSON snippet) is still supported — see the `rookery_join.py` section of the
-README — but it's no longer the recommended path.
+**Headless A.** If A's mailroom runs in a detached tmux or a systemd unit, run
+`rookery approve` to clear the pending queue from the command line.
 
 ---
 
@@ -398,11 +250,7 @@ The screener starts in shadow mode. It writes decisions and changes no mail.
 
 ## Where to go next
 
-- `COOKBOOK.md` — copy-paste recipes: research queues, CIBA credential gate,
-  federation, dead-letter queue, terminal substrate.
-- `STORIES.md` — annotated walkthroughs of the paid demos (`demo_real.sh`,
-  `demo_real_team.sh`, `demo_real_sdk.sh`).
-- `docs/index.html` (`rookery-explained.html`) — design rationale, paired
-  debate, and A2A protocol survey.
-- `README.md` — full reference: wire protocol, lifecycle model, A2A interop,
-  MCP bridge for Claude Code sessions, federation, security policy API.
+- `README.md` — full reference: sessions, teams, the wake, the screener, the mailroom and the
+  security policy API.
+- `skills/rookery/SKILL.md` — what an agent reads to use Rookery mail.
+- `docs/index.html` — design rationale, paired debate, and A2A protocol survey.

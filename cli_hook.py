@@ -544,8 +544,9 @@ def prompt(args):
 
 
 _TURN_MAX_BYTES = 1024 * 1024   # stdin cap for `rookery turn`
-_NO_SESSION_MSG = ("No current Rookery session. Set ROOKERY_SESSION or start in a pane "
-                   "with a session binding.")
+_NO_SESSION_MSG = ("No current Rookery session, so Rookery sent nothing. Every sender needs a "
+                   "session. Run `rookery identity show` to see what Rookery finds. Set "
+                   "ROOKERY_SESSION and ROOKERY_NODE, or start the agent with `rookery up`.")
 
 
 def _turn_exit(args, code, outcome, reason, msg_id=None, human=None):

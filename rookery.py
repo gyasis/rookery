@@ -291,38 +291,6 @@ def heartbeat(conn, node_id):
     conn.commit()
 
 
-def get_node(conn, node_id):
-    return conn.execute("SELECT * FROM nodes WHERE node_id=?", (node_id,)).fetchone()
-
-
-def get_address(conn, node_id):
-    """A node's pane/endpoint address (nodes.address), or None.
-
-    Whatever put it there — terminal_node, a plugin binding panes to nodes, a
-    remote peer — this is how the rest of the mesh asks "where does this node
-    live?" without knowing which mechanism answered.
-    """
-    row = conn.execute(
-        "SELECT address FROM nodes WHERE node_id=?", (node_id,)
-    ).fetchone()
-    return row["address"] if row and row["address"] else None
-
-
-def set_address(conn, node_id, address):
-    conn.execute(
-        "UPDATE nodes SET address=?, last_seen=? WHERE node_id=?",
-        (address, now(), node_id),
-    )
-    conn.commit()
-
-
-def set_session_ref(conn, node_id, session_ref):
-    conn.execute(
-        "UPDATE nodes SET session_ref=? WHERE node_id=?", (session_ref, node_id)
-    )
-    conn.commit()
-
-
 # --- mail ------------------------------------------------------------------
 # Mail from the mesh's own plumbing is never held — a bounce or a wake notice
 # stuck behind the screener it reports on would deadlock the loop.
@@ -393,9 +361,7 @@ def fetch_thread(conn, node):
 
 
 def claim(conn, ids, commit=True):
-    """Mark messages IN-FLIGHT when a node picks them up, so the poller won't
-    re-inject them while they're being processed. If the node crashes before
-    ack(), requeue_stale() returns them to 'pending' (no lost mail)."""
+    """Mark messages IN-FLIGHT when a remote node picks them up, so it does not read them again."""
     conn.executemany(
         "UPDATE inbox SET status='inflight', claimed_at=? WHERE id=?",
         [(now(), i) for i in ids],
@@ -420,16 +386,6 @@ def dlq(conn, msg_id, reason):
     conn.commit()
 
 
-def bump_attempt(conn, msg_id):
-    conn.execute("UPDATE inbox SET attempts=attempts+1 WHERE id=?", (msg_id,))
-    conn.commit()
-    return conn.execute("SELECT attempts FROM inbox WHERE id=?", (msg_id,)).fetchone()["attempts"]
-
-
-def list_dlq(conn):
-    return conn.execute("SELECT * FROM inbox WHERE status='dlq' ORDER BY id").fetchall()
-
-
 def _wake_after(conn, msg_id):
     """After a commit that made msg_id pending: wake its recipient (feature 005). Never raises."""
     try:
@@ -447,23 +403,6 @@ def requeue_dlq(conn, msg_id):
     conn.commit()
     if cur.rowcount == 1:
         _wake_after(conn, msg_id)
-
-
-def requeue_stale(conn, dead_after):
-    """Return in-flight mail to 'pending' ONLY when the node that claimed it has
-    gone silent (genuinely dead) — judged by the recipient node's last_seen, not
-    by how long the turn is taking. A node heartbeats WHILE it works, so a slow
-    model (e.g. Ollama taking minutes) keeps its claim and is NOT requeued.
-    Returns the count requeued."""
-    cur = conn.execute(
-        "UPDATE inbox SET status='pending', claimed_at=NULL "
-        "WHERE status='inflight' AND recipient IN ("
-        "  SELECT node_id FROM nodes WHERE last_seen IS NULL OR last_seen < ?"
-        ")",
-        (now() - dead_after,),
-    )
-    conn.commit()
-    return cur.rowcount
 
 
 # --- comms screening: held -> pending | quarantined -------------------------
@@ -595,35 +534,6 @@ def request_credential(conn, node_id, resource):
     )
     conn.commit()
     return cur.lastrowid
-
-
-def get_credential(conn, req_id):
-    return conn.execute(
-        "SELECT * FROM credential_requests WHERE id=?", (req_id,)
-    ).fetchone()
-
-
-def pending_credentials(conn):
-    return conn.execute(
-        "SELECT * FROM credential_requests WHERE status='pending' ORDER BY created_at"
-    ).fetchall()
-
-
-def approve_credential(conn, req_id, token_ref):
-    conn.execute(
-        "UPDATE credential_requests SET status='approved', token_ref=?, decided_at=? "
-        "WHERE id=?",
-        (token_ref, now(), req_id),
-    )
-    conn.commit()
-
-
-def deny_credential(conn, req_id):
-    conn.execute(
-        "UPDATE credential_requests SET status='denied', decided_at=? WHERE id=?",
-        (now(), req_id),
-    )
-    conn.commit()
 
 
 def resolve_secret(token_ref):

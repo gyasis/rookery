@@ -209,29 +209,32 @@ def _result(outcome, reason=None, warning=None, msg_id=None, bounce_id=None):
 def submit(conn, *, path, principal, raw_sender, to, body, topic="", task=None,
            asked_sender=None, root=None, decided_by="gate", pre_store=None, thread=None, block=None):
     """The one door for mail from a local sender. Returns {"outcome", "reason", "warning",
-    "msg_id", "bounce_id"}. Never raises for a mail problem. Order of checks: data-model.md."""
+    "msg_id", "bounce_id"}. Never raises for a mail problem. Order of checks: data-model.md.
+    A call with no principal (no session) is refused with reason `no-session` and stores nothing."""
     if asked_sender:
         sender = asked_sender
     elif principal:
         sender = principal[1]["agent_id"]
     else:
         sender = raw_sender
-    sid = principal[0]["session_id"] if principal else LEGACY
-    warning = None if principal else "no-session"
-    result = _result("send-failed")
+    if not principal:               # every sender needs a session: refuse and store nothing
+        result = _result("refused", "no-session")
+        _log(root, path, None, sender, asked_sender, to, None, result, decided_by)
+        return result
+    sid = principal[0]["session_id"]
     try:
-        result = _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store,
+        result = _submit(conn, sender, sid, principal, to, body, topic, task, pre_store,
                          decided_by, thread, block)
     except Exception as exc:        # nothing is stored: _submit rolled back
-        result = (_result("db-busy", warning=warning) if _is_busy(exc)
-                  else _result("send-failed", f"{type(exc).__name__}: {exc}", warning))
+        result = (_result("db-busy") if _is_busy(exc)
+                  else _result("send-failed", f"{type(exc).__name__}: {exc}"))
     _log(root, path, principal, sender, asked_sender, to, sid, result, decided_by)
     _wake(conn, [result.get("msg_id"), result.get("bounce_id")], root)   # after the commit; the send is already done
     _screen_event(conn, result.get("msg_id"), root)
     return result
 
 
-def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_store, decided_by,
+def _submit(conn, sender, sid, principal, to, body, topic, task, pre_store, decided_by,
             thread=None, block=None):
     if not isinstance(sender, str):
         return _result("refused", "bad-input")
@@ -264,7 +267,7 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
     def quarantine(recipient, reason, note, suggest=None):
         msg_id, bounce_id = _hold_quarantine(conn, sender, sid, recipient, body, topic, reason,
                                              note, suggest, decided_by, thread)
-        return _result("quarantined", reason, warning, msg_id, bounce_id)
+        return _result("quarantined", reason, msg_id=msg_id, bounce_id=bounce_id)
 
     cfg = get_cfg()    # the T0 injection scan reads no row, so it also runs before the write lock
     imode = cfg["checks"].get("injection", "off") if cfg else "off"
@@ -272,17 +275,15 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
 
     _begin(conn)
     try:
-        recipient = to
-        if principal and "@" not in to:                    # 4, 5 (node@peer is a remote address)
-            recipient, problem = _find_recipient(conn, sid, sender, to)
-            if problem:
-                out = quarantine(to, *problem)
-                gmode = cfg["checks"].get("gates", "off") if cfg else "off"
-                if gmode != "off":                         # G5: a B1 failure, the mail is already quarantined
-                    screener_t0.gates_record(conn, sid, out["msg_id"], screener_t0.gate_anomalies(block, False, True),
-                                             gmode)
-                conn.commit()
-                return out
+        recipient, problem = _find_recipient(conn, sid, sender, to)   # 4, 5
+        if problem:
+            out = quarantine(to, *problem)
+            gmode = cfg["checks"].get("gates", "off") if cfg else "off"
+            if gmode != "off":                         # G5: a B1 failure, the mail is already quarantined
+                screener_t0.gates_record(conn, sid, out["msg_id"], screener_t0.gate_anomalies(block, False, True),
+                                         gmode)
+            conn.commit()
+            return out
         if not verdict:                                    # 6
             out = quarantine(to, "injection-suspect", _INJECTION_NOTE)
             conn.commit()
@@ -300,7 +301,7 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
                                           (recipient,)).fetchone())
         tcheck = screener_t0.thread_check(conn, sid, thread, sender, held is not None, get_cfg()) if thread else None
         if tcheck == "denied":                             # B3 live (D16): not stored, a bounce, no wake
-            out = _result("refused", "thread-closed", warning,
+            out = _result("refused", "thread-closed",
                           bounce_id=_bounce(conn, sid, sender, topic, screener_t0.THREAD_BOUNCE.format(thread=_show(thread))))
             conn.commit()
             return out
@@ -347,8 +348,8 @@ def _submit(conn, sender, sid, warning, principal, to, body, topic, task, pre_st
                 conn.rollback()
                 _tb.log_event(None, "gate", event="notice-failed", msg_id=msg_id, error=str(err))
         if loop_held:
-            return _result("loop-held", "loop", warning, msg_id)
-        return _result("sent", reason, warning, msg_id, bounce_id)
+            return _result("loop-held", "loop", msg_id=msg_id)
+        return _result("sent", reason, msg_id=msg_id, bounce_id=bounce_id)
     except BaseException:
         conn.rollback()
         raise
@@ -398,16 +399,6 @@ def unread(conn, identity, *, with_body=False) -> list:
         "WHERE m.status='pending' AND ((m.session_id = ? AND m.recipient = ?) "
         "OR (m.session_id = ? AND m.recipient IN (?, ?))) ORDER BY m.created_at, m.id",
         (sid, sid, aid, LEGACY, name, aid), with_body)
-
-
-def unread_legacy(conn, raw_name, *, with_body=False) -> list:
-    """Pending `legacy` mail to the raw name only. For a reader with no identity."""
-    return _unread_rows(
-        conn,
-        "SELECT m.id, m.sender, m.topic, m.created_at, m.session_id, m.body, NULL AS sender_name "
-        "FROM inbox m WHERE m.status='pending' AND m.session_id = ? AND m.recipient = ? "
-        "ORDER BY m.created_at, m.id",
-        (LEGACY, raw_name), with_body)
 
 
 def _addressed_to(name):
@@ -508,11 +499,6 @@ def ack(conn, identity, ids, *, from_inflight=False) -> dict:
     return _ack_visible(
         conn, "(m.session_id = ? AND m.recipient = ?) OR (m.session_id = ? AND m.recipient IN (?, ?))",
         (sid, aid, LEGACY, name, aid), ids, from_inflight)
-
-
-def ack_legacy(conn, raw_name, ids) -> dict:
-    """Move to `done` the pending rows `unread_legacy(raw_name)` returns. Other ids are `skipped`."""
-    return _ack_visible(conn, "m.session_id = ? AND m.recipient = ?", (LEGACY, raw_name), ids, False)
 
 
 def claim_by_name(conn, name, ids=None) -> dict:

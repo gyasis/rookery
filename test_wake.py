@@ -8,7 +8,6 @@ ASSUMED API (research D10, tasks.md T041):
       one loop of the wake step. Pushes to an identity in an open session that has pending mail newer
       than <root>/postmaster/pushed/<agent_id>.json, only when <workspace>/state/turn.json reads idle.
       Logs (stream "postmaster") reason "no-wake-binding" or "no-idle-state" when it skips.
-    postmaster.wake(...) is the old headless wake; the wake step must never call it for an identity.
 
 The fixture fixtures/bin/herdr is put on PATH. It appends json.dumps(sys.argv[1:]) as one line to the
 file named by env HERDR_RECORD. Tests use a temp ROOKERY_DB, HOME and ROOKERY_ROOT, a minimal PATH,
@@ -172,15 +171,8 @@ class TestWake(WakeBase):
         other = RI.new_identity(self.conn, self.sid, "unbound")
         self.set_state("unbound", "idle")
         self.mail(to=other)
-        called = []
-        saved = PM.wake
-        PM.wake = lambda *a, **k: called.append((a, k))
-        try:
-            self.loop()
-        finally:
-            PM.wake = saved
+        self.loop()
         self.assertEqual(self.calls(), [])
-        self.assertEqual(called, [])
         self.assertTrue(self.has_log("no-wake-binding"), self.log_lines())
 
     def test_ended_session_gets_no_push(self):
@@ -468,7 +460,7 @@ class TestNoRosterProcess(WakeBase):
         finally:
             self._stop(proc)
 
-    def test_no_nodes_no_root_exits_2(self):
+    def test_no_root_exits_2(self):
         env = self._env()
         del env["ROOKERY_ROOT"]
         bad = os.path.join(self.tmp.name, "bad name")      # unsafe folder name, no --root/--project
@@ -479,7 +471,7 @@ class TestNoRosterProcess(WakeBase):
         try:
             err = proc.communicate(timeout=5)[1]
             self.assertEqual(proc.returncode, 2, err)
-            self.assertIn("no --nodes", err)
+            self.assertIn("no resolvable project root", err)
         finally:
             self._stop(proc)
 

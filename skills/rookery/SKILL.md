@@ -23,8 +23,6 @@ Take your name from Rookery (`identity show` or the session start). Never guess 
 
 Run `rookery peek` to look at your mail and change nothing.
 
-In an MCP session, the `check_inbox` tool also marks nothing read. Call the `ack` tool with the IDs it lists. This is the same as `rookery ack ID ...`.
-
 ## Send mail
 
 End your FINAL message of the turn with one fenced block. The info string is `rookery`. The block holds one JSON object. Put nothing after it.
@@ -36,15 +34,15 @@ End your FINAL message of the turn with one fenced block. The info string is `ro
 - Put long text in a file under the Rookery root. List its path in `read`.
 - Put the task ID in the path of each file you write, and a `task:` line inside it.
 
-To send one mail now, outside the end of a turn, run `rookery send TO "SAY" --task TASK --kind KIND`. It goes through the same checks as a block. Rookery takes the sender from your identity. There is no `--as`. Exit 0 means sent. Exit 1 means not sent, and the reason is on stderr.
+To send one mail now, outside the end of a turn, run `rookery send TO "SAY" --task TASK --kind KIND`. It goes through the same checks as a block. Rookery takes the sender from your identity. There is no `--as`. Exit 0 means sent. Exit 1 means not sent, and the reason is on stderr. Exit 3 means you have no session, so Rookery sent nothing.
 
 On a long task, end each turn with `kind` `handoff` and `status` `in-progress`. This updates HANDOFF.md and sends no mail. When you finish the task, use `status` `done`. Rookery then sends the hand-off mail.
 
 ## Same machine or other machines
 
-On one machine you need no token and no server. `rookery send`, `rookery inbox`, `rookery ack`, the block and the MCP tools all work on the local database.
+On one machine you need no token and no server. `rookery send`, `rookery inbox`, `rookery ack` and the block all work on the local database. Every sender needs a session.
 
-The mailroom (`rookery serve` or `mailroom_server.py`) is only for agents on other machines. On a local host it starts with no token. A host other than a local one needs `--allow-public` and a token (`--token` or `$ROOKERY_TOKEN`). Do not start a mailroom unless the user asks for one.
+The mailroom (`rookery serve` or `mailroom_server.py`) is only for agents on other machines. On a local host it starts with no token. A host other than a local one needs `--allow-public` and a token (`--token` or `$ROOKERY_TOKEN`). A remote agent can read its mail through the mailroom, but it cannot send: the mailroom refuses mail from a sender with no session. Do not start a mailroom unless the user asks for one.
 
 ## Never poll
 
@@ -56,7 +54,7 @@ Mail of kind `status`, and most mail of kind `answer`, waits for your next turn.
 
 `rookery wake --session S --agent A` runs one wake by hand. You do not need it.
 
-On a machine that joined a mailroom (it has `ROOKERY_URL`), the Stop hook and the MCP `send` tool run `rookery check` for you. It checks the mailroom and types the notice into your pane. Run `rookery check` yourself only when the user asks.
+On a machine that joined a mailroom (it has `ROOKERY_URL`), the Stop hook runs `rookery check` for you. It checks the mailroom and types the notice into your pane. Run `rookery check` yourself only when the user asks.
 
 ## Loop breaker
 
@@ -91,13 +89,3 @@ Use these commands only when the user asks about the screener. The screener chec
 A live check fails closed. If it cannot decide, the mail goes to a person, and the boss gets a notice. A held ask has a reason: `budget`, `duplicate`, or `screening`. A worker-gate anomaly does not hold the mail. It escalates the mail (status `escalated`). Do not retry a held ask. Wait for the boss.
 
 `rookery session new` and `rookery up` with no name make a name of three words.
-
-## Legacy mesh (pre-0.7)
-
-Use this only when there is NO Rookery session and the user works with the old node mesh or `mailctl`. The old mesh has a different design. See `docs/NODE_BRIEFING.md`. These old commands are legacy. Each has a `rookery` command:
-
-- `send_mail.py` is legacy. Use `rookery send TO "SAY"`.
-- `read_mail.py` is legacy. Use `rookery inbox`, then `rookery ack ID ...`.
-- `mailctl.py` is legacy. Use `rookery send`, `rookery inbox` and `rookery ack`.
-
-Do not use old mesh habits in a 0.7 session.

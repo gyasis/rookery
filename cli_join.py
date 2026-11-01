@@ -10,10 +10,10 @@ import time
 import urllib.error
 import urllib.request
 
-import config_manager
 import discovery
 import identity
 import known_hosts
+import turn_block
 
 
 def _ansi(code, text):
@@ -101,6 +101,10 @@ def cmd_up(args):
     # 4. Node identity
     # ------------------------------------------------------------------ #
     node_id = args.node_id or f"peer-{socket.gethostname().replace('.', '-')}"
+    if not turn_block.is_safe_name(node_id):      # it names the token file and `rookery check` needs it
+        print(f"rookery join: {node_id!r} is not a safe node name. Pass --node-id NAME "
+              "(letters, digits, '.', '_', '-').", file=sys.stderr)
+        sys.exit(2)
     identity.load_or_create()
     pubkey_b64 = identity.pubkey_b64()
 
@@ -193,34 +197,32 @@ def cmd_up(args):
             print(f"Pinned card pubkey for {url} matches known_hosts.")
 
     # ------------------------------------------------------------------ #
-    # 8. Merge ~/.claude.json
+    # 8. Store the token (mode 600) for `rookery check`
     # ------------------------------------------------------------------ #
-    here = os.path.dirname(os.path.abspath(__file__))
-    mcp_path = os.path.join(here, "rookery_mcp.py")
-    env = {"ROOKERY_NODE": node_id, "ROOKERY_URL": url, "ROOKERY_TOKEN": token or ""}
-    if args.insecure_tls:
-        env["ROOKERY_INSECURE_TLS"] = "1"
-    r = config_manager.merge_mcp_entry("rookery", "python3", [mcp_path], env)
-    print(
-        f"~/.claude.json: {'updated' if r['written'] else 'unchanged'}"
-        + (f"  (backup: {r['backup']})" if r["backup"] else "")
-    )
+    tok_path = os.path.join(os.path.expanduser("~"), ".rookery", "remote", node_id + ".token")
+    os.makedirs(os.path.dirname(tok_path), exist_ok=True)
+    fd = os.open(tok_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(token or "")
+    print(f"token: {tok_path}")
 
     # ------------------------------------------------------------------ #
     # 9. Success block
     # ------------------------------------------------------------------ #
     check = _ansi("1;32", "✓")
+    tls = "\n  export ROOKERY_INSECURE_TLS=1" if args.insecure_tls else ""
     print(
         "\n"
         "═" * 64 + "\n"
-        f"{check} joined mesh as `{node_id}`  →  {url}\n"
-        f"{check} ~/.claude.json updated with the `rookery` MCP server\n"
+        f"{check} joined the mailroom as `{node_id}`  →  {url}\n"
         "\n"
-        "Restart Claude Code, then paste this as your FIRST message:\n"
+        "Set these, then run `rookery check` to read your mail:\n"
         "\n"
-        f"  You are node `{node_id}` in a Rookery mesh. Use the `rookery`\n"
-        "  MCP server. Loop: call `rookery.await_message(timeout=300)`\n"
-        "  and react to anything it returns. Use the shell command\n"
-        "  `rookery send <to> <body>` for replies. Continue until told to stop.\n"
+        f"  export ROOKERY_URL={url}\n"
+        f"  export ROOKERY_NODE={node_id}\n"
+        f"  export ROOKERY_TOKEN=\"$(cat {tok_path})\"{tls}\n"
+        "\n"
+        "A remote node cannot send mail: Rookery takes mail only from a\n"
+        "sender in a session on the mailroom machine.\n"
         "\n" + "═" * 64
     )

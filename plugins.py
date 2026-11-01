@@ -9,13 +9,8 @@ dependency only ever points ONE way:
 Core never imports a plugin by name. Plugins import core and attach themselves
 here. Deleting every plugin file leaves a working messenger.
 
-Five extension points, deliberately few:
+Four extension points, deliberately few:
 
-    injector(name, send, check=None)  a way to type into a pane
-                                      send(target, text) -> bool
-                                      check() raises SystemExit with a diagnostic
-                                      when the operator named this injector but
-                                      it cannot currently work
     sink(fn)                          somewhere to raise an alert
                                       fn(event, title, body, **meta) -> bool
     command(fn)                       extra `rookery <...>` subcommands
@@ -45,7 +40,6 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_PREFIX = "plugin_"
 
-_INJECTORS: dict[str, dict] = {}
 _SINKS: list = []
 _COMMANDS: list = []
 _PROBES: dict[str, list] = {}
@@ -54,11 +48,6 @@ _loaded = False
 
 
 # --- registration (called BY plugins) --------------------------------------
-def injector(name: str, send, check=None) -> None:
-    """Contribute a pane-injection mechanism under `name`."""
-    _INJECTORS[name] = {"send": send, "check": check}
-
-
 def sink(fn) -> None:
     """Contribute a notification sink."""
     _SINKS.append(fn)
@@ -131,17 +120,6 @@ def load(names: str | None = None) -> None:
 
 
 # --- use (called BY core) --------------------------------------------------
-def injectors() -> list[str]:
-    """Names of every plugin-contributed injector."""
-    load()
-    return sorted(_INJECTORS)
-
-
-def get_injector(name: str) -> dict | None:
-    load()
-    return _INJECTORS.get(name)
-
-
 def notify(event: str, title: str, body: str | None = None, **meta) -> int:
     """Raise an alert through every registered sink. Returns how many fired.
 
