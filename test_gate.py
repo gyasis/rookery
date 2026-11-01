@@ -61,11 +61,8 @@ class GateBase(Base):
 
 
 class RemoteAddress(GateBase):
-    def test_at_address_is_stored_as_given_and_plain_unknown_is_not(self):
-        r = self.submit(to="bob@peer1")
-        self.assertEqual(r["outcome"], "sent", r)
-        row = self.conn.execute("SELECT * FROM inbox WHERE id=?", (r["msg_id"],)).fetchone()
-        self.assertEqual((row["recipient"], row["status"]), ("bob@peer1", "pending"))
+    def test_at_address_is_checked_like_any_name(self):
+        self.assertEqual(self.submit(to="bob@peer1")["reason"], "wrong-recipient")
         self.assertEqual(self.submit(to="nobody")["reason"], "wrong-recipient")
 
 
@@ -73,11 +70,6 @@ class Sender(GateBase):
     def test_system_name_refused(self):
         r = self.submit(asked_sender="rookery")
         self.assertEqual((r["outcome"], r["reason"], r["msg_id"]), ("refused", "system-name", None))
-        self.assertEqual(self.count(), 0)
-
-    def test_system_raw_name_refused(self):
-        r = self.submit(principal=None, raw_sender="postmaster")
-        self.assertEqual((r["outcome"], r["reason"]), ("refused", "system-name"))
         self.assertEqual(self.count(), 0)
 
     def test_bad_name_refused(self):
@@ -96,10 +88,9 @@ class Sender(GateBase):
         self.assertEqual((r["outcome"], r["reason"]), ("refused", "bad-input"))
 
     def test_empty_or_non_text_recipient_and_body_refused(self):
-        for principal in ("default", None):
-            for to, body in (("", "hi"), (None, "hi"), ("researcher", ""), ("researcher", None)):
-                r = self.submit(to=to, body=body, principal=principal)
-                self.assertEqual((r["outcome"], r["reason"]), ("refused", "bad-input"), (to, body))
+        for to, body in (("", "hi"), (None, "hi"), ("researcher", ""), ("researcher", None)):
+            r = self.submit(to=to, body=body)
+            self.assertEqual((r["outcome"], r["reason"]), ("refused", "bad-input"), (to, body))
         self.assertEqual(self.count(), 0)
 
     def test_double_at_refused(self):
@@ -128,30 +119,21 @@ class Sender(GateBase):
 
 
 class NoSession(GateBase):
-    def test_legacy_pending_with_warning(self):
-        r = self.submit(principal=None, raw_sender="old-node", to="bob", asked_sender=None)
-        self.assertEqual((r["outcome"], r["warning"]), ("sent", "no-session"))
-        row = self.rows()[0]
-        self.assertEqual((row["status"], row["session_id"], row["sender"], row["recipient"]),
-                         ("pending", "legacy", "old-node", "bob"))
-        self.assertEqual(self.count(), 1)           # no quarantine row, no bounce
+    def test_no_session_is_refused_and_stores_nothing(self):
+        for kw in ({"raw_sender": "old-node"}, {"asked_sender": "old-node"}, {"raw_sender": "postmaster"},
+                   {"to": "nobody-here"}, {"to": "beta-only"}, {"body": "DENY-ME"}):
+            r = self.submit(principal=None, **kw)
+            self.assertEqual((r["outcome"], r["reason"], r["msg_id"], r["bounce_id"]),
+                             ("refused", "no-session", None, None), kw)
+        self.assertEqual(self.count(), 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM loop_counts").fetchone()[0], 0)
         rec = self.gate_log()[-1]
-        self.assertEqual((rec["warning"], rec["principal"], rec["session"]), ("no-session", None, "legacy"))
+        self.assertEqual((rec["outcome"], rec["reason"], rec["principal"], rec["session"]),
+                         ("refused", "no-session", None, None))
 
-    def test_asked_sender_without_principal(self):
-        self.submit(principal=None, asked_sender="old-node", to="bob")
-        self.assertEqual(self.rows()[0]["sender"], "old-node")
-
-    def test_unknown_and_other_session_recipient_not_checked(self):
-        a = self.submit(principal=None, to="nobody-here")
-        b = self.submit(principal=None, to="beta-only")
-        self.assertEqual((a["outcome"], b["outcome"]), ("sent", "sent"))
-        self.assertEqual([r["recipient"] for r in self.rows()], ["nobody-here", "beta-only"])
-        self.assertEqual({r["session_id"] for r in self.rows()}, {"legacy"})
-
-    def test_recipient_name_is_not_rewritten(self):
-        self.submit(principal=None, to="researcher")
-        self.assertEqual(self.rows()[0]["recipient"], "researcher")
+    def test_legacy_rows_stay_readable(self):
+        mid = R.send(self.conn, "old-node", "me", "hi", session_id="legacy")
+        self.assertEqual([m["id"] for m in G.unread(self.conn, self.me)], [mid])
 
     def test_warning_is_none_with_principal(self):
         self.assertIsNone(self.submit()["warning"])
@@ -214,14 +196,6 @@ class Screening(GateBase):
         b = R.get_message(self.conn, r["bounce_id"])
         self.assertEqual((b["recipient"], b["session_id"]), (self.me["agent_id"], self.alpha["session_id"]))
 
-    def test_deny_without_session_goes_to_legacy(self):
-        self.use_deny()
-        r = self.submit(principal=None, raw_sender="old-node", to="bob", body="DENY-ME")
-        self.assertEqual((r["outcome"], r["reason"]), ("quarantined", "injection-suspect"))
-        self.assertEqual(R.get_message(self.conn, r["msg_id"])["session_id"], "legacy")
-        b = R.get_message(self.conn, r["bounce_id"])
-        self.assertEqual((b["recipient"], b["session_id"]), ("old-node", "legacy"))
-
     def test_allow_passes(self):
         self.use_deny()
         self.assertEqual(self.submit(body="fine")["outcome"], "sent")
@@ -270,16 +244,6 @@ class Loop(GateBase):
         row = R.get_message(self.conn, r["msg_id"])
         self.assertEqual((row["status"], row["reason"]), ("held", "loop"))
         self.assertEqual(self.count(), limit + 1)
-
-    def test_no_session_sender_counted_in_legacy(self):
-        limit, _ = TB.loop_limits()
-        for _ in range(limit):
-            self.submit(principal=None, raw_sender="n1", to="n2", task="t")
-        r = self.submit(principal=None, raw_sender="n1", to="n2", task="t")
-        self.assertEqual(r["outcome"], "loop-held")
-        sessions = [x[0] for x in self.conn.execute("SELECT DISTINCT session_id FROM loop_counts")]
-        self.assertEqual(sessions, ["legacy"])
-
 
 class Peer(GateBase):
     def test_valid_peer_pending_with_session(self):
@@ -396,14 +360,13 @@ class PrincipalFromEnv(GateBase):
         s, i = G.principal_from_env(self.conn, self.env(ROOKERY_NODE="swe"), self.root)
         self.assertEqual(i["agent_id"], self.swe["agent_id"])
 
-    def test_no_identity_gives_none_and_legacy_row(self):
+    def test_no_identity_gives_none_and_no_row(self):
         env = self.env(ROOKERY_NODE="ghost")
         self.assertIsNone(G.principal_from_env(self.conn, env, self.root))
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM identities WHERE name='ghost'")
                          .fetchone()[0], 0)               # nothing is created (FR-011)
         r = self.submit(principal=None, raw_sender="ghost", to="bob")
-        self.assertEqual((r["outcome"], r["warning"]), ("sent", "no-session"))
-        self.assertEqual(self.rows()[0]["session_id"], "legacy")
+        self.assertEqual((r["outcome"], r["reason"], self.count()), ("refused", "no-session", 0))
 
     def test_no_node_gives_none(self):
         self.assertIsNone(G.principal_from_env(self.conn, {"ROOKERY_SESSION": "alpha"}, self.root))
@@ -415,8 +378,7 @@ class PrincipalFromEnv(GateBase):
         RI.end_session(self.conn, "alpha")
         self.assertIsNone(G.principal_from_env(self.conn, self.env(), self.root))
         r = self.submit(principal=None, raw_sender="me", to="bob")
-        self.assertEqual((r["outcome"], r["warning"]), ("sent", "no-session"))
-        self.assertEqual(self.rows()[0]["session_id"], "legacy")
+        self.assertEqual((r["outcome"], r["reason"], self.count()), ("refused", "no-session", 0))
 
     def test_name_in_two_sessions_uses_the_session_of_env(self):
         s, i = G.principal_from_env(self.conn, self.env(ROOKERY_SESSION="beta", ROOKERY_NODE="me"),
@@ -463,14 +425,6 @@ class Ack(GateBase):
         d = self.put(self.swe["agent_id"], self.me["agent_id"], self.alpha["session_id"], "done")
         res = G.ack(self.conn, self.me, [d, 99999])
         self.assertEqual(res, {"ok": [], "already": [d], "skipped": [99999]})
-
-    def test_ack_legacy_only_raw_name_pending_legacy(self):
-        l = self.put("old", "ghost", "legacy")
-        other_name = self.put("old", "someone", "legacy")
-        sess = self.put(self.swe["agent_id"], self.me["agent_id"], self.alpha["session_id"])
-        res = G.ack_legacy(self.conn, "ghost", [l, other_name, sess])
-        self.assertEqual(res, {"ok": [l], "already": [], "skipped": [other_name, sess]})
-        self.assertEqual(G.ack_legacy(self.conn, "ghost", [l])["already"], [l])
 
     def test_cli_ack_legacy_row_clears_inbox_and_notice(self):
         import subprocess
@@ -541,25 +495,6 @@ class LoopReset(GateBase):
             (self.beta["session_id"],)).fetchall()
         self.assertTrue(rows)
 
-    def test_legacy_reset_lets_a_sessionless_sender_send_again(self):
-        limit, _ = TB.loop_limits()
-        legacy = lambda: self.submit(principal=None, path="mailroom", to="node-a", task="t1")
-        for _ in range(limit):
-            self.assertEqual(legacy()["outcome"], "sent")
-        self.assertEqual(legacy()["outcome"], "loop-held")
-        self.submit(principal=(self.beta, self.beta_me), to="beta-only", path="mcp-stdio", task="t1")
-        r = self.cli("loop", "reset", "--legacy", "node-a", "--json")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        o = json.loads(r.stdout)
-        self.assertEqual((o["name"], o["session"]), ("node-a", "legacy"))
-        self.assertGreater(o["reset"], 0)
-        self.assertEqual(legacy()["outcome"], "sent")
-        self.assertTrue(self.conn.execute(
-            "SELECT 1 FROM loop_counts WHERE session_id=? AND count>0",
-            (self.beta["session_id"],)).fetchall())
-        recs = [x for x in self.gate_log() if x.get("outcome") == "loop-reset"]
-        self.assertEqual(recs[-1]["session"], "legacy")
-
     def test_unknown_name_exits_2(self):
         r = self.cli("loop", "reset", "nobody")
         self.assertEqual(r.returncode, 2)
@@ -603,16 +538,11 @@ class TextLint(GateBase):
         import argparse
         import contextlib
         import io
-        import json as _json
-        import sqlite3
-        import sys
-        import urllib.error
         from unittest import mock
 
-        import mailctl
+        import cli_hook
         import mailroom_server as MS
         import postmaster as PM
-        import send_mail
 
         t = {}
         sid = self.alpha["session_id"]
@@ -634,21 +564,6 @@ class TextLint(GateBase):
             t["system-name-identity"] = str(exc)
         else:
             self.fail("new_identity accepted a system name")
-        # mailctl error message, built from every /send error body
-        for key in MS._SEND_ERRORS:
-            _status, body = MS._send_error({"outcome": "refused" if key in (
-                "system-name", "bad-input") else key, "reason": key})
-            err = urllib.error.HTTPError("http://x/send", 400, "Bad", {},
-                                         io.BytesIO(_json.dumps(body).encode()))
-            t["mailctl-" + key] = mailctl._http_error_text(err)
-        # mention notice and pane notice, from sample rows
-        cause = {"sender": self.researcher["agent_id"], "recipient": self.swe["agent_id"],
-                 "topic": "TASK-1", "session_id": sid}
-        mid = PM._mention_mail(self.conn, self.me["agent_id"], cause)
-        mid = mid["msg_id"] if isinstance(mid, dict) else mid
-        t["mention"] = _json.loads(R.get_message(self.conn, mid)["body"]).get("say") \
-            if R.get_message(self.conn, mid)["body"].startswith("{") \
-            else R.get_message(self.conn, mid)["body"]
         rows = [{"sender": self.researcher["agent_id"], "topic": "TASK-1"},
                 {"sender": self.swe["agent_id"], "topic": ""}]
         t["pane"] = PM._notice(self.conn, self.me, rows)
@@ -672,25 +587,8 @@ class TextLint(GateBase):
             return out.getvalue() + err.getvalue()
         t["start-refuse"] = start(host="10.0.0.5")
         t["start-warn"] = start(host="10.0.0.5", allow_public=True, allow_no_auth=True)
-        # send_mail.py outcome and busy messages
-        def sm(result=None, exc=None, extra=()):
-            out, err = io.StringIO(), io.StringIO()
-            res = result and dict({"reason": None, "warning": None, "msg_id": 7,
-                                   "bounce_id": None}, **result)
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-                    mock.patch.object(sys, "argv", ["send_mail.py", "--to", "swe", "--body", "x",
-                                                    *extra]), \
-                    mock.patch.object(G, "submit", side_effect=exc, return_value=res):
-                send_mail.main()
-            return out.getvalue() + err.getvalue()
-        t["send-mail-sent"] = sm({"outcome": "sent"})
-        t["send-mail-busy"] = sm({"outcome": "db-busy"})
-        t["send-mail-locked"] = sm(exc=sqlite3.OperationalError("database is locked"))
-        t["send-mail-failed"] = sm({"outcome": "send-failed", "reason": "disk-error"})
-        t["send-mail-refused"] = sm({"outcome": "refused", "reason": "system-name"})
-        t["send-mail-held"] = sm({"outcome": "loop-held"})
+        t["no-session"] = cli_hook._NO_SESSION_MSG
         return t
-
     def test_all_user_text_passes_ste_lint(self):
         import shutil
         import subprocess
@@ -698,7 +596,7 @@ class TextLint(GateBase):
         if not shutil.which("ste-lint"):
             self.skipTest("ste-lint is not on PATH")
         texts = self._collect()
-        self.assertGreaterEqual(len(texts), 20)
+        self.assertGreaterEqual(len(texts), 15)
         for k, v in texts.items():
             self.assertTrue(v.strip(), f"empty text: {k}")
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:

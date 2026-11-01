@@ -5,7 +5,8 @@ OTHER machines (e.g. the Mac Studio) can join the mesh over the LAN. Stdlib only
   python3 mailroom_server.py --host 0.0.0.0 --port 8765
 
 Run it on the box that holds the DB; bind 0.0.0.0 so peers reach it. Peers use
-mailctl.py (or any HTTP client). NEVER put the SQLite file on a network share —
+any HTTP client. A send needs a Rookery session, and this server has none for a remote
+sender, so /send and A2A message/send refuse with `no-session`. NEVER put the SQLite file on a network share —
 locking is broken; peers talk to THIS service over TCP instead.
 """
 
@@ -157,6 +158,9 @@ def _post_webhook(url, payload, token=None):
 
 # Contract "Calls": the HTTP status and the fixed `detail` text for a /send that stored nothing.
 _SEND_ERRORS = {
+    "no-session": (403, "Rookery sends mail only from a sender in a Rookery session. This mailroom "
+                        "has no session for a remote sender. Send from a session on this machine "
+                        "with `rookery send`."),
     "system-name": (403, "This sender name is for the system. Use a different sender name."),
     "bad-input": (400, "The sender, the recipient or the body is not valid. Check all three, "
                        "then send the mail again."),
@@ -556,8 +560,8 @@ class Handler(BaseHTTPRequestHandler):
                     isinstance(i, int) and not isinstance(i, bool) for i in ids)):
                 return self._reply({"error": "bad-input", "detail": _BAD_IDS}, 400)
         if u.path in ("/claim", "/ack") and not d.get("node"):
-            # An older mailctl copy on another host sends no node (FR-027). Keep its old
-            # behaviour: act on the given IDs, answer {"ok": true}. The token holder is trusted (D24).
+            # A call with no node acts on the given IDs and answers {"ok": true} (FR-027).
+            # The token holder is trusted (D24).
             (R.claim if u.path == "/claim" else R.ack)(c, d.get("ids") or [])
             return self._reply({"ok": True})
         if u.path == "/claim":

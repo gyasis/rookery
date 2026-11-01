@@ -73,7 +73,9 @@ class SendTests(Base):
     def test_no_session_exits_3_and_stores_nothing(self):
         out = self.cli("researcher", "hi", env=self.env(session=False, node=False))
         self.assertEqual(out.returncode, 3, out.stderr)
-        self.assertIn("No current Rookery session", out.stderr)
+        for hint in ("No current Rookery session", "rookery identity show", "ROOKERY_SESSION",
+                     "ROOKERY_NODE", "rookery up"):
+            self.assertIn(hint, out.stderr)
         self.assertEqual(self.rows(), [])
 
     def test_unknown_sender_name_is_not_registered(self):

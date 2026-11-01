@@ -54,7 +54,7 @@ class DemoStarts(unittest.TestCase):
                         self.assertIn("--allow-public", line)
                         self.assertTrue("--token" in line or "ROOKERY_TOKEN" in line,
                                         "a public host with no token")
-        self.assertGreater(seen, 5)
+        self.assertGreater(seen, 0)
 
     def test_bash_syntax(self):
         for path in sorted(glob.glob("*.sh")):

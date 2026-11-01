@@ -84,15 +84,6 @@ class ReadsTest(Base):
         self.conn.commit()
         self.assertEqual(G.unread(self.conn, self.beta), [])
 
-    def test_unread_legacy_raw_name_only(self):
-        a = self.put("somenode", "rawname", G.LEGACY)
-        self.put("somenode", "other", G.LEGACY)
-        self.put(self.beta_peer["agent_id"], "rawname", self.sid_b)   # not legacy
-        rows = G.unread_legacy(self.conn, "rawname")
-        self.assertEqual([r["id"] for r in rows], [a])
-        self.assertNotIn("body", rows[0])
-        self.assertEqual(G.unread_legacy(self.conn, "rawname", with_body=True)[0]["body"], "body-T")
-
     def test_rookery_inbox_uses_the_gate_filter(self):
         """`rookery inbox` lists what the prompt notice counts: legacy mail to the name shows,
         a row to the agent ID in another session does not."""

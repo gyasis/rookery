@@ -125,8 +125,8 @@ class _Base:
         os.chdir(self.cwd)
         try:
             with mock.patch.dict(os.environ, self.env, clear=True), \
-                    mock.patch.object(sys, "argv", ["postmaster", "--nodes", "scout"]), \
-                    mock.patch.object(postmaster, "run", lambda *a, **kw: seen.update(kw)):
+                    mock.patch.object(sys, "argv", ["postmaster"]), \
+                    mock.patch.object(postmaster, "run_identities_only", lambda root, poll: seen.update(root=root)):
                 postmaster.main()
         finally:
             os.chdir(old)

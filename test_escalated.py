@@ -72,15 +72,9 @@ class Escalated(test_hooks.Base):
             R.unquarantine(self.conn, mid, "human:x")
         self.assertEqual(self.status(mid), "escalated")
 
-    def test_no_mention_notice(self):
-        self.escalated()
-        postmaster._mention_pass(self.conn, 0, [])
-        self.assertEqual(self.conn.execute("SELECT * FROM inbox WHERE sender='postmaster'").fetchall(), [])
-
     def test_no_fetch_and_no_wake_row(self):
         mid = self.escalated()
         self.assertEqual(R.fetch_undelivered(self.conn, self.ids["bob"]["agent_id"]), [])
-        self.assertFalse(postmaster.has_mail(self.conn, self.ids["bob"]["agent_id"]))
         self.assertEqual(self.status(mid), "escalated")
 
     def test_escalated_ask_is_not_an_open_ask(self):

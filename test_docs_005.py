@@ -66,7 +66,7 @@ class DocsNameTheCommands(unittest.TestCase):
             text = fh.read()
         section = _section(text, "## How mail wakes an agent", "## ")
         self.assertTrue(section, "README.md has no section 'How mail wakes an agent'")
-        for name in NAMES + ("rookery sweep", "ROOKERY_WAKE=off", "rookery-mcp.service",
+        for name in NAMES + ("rookery sweep", "ROOKERY_WAKE=off",
                              "rookery-mailroom.service", "rookery session end"):
             self.assertIn(name, section, f"the wake section does not name {name!r}")
         self.assertNotIn("python3 postmaster.py\n```", text,

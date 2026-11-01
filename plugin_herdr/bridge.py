@@ -3,16 +3,10 @@
 herdr (herdr.dev) is a terminal workspace manager that RECOGNISES coding agents
 inside panes and reports each one's lifecycle state (working / blocked / done /
 idle / unknown). That is precisely the information the mailroom cannot know:
-Rookery knows what a node was ASKED, herdr knows what it is DOING right now.
+Rookery knows what an agent was ASKED, herdr knows what it is DOING right now.
 
-The mechanism boundary this module is careful not to blur (docs/HERDR_INTEGRATION.md):
-
-    human -> agent    pane injection            steering, interrupting, pairing
-    agent -> agent    MAIL                      regardless of distance
-    agent -> agent    `herdr agent read`        read-only OBSERVATION
-
-so prompt() below is the HUMAN's on-ramp and the terminal-node watcher's
-delivery path — it is NOT how two agents talk to each other. Agents mail.
+Agents talk through MAIL. This module only observes panes, focuses one for the
+human and raises toasts.
 
 Everything here DEGRADES SILENTLY: herdr is optional and never a dependency.
 No herdr binary, no herdr server, or running outside a herdr pane all turn
@@ -24,19 +18,6 @@ import json
 import os
 import shutil
 import subprocess
-import time
-
-# herdr agent_status -> nodes.status (schema.sql: idle|busy|waiting|asleep|offline).
-# 'unknown' maps to None deliberately: herdr's own docs warn it does not mean
-# done, so it must never overwrite a status the mesh is surer about.
-_STATUS_MAP = {
-    "working": "busy",
-    "blocked": "waiting",
-    "done": "idle",
-    "idle": "idle",
-    "unknown": None,
-}
-
 
 # --- gating (W5) -----------------------------------------------------------
 def _mode() -> str:
@@ -55,21 +36,12 @@ def in_pane() -> bool:
     return os.environ.get("HERDR_ENV") == "1"
 
 
-def self_pane() -> str | None:
-    """This process's own pane id (e.g. 'w1:p6') when herdr owns the terminal.
-
-    A node started inside a pane can therefore learn its own address without
-    being told — see bind_nodes() for why that matters.
-    """
-    return os.environ.get("HERDR_PANE_ID") or None
-
-
 def enabled() -> bool:
     """Should herdr calls actually run?
 
     auto  — the herdr binary exists AND we are inside a herdr pane
-    force — the binary exists; for a mesh process living outside a pane
-            (launchd, systemd, ssh) that still wants to drive the console
+    force — the binary exists; for a Rookery process living outside a pane
+            (launchd, systemd, ssh) that still wants to use the console
     off   — never
     """
     mode = _mode()
@@ -94,7 +66,7 @@ def reason() -> str | None:
         return "the 'herdr' CLI is not on PATH — install it (herdr.dev)"
     return (
         "not inside a herdr pane (HERDR_ENV is unset). Run from a herdr pane, "
-        "or set ROOKERY_HERDR=force when the mesh process lives outside one "
+        "or set ROOKERY_HERDR=force when the Rookery process lives outside one "
         "(launchd/systemd/ssh)."
     )
 
@@ -104,8 +76,7 @@ def require(what: str = "herdr integration") -> None:
 
     The silent degrade is right for optional extras (a notification nobody
     sees costs nothing). It is wrong when the operator explicitly asked for
-    herdr — `--injector herdr` that quietly delivers nothing is worse than an
-    error, because the mail is acked either way.
+    herdr, such as `rookery herdr focus`.
     """
     why = reason()
     if why:
@@ -132,7 +103,7 @@ def _run_raw(args: list[str], timeout: float = 10.0):
 def _run(args: list[str], timeout: float = 10.0) -> str | None:
     """Run a herdr subcommand; stdout on success, None on ANY failure.
 
-    Never raises. A broken or absent console must not take down a mesh
+    Never raises. A broken or absent console must not take down a Rookery
     process whose real job is delivering mail.
     """
     r = _run_raw(args, timeout)
@@ -164,22 +135,6 @@ def agents() -> list[dict]:
     return (doc.get("result") or {}).get("agents") or []
 
 
-def find(target: str | None) -> dict | None:
-    """Resolve a node name, pane id or terminal id to its agent record."""
-    if not target:
-        return None
-    for a in agents():
-        if target in (a.get("name"), a.get("pane_id"), a.get("terminal_id")):
-            return a
-    return None
-
-
-def status_of(target: str) -> str | None:
-    """herdr's lifecycle state for one agent: working|blocked|done|idle|unknown."""
-    a = find(target)
-    return a.get("agent_status") if a else None
-
-
 # --- actions ---------------------------------------------------------------
 def notify(
     title: str,
@@ -201,200 +156,6 @@ def notify(
     return _run(args) is not None
 
 
-STASH_DIR = os.path.join(os.path.expanduser("~"), ".rookery", "stash")
-
-
-def stash_pane(target: str) -> str | None:
-    """Snapshot a pane's visible screen before anything destructive.
-
-    Cheap insurance, not a solution: it does not stop ctrl+u discarding a
-    human's half-typed line, it just stops that being UNRECOVERABLE. Best
-    effort throughout — a failed snapshot must never block mail delivery,
-    which is the thing the mesh actually promises.
-    """
-    text = read(target, lines=60, source="visible")
-    if not text:
-        return None
-    try:
-        os.makedirs(STASH_DIR, exist_ok=True)
-        path = os.path.join(
-            STASH_DIR, f"{target.replace(':', '-')}-{int(time.time())}.txt"
-        )
-        with open(path, "w") as fh:
-            fh.write(text)
-        return path
-    except OSError:
-        return None
-
-
-def prompt(target: str, text: str, submit: bool = True, clear: bool = True,
-           timeout: float = 15.0) -> bool:
-    """Submit TEXT to the recognised agent in pane TARGET.
-
-    `herdr agent prompt` addresses an AGENT rather than a terminal, which is
-    what makes it worth preferring over send-keys. It does NOT submit
-    RELIABLY though: against Claude Code (v2.1.220, herdr 0.7.5) it sometimes
-    fills the input box, returns rc=0, and leaves the agent `idle` with the
-    text unsent — observed on two freshly-started panes — while on an
-    already-exercised pane the same call submitted. The trigger is not pinned
-    down, so we always follow with an explicit Enter. That is safe in both
-    cases: Enter on an already-emptied box is a no-op.
-
-    That failure mode is the dangerous one for a mail watcher: the CLI reports
-    success while nothing is delivered, and terminal_node acks the message on
-    the strength of it. Silently-lost mail is unrecoverable, so submission is
-    confirmed rather than assumed.
-
-    `herdr agent prompt` APPENDS to the input box rather than replacing it, so
-    anything a human left half-typed there gets concatenated onto the delivered
-    mail and the agent receives a mash-up of the two. clear=True sends ctrl+u
-    (kill-line) first — verified as the one that works; `esc` leaves the text
-    untouched, and ctrl+c is unsafe because it interrupts a working agent.
-
-    ctrl+u on an EMPTY box is a harmless no-op. On a NON-EMPTY one it discards
-    whatever the human was typing, so the pane is snapshotted to
-    ~/.rookery/stash/<target>-<ts>.txt first and the loss is recoverable rather
-    than silent. The snapshot is unconditional and unparsed on purpose: deciding
-    whether the box is non-empty means screen-scraping a TUI, which is racy
-    (the human can start typing between the read and the ctrl+u) and wrong in
-    both directions — a false "non-empty" defers mail forever, a false "empty"
-    clobbers anyway. Deferring delivery until the box clears would also trade a
-    rare, recoverable loss for a delivery-liveness failure in the one system
-    whose whole contract is delivery, and a human who half-types a line and
-    walks away would stall the queue indefinitely.
-
-    submit=False types without sending, for composing a prompt a human will
-    review before hitting Enter themselves.
-    """
-    if clear:
-        stash_pane(target)
-        _run(["agent", "send-keys", target, "ctrl+u"], timeout=timeout)
-    if _run(["agent", "prompt", target, text], timeout=timeout) is None:
-        return False
-    if not submit:
-        return True
-    return _run(["agent", "send-keys", target, "enter"], timeout=timeout) is not None
-
-
-def read(target: str, lines: int = 40, source: str = "recent") -> str | None:
-    """Read a pane's recent output — the read-only agent->agent OBSERVATION
-    channel. No injection, no state change, nothing to lose or interleave."""
-    args = ["agent", "read", target, "--source", source]
-    if lines:
-        args += ["--lines", str(lines)]
-    return _run(args, timeout=15.0)
-
-
 def focus(target: str) -> bool:
     """Bring the human to this agent's pane — the jump-to-whoever-is-blocked move."""
     return _run(["agent", "focus", target]) is not None
-
-
-# Kinds herdr can launch that accept Claude Code's system-prompt flags.
-_BRIEFABLE = {"claude"}
-
-
-BRIEFING_DIR = os.path.join(os.path.expanduser("~"), ".rookery", "briefings")
-
-
-def briefing_path(node_id: str) -> str:
-    """Where a node's standing briefing lives on disk."""
-    return os.path.join(BRIEFING_DIR, f"{node_id}.md")
-
-
-def write_briefing(node_id: str, text: str) -> str:
-    """Persist a node's briefing and return its path.
-
-    On disk rather than inline for two reasons. First, necessity: herdr builds
-    a shell command line for `agent start`, and rejects multi-line arguments
-    with "agent arguments cannot be encoded safely for the target shell" — so
-    `--append-system-prompt-file` is the only way to pass a real briefing.
-    Second, and more useful: a briefing that outlives the process can be
-    re-applied. The restart failure mode was an agent losing its briefing while
-    its mail survived; the briefing now survives too.
-    """
-    os.makedirs(BRIEFING_DIR, exist_ok=True)
-    path = briefing_path(node_id)
-    with open(path, "w") as fh:
-        fh.write(text)
-    return path
-
-
-def start_agent(node_id: str, pane: str, kind: str = "claude",
-                briefing: str | None = None, timeout: float = 60.0,
-                wait_ready: float = 15.0) -> bool:
-    """Launch an agent in PANE, named for its mesh node, briefed as that node.
-
-    The briefing goes in via Claude Code's `--append-system-prompt-file`, the
-    supported way to establish a session's standing role. That matters for more
-    than convenience: an UNBRIEFED session receiving
-    `<ROOKERY> mail from human: ...` sees content announcing itself as relayed
-    from a third party, and is right to be wary of instructions inside it. The
-    briefing is what makes "mail is my work queue" a fact the session holds
-    from its operator, rather than a claim made by the injected text itself.
-
-    Naming the agent `node_id` is also what lets bind_nodes() enroll it, so
-    identity survives a restart of whatever is inside the pane.
-
-    A freshly-created pane is not immediately launchable: herdr rejects it with
-    `agent_pane_busy` ("not an available shell") for roughly a second, even
-    though the shell process is already up and idle — its own readiness notion
-    lags the process state, so polling the pane's foreground process group
-    (tried first) reports ready too early and does not help. So retry on
-    exactly that error until wait_ready elapses; any other failure returns
-    immediately. Both start failures in the first live test were this, misread
-    at the time as a briefing problem. Pass wait_ready=0 for a single attempt.
-    """
-    args = ["agent", "start", node_id, "--kind", kind, "--pane", pane]
-    if briefing and kind in _BRIEFABLE:
-        args += ["--", "--append-system-prompt-file", write_briefing(node_id, briefing)]
-    deadline = time.monotonic() + wait_ready
-    while True:
-        r = _run_raw(args, timeout=timeout)
-        if r is None:
-            return False
-        if r.returncode == 0:
-            return True
-        if "agent_pane_busy" not in (r.stderr or "") or time.monotonic() >= deadline:
-            return False
-        time.sleep(0.25)
-
-
-# --- pane <-> node binding (W3) --------------------------------------------
-def bind_nodes(conn, register_new: bool = True, sync_status: bool = False) -> list[tuple]:
-    """Enroll herdr's NAMED panes as mesh nodes, so a node's identity and its
-    pane are the same thing. Returns the (node_id, pane_id) pairs bound.
-
-    Only panes you have named — `herdr agent rename <target> <node-id>` — are
-    bound; an unnamed pane has no mesh identity to claim, and guessing one from
-    a terminal title would bind the wrong agent.
-
-    This is the standing fix for the failure mode where restarting a mesh agent
-    wiped its briefing while its mail survived: the agent came back not knowing
-    which node it was, reported an empty inbox it could no longer read, and
-    mistook another pane for its peer. Identity that lives in the pane survives
-    a restart of what is inside the pane.
-
-    sync_status mirrors herdr's lifecycle state onto nodes.status ('blocked'
-    becomes 'waiting'), giving the mailroom a view of what its nodes are
-    actually doing. 'unknown' never overwrites.
-    """
-    import rookery as R
-
-    bound = []
-    for a in agents():
-        node_id = a.get("name")
-        pane = a.get("pane_id")
-        if not node_id or not pane:
-            continue
-        if R.get_node(conn, node_id) is None:
-            if not register_new:
-                continue
-            R.register_node(conn, node_id, kind="terminal")
-        R.set_address(conn, node_id, pane)
-        if sync_status:
-            mapped = _STATUS_MAP.get(a.get("agent_status"))
-            if mapped:
-                R.set_status(conn, node_id, mapped)
-        bound.append((node_id, pane))
-    return bound

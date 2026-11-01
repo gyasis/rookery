@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+Rookery drops the node mesh from before 0.7. Every sender needs a session.
+
+### Removed
+
+- BREAKING: a send with no session is refused. `mail_gate.submit` returns `refused` with reason `no-session`, logs one `gate` record, and stores no row. Rookery writes no new mail to the `legacy` session. Old `legacy` rows stay readable: `rookery inbox`, `rookery ack` and the mailroom `/inbox`, `/claim` and `/ack` still show and change them. `rookery send` and `rookery turn` with no session exit 3. The message names `rookery identity show`, `ROOKERY_SESSION` and `ROOKERY_NODE`, and `rookery up`.
+- BREAKING: the MCP server `rookery_mcp.py` (the tools `send`, `check_inbox`, `ack`, `await_message` and `roster`). A unit that runs it, such as `rookery-mcp.service`, fails to start.
+- BREAKING: the mailroom takes no mail from another machine. `POST /send` answers 403 `no-session`, and A2A `message/send` and `message/stream` answer JSON-RPC error -32602. A remote node still joins with `rookery join` and reads its mail with `rookery check`. `rookery join` writes the token to `~/.rookery/remote/NODE.token` (mode 600) and prints the lines to set. It does not change `~/.claude.json`.
+- The old scripts and the node mesh: `mailctl.py`, `send_mail.py`, `read_mail.py`, `node_runner.py`, `sdk_node.py`, `terminal_node.py`, `relay.py` (with the `node@mailroom` federation and its dead-letter alerts), `msg_relay.py`, `broadcast_coord.py`, `mesh_approve.py`, `rookery_join.py`, `webhook_sink.py` and `config_manager.py`. An address with `@` now goes through the recipient check like any name.
+- The postmaster roster mode (`postmaster.py --nodes` and its options `--engine`, `--persistent`, `--max-warm`, `--idle-timeout`, `--allowed-tools`, `--model`, `--mcp` and `--notify`), the `@mention` notices and the credential grant mail of that mode.
+- `rookery loop reset --legacy NAME`.
+- `rookery herdr bind`, `start`, `briefing-template` and `rebrief`, and the `herdr` injector. `rookery herdr status` shows the identity and session bound to each pane, from the `bindings` table. `rookery herdr focus NAME` takes an identity name.
+- The demos of the node mesh, `run_all_demos.sh`, `monitor.sh`, `pause.sh`, `resume.sh`, and the docs `NODE_BRIEFING.md`, `STORIES.md`, `COOKBOOK.md`, `HERDR_INTEGRATION.md` and `MSG_RELAY.md`. The section "Legacy mesh (pre-0.7)" of the skill is gone.
+
 ### Fixed
 
 - A Claude agent with `model` now starts through `claude-ollama`, which sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the real context window of the model. Before, Claude Code assumed 200k tokens for a model it does not know and compacted too early.
