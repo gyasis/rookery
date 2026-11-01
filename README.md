@@ -357,7 +357,7 @@ To send one mail now, without a turn, run `rookery send TO "SAY" --task TASK --k
 }
 ```
 
-An agent can also have `"model": "glm-5.3:cloud"`. Rookery then starts the harness with that model, from the `model_cmd` entry of the harness in the configuration. The default for Claude is `ollama launch claude --model {model} --`. Set `"cmd": ["omp-minimax"]` to give the exact start command instead. `cmd` replaces the default command and wins over `model`. Kimi has no `model_cmd`, so a Kimi agent with `model` and no `cmd` fails the check.
+An agent can also have `"model": "glm-5.3:cloud"`. Rookery then starts the harness with that model, from the `model_cmd` entry of the harness in the configuration. The default for Claude is `claude-ollama {model} --`. It sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the real context window of the model and then runs `ollama launch claude`. Without it, Claude Code assumes 200k tokens for a model it does not know. `claude-ollama` stops if it cannot find the window of the model. Set `"cmd": ["omp-minimax"]` to give the exact start command instead. `cmd` replaces the default command and wins over `model`. Kimi has no `model_cmd`, so a Kimi agent with `model` and no `cmd` fails the check.
 
 Run `rookery up team.json`. Add `--no-launch` to build everything and start no agent. Add `--json` for one JSON object.
 

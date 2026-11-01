@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- A Claude agent with `model` now starts through `claude-ollama`, which sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the real context window of the model. Before, Claude Code assumed 200k tokens for a model it does not know and compacted too early.
+
 ### Added
 
-- The team file keys `model` and `cmd` for an agent. `model` starts the harness with that model, through the `model_cmd` entry of the harness in the configuration (`ollama launch claude --model {model} --` for Claude, `omp --model {model}`, `pi --model {model}`). `cmd` is the full start command and wins over `model`. An agent with neither starts as before. A Kimi agent with `model` and no `cmd` fails the check. A `harness` table in `~/.rookery/config.json` gains the `model_cmd` default for each harness that lacks it.
+- The team file keys `model` and `cmd` for an agent. `model` starts the harness with that model, through the `model_cmd` entry of the harness in the configuration (`claude-ollama {model} --` for Claude, `omp --model {model}`, `pi --model {model}`). `cmd` is the full start command and wins over `model`. An agent with neither starts as before. A Kimi agent with `model` and no `cmd` fails the check. A `harness` table in `~/.rookery/config.json` gains the `model_cmd` default for each harness that lacks it.
 
 ## 0.9.0 - 2026-10-29
 

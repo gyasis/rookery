@@ -117,10 +117,7 @@
     "claude"
    ],
    "model_cmd": [
-    "ollama",
-    "launch",
-    "claude",
-    "--model",
+    "claude-ollama",
     "{model}",
     "--"
    ],
