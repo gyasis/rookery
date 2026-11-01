@@ -73,6 +73,17 @@ class TeamFile(unittest.TestCase):
         self.assertEqual(fixer["task_id"], "T1")
         self.assertEqual(fixer["claims"], ["auth/*.py"])
 
+    def test_model_and_cmd_keys(self):
+        cfg = dict(CONFIG, harness={"claude": {"model_cmd": ["x", "{model}"]}, "kimi": {"cmd": ["kimi"]}})
+        path = self.write(self.team(agent(model="glm:cloud"), agent(name="b", harness="omp", cmd=["omp-mm"])))
+        rookery_team.load(path, cfg)
+        for bad, word in ((agent(harness="kimi", model="m"), "model_cmd"),
+                          (agent(model=""), "model"), (agent(model=3), "model"),
+                          (agent(cmd=[]), "cmd"), (agent(cmd="omp"), "cmd"), (agent(cmd=["a", ""]), "cmd")):
+            errs = self.errors(self.team(bad), config=cfg)
+            self.assertIn(word, errs[0]["problem"])
+        rookery_team.load(self.write(self.team(agent(harness="kimi", model="m", cmd=["k"]))), cfg)
+
     def test_writer_repo_default_is_none(self):
         team = rookery_team.load(self.write(self.team(agent(role="writer", task_id="T1"))), CONFIG)
         self.assertIsNone(team["agents"][0]["repo"])

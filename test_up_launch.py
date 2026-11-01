@@ -297,6 +297,16 @@ class UpLaunch(unittest.TestCase):
         with open(os.path.join(ws, "_config", "system-prompt.md")) as fh:
             self.assertEqual(run[3], shlex.join(["pi", "--append-system-prompt", fh.read()]))
 
+    def test_launch_model_and_cmd(self):
+        evil = "m'; touch x; $(y) \"z"
+        r, out = self.go(team(agent("m", harness="pi", binding="herdr-pane", model=evil),
+                              agent("c", harness="pi", binding="herdr-pane", model="ignored", cmd=["omp-mm"]),
+                              agent("d", harness="pi", binding="herdr-pane")))
+        runs = [row[3] for row in self.calls(self.rec) if row[:2] == ["pane", "run"]]
+        self.assertEqual(shlex.split(runs[0]), ["pi", "--model", evil])
+        self.assertEqual(shlex.split(runs[1]), ["omp-mm"])
+        self.assertEqual(shlex.split(runs[2]), ["pi"])
+
     def test_launch_value_not_reexpanded(self):
         a, out = self.one({"x-pane": {"env_flag": "-e", "steps": [
             {"argv": ["echo", "pane:{cwd}"], "capture": "pane:(.*)"},
