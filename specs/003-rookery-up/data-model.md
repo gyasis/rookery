@@ -68,6 +68,8 @@ FR-019, FR-021):
 | `agents[].task_id` | Must be present for a writer. A valid branch part |
 | `agents[].binding` | optional. A key of `launch`. Default the configuration's `default_binding` |
 | `agents[].persona` | optional text |
+| `agents[].model` | optional. Non-empty text. The model name. Rookery puts it in `harness.<h>.model_cmd` at `{model}`. A harness with no `model_cmd` (Kimi) fails, unless `cmd` is set |
+| `agents[].cmd` | optional. A list of one or more non-empty text items. It replaces `harness.<h>.cmd` and wins over `model` |
 | `agents[].scope` | optional. `{"does": [text], "does_not": [text]}` |
 | `agents[].claims` | optional. A list of globs |
 

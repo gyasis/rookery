@@ -116,6 +116,14 @@
    "cmd": [
     "claude"
    ],
+   "model_cmd": [
+    "ollama",
+    "launch",
+    "claude",
+    "--model",
+    "{model}",
+    "--"
+   ],
    "settings_flag": "--settings",
    "prompt_file_flag": "--append-system-prompt-file",
    "add_dir_flag": "--add-dir"
@@ -124,11 +132,21 @@
    "cmd": [
     "pi"
    ],
+   "model_cmd": [
+    "pi",
+    "--model",
+    "{model}"
+   ],
    "prompt_flag": "--append-system-prompt"
   },
   "omp": {
    "cmd": [
     "omp"
+   ],
+   "model_cmd": [
+    "omp",
+    "--model",
+    "{model}"
    ],
    "prompt_flag": "--append-system-prompt"
   },

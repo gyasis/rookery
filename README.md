@@ -357,6 +357,8 @@ To send one mail now, without a turn, run `rookery send TO "SAY" --task TASK --k
 }
 ```
 
+An agent can also have `"model": "glm-5.3:cloud"`. Rookery then starts the harness with that model, from the `model_cmd` entry of the harness in the configuration. The default for Claude is `ollama launch claude --model {model} --`. Set `"cmd": ["omp-minimax"]` to give the exact start command instead. `cmd` replaces the default command and wins over `model`. Kimi has no `model_cmd`, so a Kimi agent with `model` and no `cmd` fails the check.
+
 Run `rookery up team.json`. Add `--no-launch` to build everything and start no agent. Add `--json` for one JSON object.
 
 Add `--session NAME` to name the session. The flag wins over `session` in the team file. With no name from either, `rookery up` makes a name of three words and prints it: `Session: NAME (name made)`. Run `rookery up team.json --session NAME` again to resume the session. It keeps the mail, the identities and the worktrees. It starts only the panes that are not alive, and no second sweep. `"screener": true` in the team file turns screening on for the session.

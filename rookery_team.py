@@ -203,6 +203,18 @@ def load(path, config=None, session=None, make_name=None) -> dict:
             problems.append("The binding must be a safe name.")
         if "persona" in a and not isinstance(a["persona"], str):
             problems.append("The persona must be text.")
+        if "model" in a:
+            m = a["model"]
+            if not isinstance(m, str) or not m.strip():
+                problems.append("The model must be non-empty text.")
+            elif harness in HARNESSES and "cmd" not in a \
+                    and not ((config.get("harness") or {}).get(harness) or {}).get("model_cmd"):
+                problems.append(f"The harness {harness} has no model_cmd. "
+                                "Remove the model, or set cmd to the command that starts it.")
+        if "cmd" in a:
+            c = a["cmd"]
+            if not isinstance(c, list) or not c or not all(isinstance(x, str) and x for x in c):
+                problems.append("The cmd must be a list of one or more non-empty text items.")
         if "scope" in a:
             sc = a["scope"]
             if not isinstance(sc, dict) or not all(_is_text_list(sc[k]) for k in sc if k in ("does", "does_not")):

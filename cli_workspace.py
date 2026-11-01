@@ -86,8 +86,10 @@ def _up_config(config):
         if k in default:
             merged[k] = default[k]
     if isinstance(merged.get("harness"), dict) and isinstance(default.get("harness"), dict):
-        # feature 006: a user harness table from before kimi still gets the new harness entries
-        merged["harness"] = dict(default["harness"], **merged["harness"])
+        # a user harness entry keeps its own keys and gains the default keys it lacks (model_cmd)
+        user = merged["harness"]
+        merged["harness"] = dict(user, **{h: dict(d, **user[h]) if isinstance(user.get(h), dict) else user.get(h, d)
+                                          for h, d in default["harness"].items()})
     return merged
 
 
@@ -126,7 +128,12 @@ def _env_unset(group):
 
 
 def _harness_cmd(a, ws, root, host, hcfg):
-    cmd = list(hcfg.get("cmd") or [])
+    if a.get("cmd"):
+        cmd = list(a["cmd"])
+    elif a.get("model"):
+        cmd = [a["model"] if t == "{model}" else t for t in hcfg["model_cmd"]]
+    else:
+        cmd = list(hcfg.get("cmd") or [])
     if a["harness"] == "claude":
         settings = os.path.join(ws, "_config", "settings.json")
         cmd += [hcfg["settings_flag"], settings]

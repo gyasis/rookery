@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- The team file keys `model` and `cmd` for an agent. `model` starts the harness with that model, through the `model_cmd` entry of the harness in the configuration (`ollama launch claude --model {model} --` for Claude, `omp --model {model}`, `pi --model {model}`). `cmd` is the full start command and wins over `model`. An agent with neither starts as before. A Kimi agent with `model` and no `cmd` fails the check. A `harness` table in `~/.rookery/config.json` gains the `model_cmd` default for each harness that lacks it.
+
 ## 0.9.0 - 2026-10-29
 
 Feature 006: the hookless wake. An agent with no Rookery turn hook (Kimi, Codex, an agent started by hand) now gets the mail notice through herdr.
