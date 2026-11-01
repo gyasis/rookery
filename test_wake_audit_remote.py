@@ -72,13 +72,6 @@ class TestUnsafeNode(FollowBase):
         self.assertEqual(r.returncode, 2)
         self.assertEqual(self.escaped(), [])
 
-    def test_mcp_remote_follow_skips(self):
-        import rookery_mcp
-        with mock.patch.dict(os.environ, {"ROOKERY_NODE": self.BAD}), \
-                mock.patch.object(RR, "start_follow") as sf:
-            rookery_mcp._remote_follow()
-        sf.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

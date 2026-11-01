@@ -4,6 +4,7 @@ agent's own pane, and remembers the announced ids in ~/.rookery/remote/NODE.json
 import argparse
 import json
 import os
+import ssl
 import subprocess
 import sys
 import time
@@ -56,9 +57,18 @@ def _save_announced(node, ids, retry_after=0.0, delay=0.0):
         pass
 
 
+def _ctx(url):
+    """ROOKERY_INSECURE_TLS=1 skips cert verification for a self-signed mailroom on a TRUSTED LAN."""
+    if url.startswith("https") and os.environ.get("ROOKERY_INSECURE_TLS"):
+        c = ssl.create_default_context()
+        c.check_hostname = False
+        c.verify_mode = ssl.CERT_NONE
+        return c
+    return None
+
+
 def _fetch(url, token, node, opener):
     """The unread rows of `node` from the mailroom. Raises on any network or HTTP error."""
-    import mailctl                      # the same TLS rule as every remote call (ROOKERY_INSECURE_TLS)
     full = url.rstrip("/") + "/inbox?node=" + urllib.parse.quote(node)
     headers = {"Content-Type": "application/json"}
     if token:
@@ -66,7 +76,7 @@ def _fetch(url, token, node, opener):
     req = urllib.request.Request(full, method="GET", headers=headers)
     if opener is None:
         handlers = [_NoRedirect()]
-        ctx = mailctl._ctx(url)
+        ctx = _ctx(url)
         if ctx is not None:
             handlers.append(urllib.request.HTTPSHandler(context=ctx))
         resp = urllib.request.build_opener(*handlers).open(req, timeout=CHECK_TIMEOUT)

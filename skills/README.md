@@ -11,7 +11,7 @@ agents who they are.
 | Delivered | installed once into the harness | project file, and the hook at session start |
 | Survives restart | yes (it is on disk) | yes (it is on disk) |
 
-In 0.7 the project section and the session-start hook take the place of the old node briefing (`docs/NODE_BRIEFING.md`). The briefing now applies only to the legacy node mesh.
+The project section and the session-start hook tell an agent who it is.
 
 The skill and the section say the same thing. Install the skill so an agent knows Rookery before it joins a project.
 

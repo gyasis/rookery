@@ -56,75 +56,24 @@ class SendStatus(GateHttpBase):
         self.assertEqual(self.count(), 0)
         self.assertEqual(self.gate_log(), [])
 
-    def test_system_sender_gets_403_with_body(self):
-        code, ans = self.send(sender="rookery")
-        self.assertEqual(code, 403)
-        self.assertEqual(ans["error"], "system-name")
-        self.assertTrue(ans["detail"])
+    def test_every_send_gets_403_no_session_and_stores_nothing(self):
+        for kw in ({}, {"sender": "rookery"}, {"sender": "swe"}, {"body": "DENY-ME please"},
+                   {"body": "BOOM-ME"}):
+            code, ans = self.send(**kw)
+            self.assertEqual((code, ans["error"]), (403, "no-session"), kw)
+            self.assertEqual(ans["detail"], mailroom_server._SEND_ERRORS["no-session"][1])
         self.assertEqual(self.count(), 0)
-
-    def test_bad_sender_gets_400_bad_input(self):
-        code, ans = self.send(sender="x; rm")
-        self.assertEqual(code, 400)
-        self.assertEqual(ans["error"], "bad-input")
-        self.assertTrue(ans["detail"])
-        self.assertEqual(self.count(), 0)
-
-    def test_empty_body_gets_400_bad_input(self):
-        code, ans = self.send(body="")
-        self.assertEqual((code, ans["error"]), (400, "bad-input"))
-
-    def test_other_agents_name_is_sent_and_logged_as_asked_sender(self):
-        code, ans = self.send(sender="swe")
-        self.assertEqual(code, 200)
-        self.assertEqual(ans["outcome"], "sent")
-        rec = self.gate_log()[-1]
-        self.assertEqual((rec["asked_sender"], rec["outcome"]), ("swe", "sent"))
-        self.assertEqual(self.count(), 1)
 
     def test_one_log_record_per_refusal(self):
         self.send(sender="rookery")
-        self.send(sender="x; rm")
+        self.send(sender="swe")
         recs = self.gate_log()
-        self.assertEqual([(r["outcome"], r["reason"]) for r in recs],
-                         [("refused", "system-name"), ("refused", "bad-input")])
-
-    def test_quarantined_stays_200(self):
-        code, ans = self.send(body="DENY-ME please")
-        self.assertEqual(code, 200)
-        self.assertEqual((ans["outcome"], ans["reason"]), ("quarantined", "injection-suspect"))
-
-    def test_loop_held_stays_200(self):
-        self.set_loop_limit(1)
-        self.assertEqual(self.send()[1]["outcome"], "sent")
-        code, ans = self.send()
-        self.assertEqual(code, 200)
-        self.assertEqual((ans["outcome"], ans["reason"]), ("loop-held", "loop"))
-
-    def test_db_busy_gets_503_with_error_body(self):
-        code, ans = self.send(body="LOCK-ME")
-        self.assertEqual(code, 503)
-        self.assertEqual(ans["error"], "db-busy")
-        self.assertTrue(ans["detail"])
-        self.assertEqual(self.count(), 0)
-
-    def test_send_failed_gets_500_with_error_body(self):
-        code, ans = self.send(body="BOOM-ME")
-        self.assertEqual(code, 500)
-        self.assertEqual(ans["error"], "send-failed")
-        self.assertNotIn("fixture boom", ans["detail"])
-        self.assertEqual(ans["detail"], mailroom_server._SEND_ERRORS["send-failed"][1])
-        self.assertEqual(self.count(), 0)
-
-    # helpers
-    def set_loop_limit(self, n):
-        os.makedirs(os.path.join(self.tmp.name, ".rookery"), exist_ok=True)
-        with open(os.path.join(self.tmp.name, ".rookery", "config.json"), "w") as fh:
-            json.dump({"loop_limit": n}, fh)
+        self.assertEqual([(r["outcome"], r["reason"], r["asked_sender"]) for r in recs],
+                         [("refused", "no-session", "rookery"), ("refused", "no-session", "swe")])
 
 
 class A2aMapping(GateHttpBase):
-    """Contract "A2A outcomes": one case for each row, on message/send and message/stream."""
+    """Contract "A2A outcomes" for a remote sender: authorize first, then the no-session refusal."""
 
     def rpc(self, text, sender="human", recipient="researcher", method="message/send"):
         return self.raw("/a2a", {
@@ -132,53 +81,19 @@ class A2aMapping(GateHttpBase):
             "params": {"message": {"parts": [{"kind": "text", "text": text}],
                                    "metadata": {"recipient": recipient, "from": sender}}}})[1]
 
-    def test_sent_is_submitted(self):
-        ans = self.rpc("hello")
-        self.assertEqual(ans["result"]["status"]["state"], "submitted", ans)
-        self.assertEqual(self.count(), 1)
-
-    def test_quarantined_is_rejected_with_reason(self):
-        ans = self.rpc("DENY-ME")
-        self.assertEqual(ans["result"]["status"]["state"], "rejected", ans)
-        self.assertIn("injection-suspect", ans["result"]["status"]["message"])
-
-    def test_loop_held_is_rejected_with_reason(self):
-        os.makedirs(os.path.join(self.tmp.name, ".rookery"), exist_ok=True)
-        with open(os.path.join(self.tmp.name, ".rookery", "config.json"), "w") as fh:
-            json.dump({"loop_limit": 1}, fh)
-        self.assertEqual(self.rpc("one")["result"]["status"]["state"], "submitted")
-        ans = self.rpc("two")
-        self.assertEqual(ans["result"]["status"]["state"], "rejected", ans)
-        self.assertIn("loop", ans["result"]["status"]["message"])
-
-    def test_refused_is_32602(self):
-        # the sender is `a2a-<from>` and cleaned, so an empty body is what is refused here
-        for text in ("", ""):
-            ans = self.rpc(text)
-            self.assertEqual(ans["error"]["code"], -32602, ans)
+    def test_no_session_is_32602_on_send_and_stream(self):
+        for method in ("message/send", "message/stream"):
+            for text in ("hello", "", "DENY-ME", "BOOM-ME"):
+                ans = self.rpc(text, method=method)
+                self.assertEqual(ans["error"]["code"], -32602, ans)
+                self.assertIn("no-session", ans["error"]["message"])
         self.assertEqual(self.count(), 0)
 
     def test_authorize_deny_is_32003(self):
-        ans = self.rpc("hello", recipient="forbidden")
-        self.assertEqual(ans["error"]["code"], -32003, ans)
-        self.assertEqual(self.count(), 0)
-
-    def test_db_busy_is_32006(self):
-        ans = self.rpc("LOCK-ME")
-        self.assertEqual(ans["error"]["code"], -32006, ans)
-
-    def test_send_failed_is_32603(self):
-        ans = self.rpc("BOOM-ME")
-        self.assertEqual(ans["error"]["code"], -32603, ans)
-        self.assertEqual(self.count(), 0)
-
-    def test_stream_uses_the_same_mapping(self):
         for method in ("message/send", "message/stream"):
-            self.assertEqual(self.rpc("", method=method)["error"]["code"],
-                             -32602)
-            self.assertEqual(self.rpc("hello", recipient="forbidden", method=method
-                                      )["error"]["code"], -32003)
-            self.assertEqual(self.rpc("BOOM-ME", method=method)["error"]["code"], -32603)
+            ans = self.rpc("hello", recipient="forbidden", method=method)
+            self.assertEqual(ans["error"]["code"], -32003, ans)
+        self.assertEqual(self.count(), 0)
 
 
 class A2aTaskReads(GateHttpBase):
@@ -201,9 +116,8 @@ class A2aTaskReads(GateHttpBase):
         return mid
 
     def start_task(self):
-        ans = self.rpc("message/send", {"message": {"parts": [{"kind": "text", "text": "hi"}],
-                                                     "metadata": {"recipient": "researcher", "from": "x"}}})
-        return ans["result"]["id"], int(ans["result"]["id"].rsplit("-", 1)[1])
+        mid = self.mail("a2a-x", "researcher", "hi", "pending")
+        return f"a2a-{mid}", mid
 
     def test_held_replies_are_not_returned(self):
         tid, _ = self.start_task()
@@ -267,7 +181,7 @@ class ReadsByName(GateHttpBase):
                     self.assertTrue(ans["detail"])
         self.assertEqual(self.snap(), before)
 
-    def test_old_mailctl_without_node_still_works(self):
+    def test_claim_and_ack_without_node_act_on_the_ids(self):
         with sqlite3.connect(self.db) as c:
             mid = c.execute("INSERT INTO inbox(sender, recipient, body, status, delivered, created_at,"
                             " session_id) VALUES('x','oldpeer','hi','pending',0,'2026-01-01','legacy')"
@@ -313,14 +227,8 @@ class ReadsByName(GateHttpBase):
         self.assertEqual(self.status(self.byid), "pending")
 
     def test_read_paths_change_no_row(self):
-        import subprocess, sys
         before = self.snap()
         self.get("/inbox?node=N")
-        out = subprocess.run([sys.executable, "mailctl.py", "inbox", "--url", self.url,
-                              "--node", "N", "--token", TOKEN], capture_output=True, text=True,
-                             cwd=os.path.dirname(os.path.abspath(__file__)))
-        self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn("N", out.stdout)
         res = self.raw("/a2a", {"jsonrpc": "2.0", "id": 1, "method": "tasks/get",
                                 "params": {"id": f"task-{self.legacy}"}})[1]
         self.assertEqual(res["error"]["code"], -32001)   # a mailbox row that is not an A2A task

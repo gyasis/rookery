@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Mail gate, T016: the 3 tries on the mailroom paths (no session, so all land in `legacy`).
+"""Mail gate, T016: the 3 tries on the mailroom paths. A remote sender has no session, so each try is refused.
 
     python3 -m unittest test_paths_mailroom -v
 
-3 paths x 3 tries = 9 cases: POST /send, `mailctl.py send` and A2A `message/send`. Each test class
+2 paths x 3 tries = 6 cases: POST /send and A2A `message/send`. Each test class
 starts mailroom_server.py on a free local port against the test's temp DB and kills it in tearDown.
 """
 import json
@@ -71,19 +71,12 @@ class ServerMixin:
 
 class HttpSendPath(ServerMixin, SendMatrix, Base):
     def send(self, to):
-        ans = self.post("/send", {"sender": "human", "recipient": to, "body": "please review"})
-        self.assertEqual(set(ans), {"id", "outcome", "reason"}, ans)
-        self.assertEqual(ans["outcome"], "sent")
-
-
-class MailctlPath(ServerMixin, SendMatrix, Base):
-    def send(self, to):
-        out = subprocess.run(
-            [sys.executable, os.path.join(HERE, "mailctl.py"), "send", "--url", self.url,
-             "--token", TOKEN, "--to", to, "--from", "human", "--body", "please review"],
-            capture_output=True, text=True, env=self.env(session=False, node=False), cwd=HERE,
-            timeout=30)
-        self.assertEqual(out.returncode, 0, out.stderr)
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.post("/send", {"sender": "human", "recipient": to, "body": "please review"})
+        self.assertEqual(cm.exception.code, 403)
+        ans = json.loads(cm.exception.read())
+        self.assertEqual(ans["error"], "no-session", ans)
+        self.assertIn("rookery send", ans["detail"])
 
 
 class A2aPath(ServerMixin, SendMatrix, Base):
@@ -92,7 +85,8 @@ class A2aPath(ServerMixin, SendMatrix, Base):
             "jsonrpc": "2.0", "id": 1, "method": "message/send",
             "params": {"message": {"parts": [{"kind": "text", "text": "please review"}],
                                    "metadata": {"recipient": to, "from": "human"}}}})
-        self.assertIn("result", ans, ans)
+        self.assertEqual(ans.get("error", {}).get("code"), -32602, ans)
+        self.assertIn("no-session", ans["error"]["message"])
 
 
 class A2aOutcomes(ServerMixin, Base):
@@ -117,10 +111,10 @@ class A2aOutcomes(ServerMixin, Base):
             self.assertEqual(ans.get("error", {}).get("code"), -32602, ans)
         self.assertEqual(self.count(), 0)
 
-    def test_quarantined_mail_is_rejected_not_submitted(self):
-        ans = self.rpc("message/send", "human", "DENY-ME please")
-        self.assertEqual(ans["result"]["status"]["state"], "rejected", ans)
-        self.assertIn("injection-suspect", ans["result"]["status"]["message"])
+    def test_no_session_sender_is_an_error_and_stores_nothing(self):
+        ans = self.rpc("message/send", "human", "please review")
+        self.assertIn("no-session", ans["error"]["message"], ans)
+        self.assertEqual(self.count(), 0)
 
 
 if __name__ == "__main__":

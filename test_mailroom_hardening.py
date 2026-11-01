@@ -167,62 +167,36 @@ class A2aTextAndSender(GateHttpBase):
             "params": {"message": {"parts": [{"kind": "text", "text": text}],
                                    "metadata": {"recipient": "researcher", "from": sender}}}})[1]
 
-    # fix 4
-    def test_send_failed_message_has_no_exception_text(self):
-        for method in ("message/send", "message/stream"):
-            ans = self.rpc("BOOM-ME", method=method)
-            self.assertEqual(ans["error"]["code"], -32603)
-            self.assertNotIn("fixture boom", ans["error"]["message"])
-            self.assertEqual(ans["error"]["message"],
-                             "send-failed: " + mailroom_server._SEND_ERRORS["send-failed"][1])
-
-    # fix 5
+    # fix 5: a free-form `from` is cleaned, never refused for its form
     CASES = {"My Client": "a2a-My-Client", "José": "a2a-Jos", "": "a2a-client",
              "https://x.example/a?b=c": "a2a-https-x.example-a-b-c"}
 
-    def last_sender(self):
-        with sqlite3.connect(self.db) as c:
-            return c.execute("SELECT sender FROM inbox ORDER BY id DESC LIMIT 1").fetchone()[0]
-
-    def test_free_form_from_is_sanitized_not_refused(self):
+    def test_free_form_from_is_sanitized(self):
         for sender, want in self.CASES.items():
-            ans = self.rpc("hello", sender=sender)
-            self.assertNotIn("error", ans, (sender, ans))
-            self.assertEqual(ans["result"]["status"]["state"], "submitted", ans)
-            self.assertEqual(self.last_sender(), want, sender)
-
-    def test_stream_sanitizes_from_too(self):
-        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "message/stream",
-                           "params": {"message": {"parts": [{"kind": "text", "text": "hi"}],
-                                                  "metadata": {"recipient": "researcher",
-                                                               "from": "My Client"}}}}).encode()
-        req = urllib.request.Request(self.url + "/a2a", data=body, method="POST", headers={
-            "Content-Type": "application/json", "Authorization": f"Bearer {TOKEN}"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            first = r.readline().decode()      # first SSE event: submitted; do not wait for more
-        self.assertIn("submitted", first)
-        self.assertEqual(self.last_sender(), "a2a-My-Client")
+            self.assertEqual(mailroom_server._a2a_sender({"from": sender}), want, sender)
 
     def test_long_from_is_truncated_to_64(self):
-        ans = self.rpc("hello", sender="a" * 80)
-        self.assertEqual(ans["result"]["status"]["state"], "submitted", ans)
-        with sqlite3.connect(self.db) as c:
-            got = c.execute("SELECT sender FROM inbox ORDER BY id DESC LIMIT 1").fetchone()[0]
+        got = mailroom_server._a2a_sender({"from": "a" * 80})
         self.assertTrue(re.fullmatch(r"a2a-[A-Za-z0-9._-]+", got) and len(got) <= 64, got)
+
+    def test_send_and_stream_are_refused_with_no_session(self):
+        for method in ("message/send", "message/stream"):
+            ans = self.rpc("BOOM-ME", method=method)
+            self.assertEqual(ans["error"]["code"], -32602, ans)
+            self.assertEqual(ans["error"]["message"], "refused: no-session")
 
     # fix 6 (SC-009)
     def test_tasks_get_changes_no_row(self):
-        ans = self.rpc("hello")
-        tid = ans["result"]["id"]
+        import rookery as R
+        mid = R.send(self.conn, "a2a-x", "researcher", "hello", hold=False, session_id="legacy")
         snap = lambda: sqlite3.connect(self.db).execute(
             "SELECT id, status, delivered, claimed_at, delivered_at FROM inbox ORDER BY id"
         ).fetchall()
         before = snap()
         got = self.raw("/a2a", {"jsonrpc": "2.0", "id": 2, "method": "tasks/get",
-                                "params": {"id": tid}})[1]
+                                "params": {"id": f"a2a-{mid}"}})[1]
         self.assertIn("result", got)
         self.assertEqual(snap(), before)
-
 
 if __name__ == "__main__":
     unittest.main()

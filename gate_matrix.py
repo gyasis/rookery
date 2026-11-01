@@ -12,7 +12,7 @@ unknown name, peer only in beta, valid peer. Each test checks the stored rows, t
 that the `identities` table did not change (FR-011).
 
   with a session   : wrong-recipient, off-team, sent (pending, sender's session)
-  with no session  : sent in session `legacy` for all 3, with the `no-session` warning
+  with no session  : refused with reason `no-session` for all 3, and no row is stored
 """
 import json
 import os
@@ -63,10 +63,9 @@ class SendMatrix:
         self.assertTrue(recs, "no gate log record")
         rec = recs[-1]
         self.assertEqual((rec["outcome"], rec["reason"]), (outcome, reason), rec)
-        if self.with_session:
-            self.assertIsNone(rec["warning"], rec)
-        else:
-            self.assertEqual((rec["warning"], rec["session"]), ("no-session", "legacy"), rec)
+        self.assertIsNone(rec["warning"], rec)
+        if not self.with_session:
+            self.assertIsNone(rec["session"], rec)
         return self.stored()
 
     def _assert_session_rows(self, rows, to, outcome):
@@ -83,19 +82,16 @@ class SendMatrix:
                         "no bounce to the sender")
 
     def _run(self, to, outcome, reason):
-        rows = self._try(to, outcome, reason if self.with_session else None)
-        if self.with_session:
-            self._assert_session_rows(rows, to, outcome)
-        else:
-            [row] = rows
-            self.assertEqual((row["recipient"], row["status"], row["session_id"]),
-                             (to, "pending", "legacy"))
+        if not self.with_session:
+            self.assertEqual(self._try(to, "refused", "no-session"), [], "a no-session send stored a row")
+            return
+        self._assert_session_rows(self._try(to, outcome, reason), to, outcome)
 
     def test_unknown_name(self):
-        self._run(self.UNKNOWN, "quarantined" if self.with_session else "sent", "wrong-recipient")
+        self._run(self.UNKNOWN, "quarantined", "wrong-recipient")
 
     def test_peer_only_in_beta(self):
-        self._run(self.ONLY_IN_BETA, "quarantined" if self.with_session else "sent", "off-team")
+        self._run(self.ONLY_IN_BETA, "quarantined", "off-team")
 
     def test_valid_peer(self):
         self._run(self.PEER, "sent", None)
