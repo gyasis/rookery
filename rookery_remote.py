@@ -7,7 +7,6 @@ import os
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -17,12 +16,6 @@ CHECK_TIMEOUT = 10          # seconds per socket operation
 CHECK_DEADLINE = 20         # seconds for the whole reply: a server that drips bytes cannot hold a hook
 MAX_REPLY = 1_000_000       # bytes: a larger reply is refused, not read into memory
 BACKOFF_START, BACKOFF_MAX = 30, 600   # a pane command that fails is not retyped on every check
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Refuse every redirect: urllib would carry the Authorization header to the new host."""
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise urllib.error.HTTPError(req.full_url, code, f"redirect refused ({code})", headers, fp)
 
 
 def _state_path(node):
@@ -65,7 +58,7 @@ def _fetch(url, token, node, opener):
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(full, method="GET", headers=headers)
     if opener is None:
-        handlers = [_NoRedirect()]
+        handlers = [mailctl._NoRedirect()]
         ctx = mailctl._ctx(url)
         if ctx is not None:
             handlers.append(urllib.request.HTTPSHandler(context=ctx))

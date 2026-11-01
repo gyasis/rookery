@@ -30,13 +30,23 @@ def _ctx(url):
     return None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib would carry the Authorization header to the new host."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f"redirect refused ({code})", headers, fp)
+
+
 def call(url, path, method="GET", body=None):
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"}
     if TOKEN:
         headers["Authorization"] = f"Bearer {TOKEN}"
     req = urllib.request.Request(url.rstrip("/") + path, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=15, context=_ctx(url)) as r:
+    handlers = [_NoRedirect()]
+    ctx = _ctx(url)
+    if ctx is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    with urllib.request.build_opener(*handlers).open(req, timeout=15) as r:
         return json.loads(r.read() or b"{}")
 
 

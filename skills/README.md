@@ -26,4 +26,37 @@ Use the directory form: `~/.claude/skills/<name>/SKILL.md`. The loader ignores a
 `~/.claude/skills/<name>.md`. Restart the agent afterwards. The agent reads the skills
 directory only at startup.
 
-For other harnesses, paste the file into their global-instructions setting.
+Other harnesses read the same `SKILL.md` from their own skills directory. Link the
+Claude copy so that one file serves them all:
+
+| Harness | Skills directory |
+|---|---|
+| Claude Code | `~/.claude/skills/` |
+| Kimi Code, and any harness that reads the shared directory | `~/.agents/skills/` |
+| Codex | `~/.codex/skills/` |
+| pi | `~/.pi/agent/skills/` |
+| omp | `~/.omp/agent/skills/` |
+
+```bash
+ln -s ~/.claude/skills/rookery ~/.agents/skills/rookery
+```
+
+Kimi Code reads instructions only from `AGENTS.md`, never from `CLAUDE.md`. It reads MCP
+servers from `~/.kimi-code/mcp.json`, and an entry takes the form
+`{"transport": "http", "url": "http://127.0.0.1:7702/mcp"}`.
+
+## `rookery-up` — the team wizard
+
+`skills/rookery-up/SKILL.md` asks the user questions, writes a team file, and checks it.
+It then prints the `rookery up` command and explains each part, so the user learns to
+write the command alone. It never runs `rookery up` unless the user asks.
+
+The skill checks each team file with `rookery-wizard --check FILE`. That script imports the
+team loader from the installed zipapp and writes nothing. Run `rookery-wizard` with no
+arguments to get the same interview in a terminal, without an agent.
+
+```bash
+mkdir -p ~/.claude/skills/rookery-up
+cp skills/rookery-up/SKILL.md ~/.claude/skills/rookery-up/SKILL.md
+install -m 755 skills/rookery-up/rookery-wizard ~/.local/bin/rookery-wizard
+```
