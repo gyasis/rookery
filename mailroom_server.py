@@ -6,7 +6,9 @@ OTHER machines (e.g. the Mac Studio) can join the mesh over the LAN. Stdlib only
 
 Run it on the box that holds the DB; bind 0.0.0.0 so peers reach it. Peers use
 any HTTP client. A send needs a Rookery session, and this server has none for a remote
-sender, so /send and A2A message/send refuse with `no-session`. NEVER put the SQLite file on a network share —
+sender, so /send and A2A message/send refuse with `no-session`. One exception: with
+`--token-node SESSION:NAME`, a /send that carries the bearer token sends as identity NAME in the open
+session SESSION (the duly node). NEVER put the SQLite file on a network share —
 locking is broken; peers talk to THIS service over TCP instead.
 """
 
@@ -28,6 +30,7 @@ import security  # swappable auth/authz/credential/inspection policy
 import mailroom_handshake
 import mailroom_bootstrap
 import mail_gate  # the one door for mail from a local sender
+import rookery_identity
 
 # Set from CLI in main(). PUBLIC_URL is what goes in the Agent Card (how peers
 # reach us); DEFAULT_NODE routes A2A messages with no explicit recipient.
@@ -35,6 +38,7 @@ import mail_gate  # the one door for mail from a local sender
 PUBLIC_URL = "http://localhost:8765"
 DEFAULT_NODE = "mailroom"
 CARD_KEY = None  # Ed25519 private-key path -> sign the agent card
+TOKEN_NODE = None  # (session, name) from --token-node: the identity a bearer-token /send uses
 
 
 def _rows(rs):
@@ -161,12 +165,29 @@ _SEND_ERRORS = {
     "no-session": (403, "Rookery sends mail only from a sender in a Rookery session. This mailroom "
                         "has no session for a remote sender. Send from a session on this machine "
                         "with `rookery send`."),
+    "wrong-sender": (403, "This token sends mail only under its own node name. Send with that "
+                          "sender name, or with no sender."),
     "system-name": (403, "This sender name is for the system. Use a different sender name."),
     "bad-input": (400, "The sender, the recipient or the body is not valid. Check all three, "
                        "then send the mail again."),
     "db-busy": (503, "The database is busy. Send the mail again."),
     "send-failed": (500, "The mail was not sent."),
 }
+
+
+def token_principal(conn, principal):
+    """(session, identity) that a /send with the bearer token acts as, or None.
+
+    Only when --token-node is set and the caller passed the token (principal `bearer`). The session must
+    be open and hold the identity, else None, so the send is refused with `no-session`."""
+    if TOKEN_NODE is None or principal != "bearer":
+        return None
+    session_ref, name = TOKEN_NODE
+    session = rookery_identity.get_session(conn, session_ref)
+    if session is None or session["state"] != "open":
+        return None
+    identity = rookery_identity.get_identity(conn, name, session["session_id"])
+    return (session, identity) if identity else None
 
 
 def _send_error(res):
@@ -545,10 +566,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._a2a_stream(c, d, principal)
             return self._reply(a2a_rpc(c, d, principal))
         if u.path == "/send":
-            res = mail_gate.submit(
-                c, path="mailroom", principal=None, raw_sender=d.get("sender") or "anon",
-                to=d.get("recipient", d.get("to")), body=d.get("body"),
-                topic=d.get("topic") or "", asked_sender=d.get("sender") or None)
+            node = token_principal(c, principal)
+            if node and d.get("sender") not in (None, "", node[1]["name"]):
+                code, detail = _SEND_ERRORS["wrong-sender"]
+                return self._reply({"error": "wrong-sender", "detail": detail}, code)
+            if node:
+                res = mail_gate.submit(
+                    c, path="mailroom", principal=node, raw_sender=node[1]["agent_id"],
+                    to=d.get("recipient", d.get("to")), body=d.get("body"),
+                    topic=d.get("topic") or "", asked_sender=None)
+            else:
+                res = mail_gate.submit(
+                    c, path="mailroom", principal=None, raw_sender=d.get("sender") or "anon",
+                    to=d.get("recipient", d.get("to")), body=d.get("body"),
+                    topic=d.get("topic") or "", asked_sender=d.get("sender") or None)
             failed = _send_error(res)
             if failed:
                 return self._reply(failed[1], failed[0])
@@ -694,9 +725,23 @@ def main():
         action="store_true",
         help="no effect: a local mailroom needs no token, and any other host needs one",
     )
+    ap.add_argument(
+        "--token-node",
+        default=None,
+        metavar="SESSION:NAME",
+        help="a /send with the bearer token sends as identity NAME in the open session SESSION. "
+        "Needs a token. Create the session and the identity first.",
+    )
     a = ap.parse_args()
     check_start(a)
-    global PUBLIC_URL, DEFAULT_NODE, CARD_KEY
+    global PUBLIC_URL, DEFAULT_NODE, CARD_KEY, TOKEN_NODE
+    if a.token_node:
+        session_ref, _, name = a.token_node.partition(":")
+        if not (session_ref and name and (a.token or os.environ.get("ROOKERY_TOKEN"))):
+            print("ERROR: --token-node needs the form SESSION:NAME and a token "
+                  "(--token or $ROOKERY_TOKEN).", file=sys.stderr, flush=True)
+            raise SystemExit(2)
+        TOKEN_NODE = (session_ref, name)
     PUBLIC_URL = a.public_url or f"http://{a.host}:{a.port}"
     DEFAULT_NODE = a.default_node
     CARD_KEY = a.card_key
@@ -715,6 +760,9 @@ def main():
         f"auth={'ON' if auth_on else 'OFF'}  policy={type(policy).__name__}",
         flush=True,
     )
+    if TOKEN_NODE:
+        print(f"[mailroom] token-node: a /send with the token sends as {TOKEN_NODE[1]!r} "
+              f"in session {TOKEN_NODE[0]!r}", flush=True)
     if scheme == "https" and auth_on:
         print("[mailroom] TLS + token = auth + encryption (internet-safe).", flush=True)
     elif auth_on and a.host == "0.0.0.0":

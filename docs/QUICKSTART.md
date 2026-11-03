@@ -68,7 +68,9 @@ To start a whole team in panes, see [Bring up a team](#bring-up-a-team).
 ## A mailroom for other machines
 
 A remote node reads its mail through a mailroom on the session machine. It cannot send: the
-mailroom has no session for a remote sender, so `/send` answers 403 `no-session`.
+mailroom has no session for a remote sender, so `/send` answers 403 `no-session`. The exception is
+`--token-node SESSION:NAME`: a `/send` with the token then sends as identity NAME in SESSION (see the
+README, "The mailroom").
 
 The mailroom binds `127.0.0.1` by default and needs no token there. A public `--host` (such as
 `0.0.0.0`) needs `--allow-public` and a token (`--token` or `$ROOKERY_TOKEN`). A bearer token

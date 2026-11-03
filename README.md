@@ -57,6 +57,13 @@ and `/ack`). **A remote node cannot send.** The mailroom has no session for a re
 Mail to a remote node comes from a session on the mailroom machine: `rookery send NODE "SAY"`
 reaches it when an identity of that name is in the sender's session.
 
+One remote node can send. Start the mailroom with `--token-node SESSION:NAME` (it needs a token).
+Then a `POST /send` that carries the token sends as identity NAME in the open session SESSION. The
+`sender` field must be NAME or absent, else 403 `wrong-sender`. The usual gate checks apply: the
+recipient must be in SESSION, and the loop limits count. Create the session and its identities first:
+`rookery session new --name SESSION`, then `rookery identity new NAME --session SESSION` for NAME and
+for each local peer. A2A `message/send` still refuses.
+
 - **Discover:** `GET /.well-known/agent-card.json` returns an A2A Agent Card.
 - **Auth:** start the mailroom with `--token <tok>` (or `$ROOKERY_TOKEN`). Then every endpoint
   except `/health` and the agent card needs `Authorization: Bearer <tok>`.
