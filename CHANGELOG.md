@@ -4,6 +4,10 @@
 
 Rookery drops the node mesh from before 0.7. Every sender needs a session.
 
+### Added
+
+- `mailroom_server.py --token-node SESSION:NAME`. A `POST /send` with the bearer token sends as identity NAME in the open session SESSION, through the normal gate (recipient check, loop limits, screening). A `sender` other than NAME gets 403 `wrong-sender`. A closed or missing session or identity still gets 403 `no-session`. The flag needs a token. A2A sends do not change.
+
 ### Removed
 
 - BREAKING: a send with no session is refused. `mail_gate.submit` returns `refused` with reason `no-session`, logs one `gate` record, and stores no row. Rookery writes no new mail to the `legacy` session. Old `legacy` rows stay readable: `rookery inbox`, `rookery ack` and the mailroom `/inbox`, `/claim` and `/ack` still show and change them. `rookery send` and `rookery turn` with no session exit 3. The message names `rookery identity show`, `ROOKERY_SESSION` and `ROOKERY_NODE`, and `rookery up`.

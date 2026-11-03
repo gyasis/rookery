@@ -32,6 +32,7 @@ def _free_port():
 
 class ServerMixin:
     with_session = False
+    extra_args = ()
 
     def setUp(self):
         super().setUp()
@@ -39,7 +40,7 @@ class ServerMixin:
         self.url = f"http://127.0.0.1:{self.port}"
         self.proc = subprocess.Popen(
             [sys.executable, os.path.join(HERE, "mailroom_server.py"), "--host", "127.0.0.1",
-             "--port", str(self.port), "--token", TOKEN],
+             "--port", str(self.port), "--token", TOKEN, *self.extra_args],
             env=self.env(session=False, node=False), cwd=HERE,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         self.addCleanup(self._stop)
