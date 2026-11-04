@@ -22,3 +22,6 @@ dev-kid.yml
 # repo as a PRD owner and is portable across machines.
 .memory/active-prds.json
 .memory/active-prds.json.lock
+
+# made by the worktree checkout hook
+memory-bank/shared/.constitution.md
