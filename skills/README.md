@@ -41,9 +41,7 @@ Claude copy so that one file serves them all:
 ln -s ~/.claude/skills/rookery ~/.agents/skills/rookery
 ```
 
-Kimi Code reads instructions only from `AGENTS.md`, never from `CLAUDE.md`. It reads MCP
-servers from `~/.kimi-code/mcp.json`, and an entry takes the form
-`{"transport": "http", "url": "http://127.0.0.1:7702/mcp"}`.
+Kimi Code reads instructions only from `AGENTS.md`, never from `CLAUDE.md`.
 
 ## `rookery-up` — the team wizard
 
